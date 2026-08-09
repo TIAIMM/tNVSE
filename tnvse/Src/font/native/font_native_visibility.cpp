@@ -370,6 +370,37 @@ namespace fonthook::vectorfont
 			return center + extent < -slack;
 		}
 
+		bool CubeIsOutsideOrthographicAxisInterval(
+			const ClipColumn& axis, double minimum, double maximum,
+			const NiBound& bound)
+		{
+			// Orthographic Interface geometry has clipW=1. Collapse the two
+			// opposing homogeneous planes for one axis into a shared linear
+			// center, extent, and magnitude. This is the same conservative cube
+			// proof as CubeIsOutsidePlane, with its larger UI safety slack.
+			const NiPoint3& center = bound.m_kCenter;
+			const double linearCenter = axis.x * center.x
+				+ axis.y * center.y + axis.z * center.z;
+			const double linearMagnitude = std::abs(axis.x * center.x)
+				+ std::abs(axis.y * center.y)
+				+ std::abs(axis.z * center.z);
+			const double extent = CubeExtent(axis, bound.m_fRadius);
+
+			const double minimumTranslation = axis.translation - minimum;
+			const double minimumSlack = (linearMagnitude
+				+ std::abs(minimumTranslation) + extent + 1.0)
+				* kVanillaUiOrthographicRelativeSlack;
+			if (linearCenter + minimumTranslation + extent < -minimumSlack)
+				return true;
+
+			const double maximumTranslation = maximum - axis.translation;
+			const double maximumSlack = (linearMagnitude
+				+ std::abs(maximumTranslation) + extent + 1.0)
+				* kVanillaUiOrthographicRelativeSlack;
+			return -linearCenter + maximumTranslation + extent
+				< -maximumSlack;
+		}
+
 		bool ResolveVanillaUiViewAxis(const D3DXMATRIX& view, UInt32 column,
 			UInt8& modelAxis, float& coefficient)
 		{
@@ -504,7 +535,7 @@ namespace fonthook::vectorfont
 
 		bool BuildVanillaUiOrthographicColumns(const ClipFrameContext& context,
 			const NiTransform& transform, ClipColumn& clipX,
-			ClipColumn& clipY, ClipColumn& clipW)
+			ClipColumn& clipY)
 		{
 			if (!context.vanillaUiOrthographic.valid
 				|| !std::isfinite(transform.m_fScale)
@@ -521,8 +552,6 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			clipW = {};
-			clipW.translation = 1.0;
 			return true;
 		}
 
@@ -1054,13 +1083,18 @@ namespace fonthook::vectorfont
 
 			ClipColumn clipX;
 			ClipColumn clipY;
-			ClipColumn clipW;
-			bool vanillaUiOrthographic = BuildVanillaUiOrthographicColumns(
-				context, transform, clipX, clipY, clipW);
+			const bool vanillaUiOrthographic =
+				BuildVanillaUiOrthographicColumns(
+					context, transform, clipX, clipY);
+			bool outside = false;
 			if (vanillaUiOrthographic)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VisibilityPreflightClipVanillaUiOrthographicTranslation);
+				outside = CubeIsOutsideOrthographicAxisInterval(
+						clipX, ndc.left, ndc.right, bound)
+					|| CubeIsOutsideOrthographicAxisInterval(
+						clipY, ndc.bottom, ndc.top, bound);
 			}
 			else
 			{
@@ -1097,40 +1131,44 @@ namespace fonthook::vectorfont
 				}
 				clipX = GetClipColumn(worldViewProjection, 0);
 				clipY = GetClipColumn(worldViewProjection, 1);
-				clipW = GetClipColumn(worldViewProjection, 3);
+				const ClipColumn clipW = GetClipColumn(
+					worldViewProjection, 3);
+				const double radius = bound.m_fRadius;
+				const double centerW = EvaluateColumn(
+					clipW, bound.m_kCenter);
+				const double extentW = CubeExtent(clipW, radius);
+				const double wSlack = (ColumnEvaluationMagnitude(
+					clipW, bound.m_kCenter) + extentW + 1.0)
+					* kClipIntervalRelativeSlack;
+				// Perspective division is monotonic over the complete conservative
+				// cube only when every point is strictly in front of w=0.
+				if (centerW - extentW <= wSlack)
+					return failOpen();
+
+				// Each expression is non-negative inside the expanded scissor. The
+				// payload sphere is expanded to a cube; only a negative maximum for
+				// the whole cube proves that every glyph triangle is outside.
+				const ClipColumn leftPlane = SubtractScaled(
+					clipX, clipW, ndc.left);
+				const ClipColumn rightPlane = SubtractScaled(
+					ClipColumn{}, SubtractScaled(
+						clipX, clipW, ndc.right), 1.0);
+				const ClipColumn topPlane = SubtractScaled(
+					ClipColumn{}, SubtractScaled(
+						clipY, clipW, ndc.top), 1.0);
+				const ClipColumn bottomPlane = SubtractScaled(
+					clipY, clipW, ndc.bottom);
+				outside = CubeIsOutsidePlane(
+						leftPlane, bound, kClipIntervalRelativeSlack)
+					|| CubeIsOutsidePlane(
+						rightPlane, bound, kClipIntervalRelativeSlack)
+					|| CubeIsOutsidePlane(
+						topPlane, bound, kClipIntervalRelativeSlack)
+					|| CubeIsOutsidePlane(
+						bottomPlane, bound, kClipIntervalRelativeSlack);
 			}
 			if (transformBuildResult)
 				*transformBuildResult = buildResult;
-			const double radius = bound.m_fRadius;
-			const double centerW = EvaluateColumn(clipW, bound.m_kCenter);
-			const double extentW = CubeExtent(clipW, radius);
-			const double wSlack = (ColumnEvaluationMagnitude(
-				clipW, bound.m_kCenter) + extentW + 1.0)
-				* kClipIntervalRelativeSlack;
-			// Perspective division is monotonic over the complete conservative cube
-			// only when every point is strictly in front of the w=0 plane.
-			if (centerW - extentW <= wSlack)
-				return failOpen();
-
-			// Each expression is non-negative inside the expanded scissor.  The
-			// payload sphere is first expanded to a cube; only a negative maximum
-			// for the whole cube proves that every glyph triangle is outside.
-			const ClipColumn leftPlane = SubtractScaled(
-				clipX, clipW, ndc.left);
-			const ClipColumn rightPlane = SubtractScaled(
-				ClipColumn{}, SubtractScaled(clipX, clipW, ndc.right), 1.0);
-			const ClipColumn topPlane = SubtractScaled(
-				ClipColumn{}, SubtractScaled(clipY, clipW, ndc.top), 1.0);
-			const ClipColumn bottomPlane = SubtractScaled(
-				clipY, clipW, ndc.bottom);
-			const double relativeSlack = vanillaUiOrthographic
-				? kVanillaUiOrthographicRelativeSlack
-				: kClipIntervalRelativeSlack;
-			const bool outside = CubeIsOutsidePlane(
-					leftPlane, bound, relativeSlack)
-				|| CubeIsOutsidePlane(rightPlane, bound, relativeSlack)
-				|| CubeIsOutsidePlane(topPlane, bound, relativeSlack)
-				|| CubeIsOutsidePlane(bottomPlane, bound, relativeSlack);
 			const ClipProofResult result = outside
 				? ClipProofResult::Outside : ClipProofResult::Overlap;
 			StoreClipProof(cacheEntry, transformIdentity, context,

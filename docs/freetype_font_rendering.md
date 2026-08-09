@@ -1107,12 +1107,15 @@ At frame capture,
 tNVSE accepts that path only when the live view/projection matrices still have
 the complete exact sparse x/y/w structure. An individual shape must additionally
 have an exact identity rotation and finite uniform scale/translation. Qualified
-shapes reconstruct only the three clip columns used by the proof and avoid the
-temporary world matrix plus both `D3DXMatrixMultiply` calls. Modified cameras,
-rotated shapes, perspective transforms, malformed values, or any structural
-mismatch use the unchanged generic homogeneous path. The narrower calculation
-also uses a larger numeric safety slack, so a near-edge disagreement retains the
-draw rather than creating a new cull.
+shapes reconstruct only the two x/y clip columns used by the proof and avoid the
+temporary world matrix plus both `D3DXMatrixMultiply` calls. Because their
+homogeneous `w` is exactly one, each pair of opposing planes is evaluated as one
+axis interval: the linear center, cube extent, and term magnitude are shared by
+the two edges. Modified cameras, rotated shapes, perspective transforms,
+malformed values, or any structural mismatch use the unchanged generic
+homogeneous path. The narrower calculation also uses a larger numeric safety
+slack, so a near-edge disagreement retains the draw rather than creating a new
+cull.
 
 The periodic performance line reports `visibility_checks`, `culled`, `alpha`,
 `clip`, `scissor`, `preflight_skipped`, `packets_saved`, and `vertices_saved`.
