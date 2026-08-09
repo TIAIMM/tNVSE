@@ -972,15 +972,15 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool WriteDirectQuadVertices(const AtlasSnapshotPlacement& source,
+		bool WriteDirectQuadGeometry(const AtlasSnapshotPlacement& source,
 			const NiPoint3& pen, const NiPoint3& origin,
 			float offsetX, float offsetY, float rasterScale,
 			float baselineOffset, float sourceToLogicalScale, bool usesSdf,
-			UInt32 packedColor, UInt8 layerMask,
-			NativeFontGpuVertex* output, NiPoint3& boundMinimum,
+			NiPoint3* outputPositions, NiPoint2* outputTexture,
+			NiPoint3& boundMinimum,
 			NiPoint3& boundMaximum)
 		{
-			if (!output || !source.cacheId
+			if (!outputPositions || !outputTexture || !source.cacheId
 				|| !source.rect.width || !source.rect.height
 				|| !std::isfinite(rasterScale) || rasterScale <= 0.0f
 				|| !std::isfinite(sourceToLogicalScale)
@@ -1031,16 +1031,8 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				output[ordinal] = {
-					position.x, position.y, position.z, uv.x, uv.y,
-					packedColor, static_cast<float>(source.sdfSpread),
-					1.0f / sourceToLogicalScale,
-					static_cast<float>(layerMask),
-					SanitizeNativeUvBound(source.glyphPlacement.u0),
-					SanitizeNativeUvBound(source.glyphPlacement.v0),
-					SanitizeNativeUvBound(source.glyphPlacement.u1),
-					SanitizeNativeUvBound(source.glyphPlacement.v1)
-				};
+				outputPositions[ordinal] = position;
+				outputTexture[ordinal] = uv;
 				boundMinimum.x = std::min(boundMinimum.x, position.x);
 				boundMinimum.y = std::min(boundMinimum.y, position.y);
 				boundMinimum.z = std::min(boundMinimum.z, position.z);
@@ -1051,13 +1043,58 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool WriteVanillaDirectQuadVertices(const FontLetter& letter,
+		bool WriteDirectQuadVertices(const AtlasSnapshotPlacement& source,
 			const NiPoint3& pen, const NiPoint3& origin,
-			float baselineOffset, UInt32 packedColor, UInt8 layerMask,
+			float offsetX, float offsetY, float rasterScale,
+			float baselineOffset, float sourceToLogicalScale, bool usesSdf,
+			UInt32 packedColor, UInt8 layerMask,
 			NativeFontGpuVertex* output, NiPoint3& boundMinimum,
 			NiPoint3& boundMaximum)
 		{
-			if (!output || letter.iTextureIndex < 0
+			if (!output)
+				return false;
+			std::array<NiPoint3, 4> positions;
+			std::array<NiPoint2, 4> texture;
+			if (!WriteDirectQuadGeometry(source, pen, origin,
+				offsetX, offsetY, rasterScale, baselineOffset,
+				sourceToLogicalScale, usesSdf, positions.data(),
+				texture.data(), boundMinimum, boundMaximum))
+			{
+				return false;
+			}
+			const float inverseSourceToLogicalScale =
+				1.0f / sourceToLogicalScale;
+			const float glyphU0 =
+				SanitizeNativeUvBound(source.glyphPlacement.u0);
+			const float glyphV0 =
+				SanitizeNativeUvBound(source.glyphPlacement.v0);
+			const float glyphU1 =
+				SanitizeNativeUvBound(source.glyphPlacement.u1);
+			const float glyphV1 =
+				SanitizeNativeUvBound(source.glyphPlacement.v1);
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const NiPoint3& position = positions[ordinal];
+				const NiPoint2& uv = texture[ordinal];
+				output[ordinal] = {
+					position.x, position.y, position.z, uv.x, uv.y,
+					packedColor, static_cast<float>(source.sdfSpread),
+					inverseSourceToLogicalScale,
+					static_cast<float>(layerMask),
+					glyphU0, glyphV0, glyphU1, glyphV1
+				};
+			}
+			return true;
+		}
+
+		bool WriteVanillaDirectQuadGeometry(const FontLetter& letter,
+			const NiPoint3& pen, const NiPoint3& origin,
+			float baselineOffset, NiPoint3* outputPositions,
+			NiPoint2* outputTexture, NiPoint3& boundMinimum,
+			NiPoint3& boundMaximum)
+		{
+			if (!outputPositions || !outputTexture
+				|| letter.iTextureIndex < 0
 				|| !std::isfinite(letter.fWidth)
 				|| !std::isfinite(letter.fHeight)
 				|| !std::isfinite(letter.fLeadingEdge)
@@ -1076,17 +1113,6 @@ namespace fonthook::vectorfont
 				NiPoint3(x0, depth, z0), NiPoint3(x1, depth, z0),
 				NiPoint3(x1, depth, z1), NiPoint3(x0, depth, z1)
 			}};
-			float glyphU0 = std::numeric_limits<float>::max();
-			float glyphV0 = std::numeric_limits<float>::max();
-			float glyphU1 = std::numeric_limits<float>::lowest();
-			float glyphV1 = std::numeric_limits<float>::lowest();
-			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
-			{
-				glyphU0 = std::min(glyphU0, letter.pMapping[ordinal].fU);
-				glyphV0 = std::min(glyphV0, letter.pMapping[ordinal].fV);
-				glyphU1 = std::max(glyphU1, letter.pMapping[ordinal].fU);
-				glyphV1 = std::max(glyphV1, letter.pMapping[ordinal].fV);
-			}
 			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
 			{
 				const UVMap& uv = letter.pMapping[ordinal];
@@ -1099,15 +1125,8 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
-				output[ordinal] = {
-					position.x, position.y, position.z,
-					uv.fU, uv.fV, packedColor, 0.0f, 1.0f,
-					static_cast<float>(layerMask),
-					SanitizeNativeUvBound(glyphU0),
-					SanitizeNativeUvBound(glyphV0),
-					SanitizeNativeUvBound(glyphU1),
-					SanitizeNativeUvBound(glyphV1)
-				};
+				outputPositions[ordinal] = position;
+				outputTexture[ordinal] = NiPoint2(uv.fU, uv.fV);
 				boundMinimum.x =
 					std::min(boundMinimum.x, position.x);
 				boundMinimum.y =
@@ -1120,6 +1139,51 @@ namespace fonthook::vectorfont
 					std::max(boundMaximum.y, position.y);
 				boundMaximum.z =
 					std::max(boundMaximum.z, position.z);
+			}
+			return true;
+		}
+
+		bool WriteVanillaDirectQuadVertices(const FontLetter& letter,
+			const NiPoint3& pen, const NiPoint3& origin,
+			float baselineOffset, UInt32 packedColor, UInt8 layerMask,
+			NativeFontGpuVertex* output, NiPoint3& boundMinimum,
+			NiPoint3& boundMaximum)
+		{
+			if (!output)
+				return false;
+			std::array<NiPoint3, 4> positions;
+			std::array<NiPoint2, 4> texture;
+			if (!WriteVanillaDirectQuadGeometry(letter, pen, origin,
+				baselineOffset, positions.data(), texture.data(),
+				boundMinimum, boundMaximum))
+			{
+				return false;
+			}
+			float glyphU0 = std::numeric_limits<float>::max();
+			float glyphV0 = std::numeric_limits<float>::max();
+			float glyphU1 = std::numeric_limits<float>::lowest();
+			float glyphV1 = std::numeric_limits<float>::lowest();
+			for (const NiPoint2& uv : texture)
+			{
+				glyphU0 = std::min(glyphU0, uv.x);
+				glyphV0 = std::min(glyphV0, uv.y);
+				glyphU1 = std::max(glyphU1, uv.x);
+				glyphV1 = std::max(glyphV1, uv.y);
+			}
+			glyphU0 = SanitizeNativeUvBound(glyphU0);
+			glyphV0 = SanitizeNativeUvBound(glyphV0);
+			glyphU1 = SanitizeNativeUvBound(glyphU1);
+			glyphV1 = SanitizeNativeUvBound(glyphV1);
+			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
+			{
+				const NiPoint3& position = positions[ordinal];
+				const NiPoint2& uv = texture[ordinal];
+				output[ordinal] = {
+					position.x, position.y, position.z,
+					uv.x, uv.y, packedColor, 0.0f, 1.0f,
+					static_cast<float>(layerMask),
+					glyphU0, glyphV0, glyphU1, glyphV1
+				};
 			}
 			return true;
 		}
@@ -2404,39 +2468,35 @@ namespace fonthook::vectorfont
 				const float baselineOffset =
 					GetDirectGlyphBaselineOffset(
 						runtime, batch, instance);
-				std::array<NativeFontGpuVertex, 4> vertices;
+				if (outputQuad >= drawableGlyphs)
+					return nullptr;
+				NiPoint3* outputPositions =
+					&data->m_pkVertex[outputQuad * 4u];
+				NiPoint2* outputTexture =
+					&data->m_pkTexture[outputQuad * 4u];
 				const bool written = source.vanillaLetter
-					? WriteVanillaDirectQuadVertices(
+					? WriteVanillaDirectQuadGeometry(
 						*source.vanillaLetter, pen, origin,
-						baselineOffset,
-						PackNativeBaseColor(baseColor),
-						1u << static_cast<UInt8>(
-							AtlasLayer::Fill),
-						vertices.data(), boundMinimum,
-						boundMaximum)
-					: WriteDirectQuadVertices(*source.placement,
+						baselineOffset, outputPositions,
+						outputTexture, boundMinimum, boundMaximum)
+					: WriteDirectQuadGeometry(*source.placement,
 						pen, origin, 0.0f, 0.0f,
 						rasterScale, baselineOffset,
-						1.0f, false,
-						PackNativeBaseColor(baseColor),
-						1u << static_cast<UInt8>(
-							AtlasLayer::Fill),
-						vertices.data(), boundMinimum,
+						1.0f, false, outputPositions,
+						outputTexture, boundMinimum,
 						boundMaximum);
 				if (!written)
 				{
 					return nullptr;
 				}
+				const NiColorA safeBaseColor = SanitizeColor(baseColor);
 				for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
 				{
 					const UInt32 output = outputQuad * 4u + ordinal;
-					data->m_pkVertex[output] = NiPoint3(
-						vertices[ordinal].x + origin.x,
-						vertices[ordinal].y + origin.y,
-						vertices[ordinal].z + origin.z);
-					data->m_pkTexture[output] = NiPoint2(
-						vertices[ordinal].u, vertices[ordinal].v);
-					data->m_pkColor[output] = SanitizeColor(baseColor);
+					data->m_pkVertex[output].x += origin.x;
+					data->m_pkVertex[output].y += origin.y;
+					data->m_pkVertex[output].z += origin.z;
+					data->m_pkColor[output] = safeBaseColor;
 				}
 				for (UInt32 ordinal = 0; ordinal < 6; ++ordinal)
 				{
@@ -2449,8 +2509,7 @@ namespace fonthook::vectorfont
 			if (outputQuad != drawableGlyphs)
 				return nullptr;
 			RecordFreeTypePerf(
-				FreeTypePerfCounter::
-					DirectShapeVertexInitializationBytesAvoided,
+				FreeTypePerfCounter::DirectArgbTransientVertexBytesAvoided,
 				static_cast<UInt64>(outputQuad) * 4u
 					* sizeof(NativeFontGpuVertex));
 			NiBound bound;

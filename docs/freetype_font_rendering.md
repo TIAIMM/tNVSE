@@ -2059,11 +2059,21 @@ without first clearing the 52-byte payload of every vertex. Both layer/page
 compilers count and prefix their output ranges before allocation, completely
 overwrite all 13 fields of each emitted vertex, and then require every cursor
 to equal its exact contiguous range end before the array can be published.
-The legacy ARGB page compiler similarly reads its four-vertex local only after
-the full writer succeeds. `direct_vertex_init_bytes_avoided` reports the bytes
-whose redundant initialization was skipped; `direct_vertex_fill_failures`
-counts range-count/fill divergences, which fail closed instead of exposing an
+`direct_vertex_init_bytes_avoided` reports the bytes whose redundant
+initialization was skipped; `direct_vertex_fill_failures` counts
+range-count/fill divergences, which fail closed instead of exposing an
 unwritten vertex.
+
+The single-page ARGB compatibility compiler does not need the native
+52-byte vertex payload at all. It shares the same validated position/UV
+calculation with the complete native writers, but writes those compact fields
+directly into the final `NiTriShapeData` vertex and texture arrays. The final
+color and canonical indices are written in place, so no four-vertex native
+temporary is constructed and none of its SDF, layer-mask, or glyph-bound
+fields are calculated. Bounds remain relative to the same origin and the
+shape is still discarded before publication if any source or coordinate is
+invalid. `direct_argb_transient_bytes_avoided` reports the removed temporary
+payload bytes.
 
 The direct page compilers likewise initialize only the live atlas-page prefix
 of fixed 64-page count/readiness tables. Range offsets and cursors are assigned
