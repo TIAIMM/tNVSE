@@ -132,8 +132,7 @@ namespace fonthook::dependencies
 			message += '\n';
 			gLog.FormattedMessage("tnvse_dependency: %s", issue.c_str());
 		}
-		message += "\nThe affected features will remain disabled or use their built-in fallback. "
-			"The game will continue to start.";
+		message += "\nThe affected features will remain disabled or use their built-in fallback. ";
 
 		MessageBoxA(nullptr, message.c_str(), "tNVSE dependency warning",
 			MB_OK | MB_ICONWARNING | MB_TASKMODAL);
