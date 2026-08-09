@@ -2965,32 +2965,100 @@ namespace fonthook::vectorfont
 			UInt8 observations = 0;
 		};
 
-		inline constexpr size_t kTextArtifactHotEntryCount = 4;
-		inline constexpr size_t kTextArtifactAdmissionSlotCount = 256;
+		using TextArtifactHotBucket = std::array<TextArtifactHotEntry,
+			kTextArtifactHotWays>;
+		using TextArtifactAdmissionBucket = std::array<TextArtifactAdmissionSlot,
+			kTextArtifactAdmissionWays>;
+
+		static_assert((kTextArtifactHotBucketCount
+			& (kTextArtifactHotBucketCount - 1u)) == 0u);
+		static_assert((kTextArtifactHotWays
+			& (kTextArtifactHotWays - 1u)) == 0u);
+		static_assert((kTextArtifactAdmissionBucketCount
+			& (kTextArtifactAdmissionBucketCount - 1u)) == 0u);
+		static_assert((kTextArtifactAdmissionWays
+			& (kTextArtifactAdmissionWays - 1u)) == 0u);
+
 		// The hot front never extends artifact lifetime. A coarse-admission
 		// collision can only cause an extra exact lookup/admission; the resident
-		// key and atlas objects are still fully validated before reuse.
-		thread_local std::array<TextArtifactHotEntry,
-			kTextArtifactHotEntryCount> s_textArtifactHotEntries;
-		thread_local size_t s_textArtifactHotNext = 0;
-		thread_local std::array<TextArtifactAdmissionSlot,
-			kTextArtifactAdmissionSlotCount> s_textArtifactAdmission;
+		// key and atlas objects are still fully validated before reuse. Each
+		// lookup examines one four-way bucket, independent of total capacity.
+		thread_local std::array<TextArtifactHotBucket,
+			kTextArtifactHotBucketCount> s_textArtifactHotBuckets;
+		thread_local std::array<UInt8,
+			kTextArtifactHotBucketCount> s_textArtifactHotNextWays;
+		thread_local std::array<TextArtifactAdmissionBucket,
+			kTextArtifactAdmissionBucketCount> s_textArtifactAdmissionBuckets;
+		thread_local std::array<UInt8,
+			kTextArtifactAdmissionBucketCount> s_textArtifactAdmissionNextWays;
+
+		size_t FoldTextArtifactSignature(UInt64 signature, size_t bucketCount)
+		{
+			// FNV already distributes the input bytes. Folding the high half avoids
+			// relying only on its low bits while keeping this lookup cheaper than
+			// the exact per-quad fingerprint that admission is intended to avoid.
+			const UInt64 folded = signature ^ (signature >> 32)
+				^ (signature >> 17);
+			return static_cast<size_t>(folded) & (bucketCount - 1u);
+		}
 
 		bool TouchTextArtifactAdmission(UInt64 signature)
 		{
 			if (!signature)
 				signature = 1;
-			TextArtifactAdmissionSlot& slot = s_textArtifactAdmission[
-				static_cast<size_t>(signature)
-					% s_textArtifactAdmission.size()];
-			if (slot.signature != signature)
+			const size_t bucketIndex = FoldTextArtifactSignature(signature,
+				s_textArtifactAdmissionBuckets.size());
+			TextArtifactAdmissionBucket& bucket =
+				s_textArtifactAdmissionBuckets[bucketIndex];
+			size_t emptyWay = bucket.size();
+			size_t candidateWay = bucket.size();
+			const size_t firstWay = static_cast<size_t>(
+				s_textArtifactAdmissionNextWays[bucketIndex])
+				& (bucket.size() - 1u);
+			for (size_t offset = 0; offset < bucket.size(); ++offset)
 			{
-				slot.signature = signature;
-				slot.observations = 0;
+				const size_t way = (firstWay + offset)
+					& (bucket.size() - 1u);
+				TextArtifactAdmissionSlot& slot = bucket[way];
+				if (slot.signature == signature)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactAdmissionHistoryHit);
+					if (slot.observations < 2)
+						++slot.observations;
+					return slot.observations >= 2;
+				}
+				if (!slot.signature && emptyWay == bucket.size())
+					emptyWay = way;
+				else if (slot.observations < 2
+					&& candidateWay == bucket.size())
+				{
+					candidateWay = way;
+				}
 			}
-			if (slot.observations < 2)
-				++slot.observations;
-			return slot.observations >= 2;
+
+			size_t targetWay = emptyWay;
+			if (targetWay == bucket.size())
+				targetWay = candidateWay;
+			if (targetWay == bucket.size())
+				targetWay = firstWay;
+			TextArtifactAdmissionSlot& target = bucket[targetWay];
+			if (target.signature)
+			{
+				const FreeTypePerfCounter replacementCounter =
+					target.observations < 2
+						? FreeTypePerfCounter::
+							TextArtifactAdmissionCandidateReplacement
+						: FreeTypePerfCounter::
+							TextArtifactAdmissionEstablishedReplacement;
+				RecordFreeTypePerf(replacementCounter);
+				s_textArtifactAdmissionNextWays[bucketIndex] =
+					static_cast<UInt8>((targetWay + 1u)
+						& (bucket.size() - 1u));
+			}
+			target.signature = signature;
+			target.observations = 1;
+			return false;
 		}
 
 		TextArtifactKey BuildTextArtifactKey(const QuadBatchFingerprint& fingerprint,
@@ -3211,8 +3279,13 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			TextArtifactKey& resolvedKey, bool& keyResolved)
 		{
+			if (!admissionSignature)
+				admissionSignature = 1;
+			TextArtifactHotBucket& bucket = s_textArtifactHotBuckets[
+				FoldTextArtifactSignature(admissionSignature,
+					s_textArtifactHotBuckets.size())];
 			bool hasCandidate = false;
-			for (TextArtifactHotEntry& entry : s_textArtifactHotEntries)
+			for (TextArtifactHotEntry& entry : bucket)
 			{
 				if (!entry.occupied
 					|| entry.admissionSignature != admissionSignature)
@@ -3220,6 +3293,8 @@ namespace fonthook::vectorfont
 				if (entry.data.expired())
 				{
 					entry = {};
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactHotEntryExpired);
 					continue;
 				}
 				hasCandidate = true;
@@ -3233,7 +3308,7 @@ namespace fonthook::vectorfont
 					geometryKey, effects);
 				keyResolved = true;
 			}
-			for (TextArtifactHotEntry& entry : s_textArtifactHotEntries)
+			for (TextArtifactHotEntry& entry : bucket)
 			{
 				if (!entry.occupied
 					|| entry.admissionSignature != admissionSignature
@@ -3244,6 +3319,11 @@ namespace fonthook::vectorfont
 				NativeFontPayloadTemplatePtr data = entry.data.lock();
 				if (data && TextArtifactMatchesAtlases(*data, atlases))
 					return data;
+				if (!data)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactHotEntryExpired);
+				}
 				entry = {};
 			}
 			return {};
@@ -3255,8 +3335,52 @@ namespace fonthook::vectorfont
 		{
 			if (!data)
 				return;
-			TextArtifactHotEntry& entry = s_textArtifactHotEntries[
-				s_textArtifactHotNext++ % s_textArtifactHotEntries.size()];
+			if (!admissionSignature)
+				admissionSignature = 1;
+			const size_t bucketIndex = FoldTextArtifactSignature(
+				admissionSignature, s_textArtifactHotBuckets.size());
+			TextArtifactHotBucket& bucket =
+				s_textArtifactHotBuckets[bucketIndex];
+			size_t reusableWay = bucket.size();
+			for (size_t way = 0; way < bucket.size(); ++way)
+			{
+				TextArtifactHotEntry& current = bucket[way];
+				if (!current.occupied)
+				{
+					if (reusableWay == bucket.size())
+						reusableWay = way;
+					continue;
+				}
+				if (current.data.expired())
+				{
+					current = {};
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						TextArtifactHotEntryExpired);
+					if (reusableWay == bucket.size())
+						reusableWay = way;
+					continue;
+				}
+				if (current.admissionSignature == admissionSignature
+					&& current.key == key)
+				{
+					current.data = data;
+					return;
+				}
+			}
+			const size_t targetWay = reusableWay != bucket.size()
+				? reusableWay
+				: static_cast<size_t>(
+					s_textArtifactHotNextWays[bucketIndex])
+					& (bucket.size() - 1u);
+			if (reusableWay == bucket.size())
+			{
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					TextArtifactHotEntryReplacement);
+				s_textArtifactHotNextWays[bucketIndex] =
+					static_cast<UInt8>((targetWay + 1u)
+						& (bucket.size() - 1u));
+			}
+			TextArtifactHotEntry& entry = bucket[targetWay];
 			entry.admissionSignature = admissionSignature;
 			entry.key = key;
 			entry.data = data;

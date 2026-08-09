@@ -1932,10 +1932,12 @@ are not multiples of four. Repeated text also reuses cached layout and unique
 text artifacts. Text artifacts use a two-observation coarse-signature admission
 filter: a one-shot menu string is returned directly to its shape without
 entering the global map/LRU, while a warmed signature may create a fully
-validated cache resident. A small
+validated cache resident. A 64-bucket, four-way
 thread-local weak front serves recent resident or still-live artifacts without
 taking the global cache mutex and does not pin an artifact after its real owners
-release it. The first observation uses a constant-cost geometry/effect
+release it. Each lookup probes only one bucket. The two-observation history uses
+256 four-way buckets and preferentially replaces one-shot candidates before an
+established signature. The first observation uses a constant-cost geometry/effect
 signature and skips the full per-quad geometry/color fingerprint and
 range/effect identity hash.
 One artifact owns the packed

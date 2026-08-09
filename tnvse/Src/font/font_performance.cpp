@@ -1472,6 +1472,23 @@ namespace fonthook::vectorfont
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualRejected)],
 			values[static_cast<size_t>(FreeTypePerfCounter::CompositeVisualInconclusive)]);
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_text_artifact_front: hot_buckets=%u hot_ways=%u hot_capacity=%u hot_hits=%llu hot_expired=%llu hot_live_replacements=%llu admission_buckets=%u admission_ways=%u admission_capacity=%u admission_history_hits=%llu admission_candidate_replacements=%llu admission_established_replacements=%llu",
+			kTextArtifactHotBucketCount, kTextArtifactHotWays,
+			kTextArtifactHotBucketCount * kTextArtifactHotWays,
+			counterValue(FreeTypePerfCounter::TextArtifactHotHit),
+			counterValue(FreeTypePerfCounter::TextArtifactHotEntryExpired),
+			counterValue(FreeTypePerfCounter::TextArtifactHotEntryReplacement),
+			kTextArtifactAdmissionBucketCount,
+			kTextArtifactAdmissionWays,
+			kTextArtifactAdmissionBucketCount
+				* kTextArtifactAdmissionWays,
+			counterValue(FreeTypePerfCounter::
+				TextArtifactAdmissionHistoryHit),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactAdmissionCandidateReplacement),
+			counterValue(FreeTypePerfCounter::
+				TextArtifactAdmissionEstablishedReplacement));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
