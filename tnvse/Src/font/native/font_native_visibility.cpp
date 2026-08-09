@@ -579,24 +579,19 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		bool IsValidScissorForViewport(const RECT& scissor,
-			const D3DVIEWPORT9& viewport)
+		__forceinline bool IsValidScissorForViewport(
+			const RECT& scissor, const RECT& viewport)
 		{
-			if (!viewport.Width || !viewport.Height
-				|| scissor.left < 0 || scissor.top < 0
-				|| scissor.left >= scissor.right
-				|| scissor.top >= scissor.bottom)
-			{
-				return false;
-			}
-			const std::int64_t viewportLeft = viewport.X;
-			const std::int64_t viewportTop = viewport.Y;
-			const std::int64_t viewportRight = viewportLeft + viewport.Width;
-			const std::int64_t viewportBottom = viewportTop + viewport.Height;
-			return scissor.left >= viewportLeft
-				&& scissor.top >= viewportTop
-				&& scissor.right <= viewportRight
-				&& scissor.bottom <= viewportBottom;
+			// CaptureClipFrameContext has already proved the D3D viewport non-empty,
+			// representable as LONG, and free of X+Width/Y+Height overflow. Reuse
+			// that certified rectangle here instead of rebuilding its 64-bit bounds
+			// for every sorted facade.
+			return scissor.left >= viewport.left
+				&& scissor.top >= viewport.top
+				&& scissor.left < scissor.right
+				&& scissor.top < scissor.bottom
+				&& scissor.right <= viewport.right
+				&& scissor.bottom <= viewport.bottom;
 		}
 
 		bool BuildViewportRect(const D3DVIEWPORT9& viewport, RECT& rect)
@@ -1097,10 +1092,10 @@ namespace fonthook::vectorfont
 			}
 
 			RECT clipRect = {};
-			const D3DVIEWPORT9& viewport = context.camera.viewport;
 			const bool useScissor = tile.useScissorTest
 				&& !context.camera.scaledScissor
-				&& IsValidScissorForViewport(tile.scissorRect, viewport);
+				&& IsValidScissorForViewport(
+					tile.scissorRect, context.viewportRect);
 			if (useScissor)
 			{
 				clipRect = tile.scissorRect;

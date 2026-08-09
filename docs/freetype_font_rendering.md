@@ -1124,6 +1124,10 @@ three exact-end overlapping SSE comparisons instead of a nested scalar loop.
 The packed comparison retains scalar floating equality semantics for signed
 zero and NaN while removing nine per-element branches from the common
 orthographic Tile route.
+The scissor-containment gate likewise consumes the `viewportRect` already
+validated and built once by `CaptureClipFrameContext`. It no longer repeats
+`D3DVIEWPORT9` width/height, overflow, and 64-bit edge construction for every
+proof-key miss; the per-facade route performs only signed rectangle comparisons.
 Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
 `RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
 only decrements that index and loads the next sorted pointer. Therefore adjacent
