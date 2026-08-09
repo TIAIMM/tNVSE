@@ -8,7 +8,7 @@ namespace fonthook
 	{
 		LRESULT CALLBACK MultibyteInputWndProc(
 			HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-		hook_site::WindowProcHook s_gameWindowProcHook{
+		hook_site::WindowProcSite s_gameWindowProcSite{
 			"FalloutNV main window WndProc (CALLBACK/__stdcall)",
 			&MultibyteInputWndProc
 		};
@@ -550,7 +550,7 @@ namespace fonthook
 				WPARAM wParam,
 				LPARAM lParam)
 			{
-				WNDPROC original = s_originalWndProc;
+				WNDPROC original = s_predecessorWndProc;
 				return original
 					? CallWindowProcA(original, hwnd, message, wParam, lParam)
 					: DefWindowProcA(hwnd, message, wParam, lParam);
@@ -1038,9 +1038,9 @@ namespace fonthook
 					ForwardWindowMessage(hwnd, msg, wParam, lParam);
 				ClearCapturedInputEvents();
 				State().overlayRefreshPending = false;
-				s_originalWndProc = nullptr;
-				s_gameWindowProcHook.window = nullptr;
-				s_gameWindowProcHook.predecessor = nullptr;
+				s_predecessorWndProc = nullptr;
+				s_gameWindowProcSite.windowHandle = nullptr;
+				s_gameWindowProcSite.predecessorProc = nullptr;
 				return result;
 			}
 
@@ -1304,7 +1304,7 @@ namespace fonthook
 
 		bool TryInstallWindowProc()
 		{
-			if (s_originalWndProc)
+			if (s_predecessorWndProc)
 			{
 				if (s_window)
 				State().tsfInputWindow.store(
@@ -1326,12 +1326,12 @@ namespace fonthook
 				return false;
 			}
 
-			s_gameWindowProcHook.window = hwnd;
-			s_gameWindowProcHook.predecessor =
+			s_gameWindowProcSite.windowHandle = hwnd;
+			s_gameWindowProcSite.predecessorProc =
 				reinterpret_cast<WNDPROC>(previousWndProc);
 
 			s_window = hwnd;
-			s_originalWndProc = s_gameWindowProcHook.predecessor;
+			s_predecessorWndProc = s_gameWindowProcSite.predecessorProc;
 			State().gameImeEnabled = false;
 			State().associatedGameImeWindow = nullptr;
 			State().associatedGameImeLayout = nullptr;
@@ -1383,13 +1383,13 @@ namespace fonthook
 				0, std::memory_order_release);
 
 			bool detached = true;
-			if (s_window && s_originalWndProc)
+			if (s_window && s_predecessorWndProc)
 			{
 				const WNDPROC current = reinterpret_cast<WNDPROC>(
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
 				WNDPROC observed = current;
-				detached = s_gameWindowProcHook.RollbackOwned(&observed);
-				if (!detached && current != s_originalWndProc)
+				detached = s_gameWindowProcSite.RollbackOwned(&observed);
+				if (!detached && current != s_predecessorWndProc)
 				{
 					// Another plugin installed above tNVSE. Replacing the top of
 					// that chain would strand its saved predecessor and can freeze
@@ -1406,9 +1406,9 @@ namespace fonthook
 			if (detached)
 			{
 				s_window = nullptr;
-				s_originalWndProc = nullptr;
-				s_gameWindowProcHook.window = nullptr;
-				s_gameWindowProcHook.predecessor = nullptr;
+				s_predecessorWndProc = nullptr;
+				s_gameWindowProcSite.windowHandle = nullptr;
+				s_gameWindowProcSite.predecessorProc = nullptr;
 				ShutdownTsfCandidateSupport();
 			}
 		}

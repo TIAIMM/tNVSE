@@ -61,7 +61,7 @@ namespace fonthook
 		};
 
 		extern HWND s_window;
-		extern WNDPROC s_originalWndProc;
+		extern WNDPROC s_predecessorWndProc;
 		extern bool s_hooksInstalled;
 		extern bool s_imeComposing;
 		extern DWORD s_lastWndProcAsciiTick;
@@ -169,13 +169,13 @@ namespace fonthook
 		Tile* FindTileByID(Tile* tile, UInt32 id);
 		bool IsStewieTweaksAvailable();
 		StewieInputTarget MakeStewieTarget(StewieInputKind kind, Menu* menu, Tile* tile, bool inputField);
-		bool CallStewieOriginalInput(Menu* menu, UInt32 input);
+		bool CallStewiePredecessorInput(Menu* menu, UInt32 input);
 		bool HandleStewieInput(Menu* menu, UInt32 input);
 
 		StewieInputTarget FindStewieMenuSearchTarget(Menu* menu);
 		StewieInputTarget GetActiveStewieMenuSearchTarget();
-		SIZE_T GetStewieMenuSearchOriginalInputHandler(Menu* menu);
-		void TryInstallStewieMenuSearchHooks();
+		SIZE_T GetStewieMenuSearchPredecessorInputHandler(Menu* menu);
+		void TryInstallStewieMenuSearchAdapterSites();
 		void ResetStewieMenuSearchState();
 
 		void DebugLog(const char* fmt, ...);

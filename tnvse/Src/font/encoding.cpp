@@ -199,16 +199,24 @@ namespace fonthook
 	// ===================== Encoding Conversion =====================
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage)
 	{
-		int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
-		if (len == 0) return "";
-		std::wstring wstr(len, L'\0');
-		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), &wstr[0], len);
+		const int wideCharacterCount = MultiByteToWideChar(CP_UTF8, 0,
+			utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+		if (wideCharacterCount == 0)
+			return "";
+		std::wstring wideText(static_cast<size_t>(wideCharacterCount), L'\0');
+		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(),
+			static_cast<int>(utf8.size()), wideText.data(), wideCharacterCount);
 
-		len = WideCharToMultiByte(codePage, 0, wstr.data(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
-		if (len == 0) return "";
-		std::string mb(len, '\0');
-		WideCharToMultiByte(codePage, 0, wstr.data(), static_cast<int>(wstr.size()), &mb[0], len, nullptr, nullptr);
-		return mb;
+		const int encodedByteCount = WideCharToMultiByte(codePage, 0,
+			wideText.data(), static_cast<int>(wideText.size()), nullptr, 0,
+			nullptr, nullptr);
+		if (encodedByteCount == 0)
+			return "";
+		std::string encodedText(static_cast<size_t>(encodedByteCount), '\0');
+		WideCharToMultiByte(codePage, 0, wideText.data(),
+			static_cast<int>(wideText.size()), encodedText.data(), encodedByteCount,
+			nullptr, nullptr);
+		return encodedText;
 	}
 
 	std::string WideToUTF8(std::wstring_view value)
@@ -216,7 +224,7 @@ namespace fonthook
 		if (value.empty())
 			return {};
 
-		const int len = WideCharToMultiByte(
+		const int encodedByteCount = WideCharToMultiByte(
 			CP_UTF8,
 			0,
 			value.data(),
@@ -226,10 +234,10 @@ namespace fonthook
 			nullptr,
 			nullptr);
 
-		if (len <= 0)
+		if (encodedByteCount <= 0)
 			return {};
 
-		std::string utf8(static_cast<size_t>(len), '\0');
+		std::string utf8(static_cast<size_t>(encodedByteCount), '\0');
 
 		const int written = WideCharToMultiByte(
 			CP_UTF8,
@@ -237,7 +245,7 @@ namespace fonthook
 			value.data(),
 			static_cast<int>(value.size()),
 			utf8.data(),
-			len,
+			encodedByteCount,
 			nullptr,
 			nullptr);
 

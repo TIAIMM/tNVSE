@@ -188,25 +188,26 @@ namespace fonthook::vectorfont
 		}
 
 		bool SamePacketTarget(const PacketSpan& span,
-			const NativeFontCompiledRange& range, NativeFontShaderClass shaderClass,
+			const NativeFontCompiledRange& compiledRange,
+			NativeFontShaderClass shaderClass,
 			NativeFontSampling sampling)
 		{
 			const UInt64 expectedVertex = static_cast<UInt64>(span.firstVertex)
 				+ span.vertexCount;
 			const UInt64 expectedIndex = static_cast<UInt64>(span.startIndex)
 				+ span.indexCount;
-			return expectedVertex == range.range.firstVertex
-				&& expectedIndex == range.range.startIndex
+			return expectedVertex == compiledRange.drawRange.firstVertex
+				&& expectedIndex == compiledRange.drawRange.startIndex
 				&& span.shaderClass == shaderClass
 				&& span.sampling == sampling
-				&& span.layer == range.range.layer
-				&& span.atlasPage == range.range.atlasPage
-				&& span.usesSdf == range.range.usesSdf
-				&& span.staticSmoothSampling == range.staticSmoothSampling
-				&& span.usesLiveTileRgb == range.range.usesLiveTileRgb
+				&& span.layer == compiledRange.drawRange.layer
+				&& span.atlasPage == compiledRange.drawRange.atlasPage
+				&& span.usesSdf == compiledRange.drawRange.usesSdf
+				&& span.staticSmoothSampling == compiledRange.staticSmoothSampling
+				&& span.usesLiveTileRgb == compiledRange.drawRange.usesLiveTileRgb
 				// c1 now contains the packet layer modifier; it is part of the
 				// immutable packet profile just like c2-c4.
-				&& std::memcmp(span.constants.data(), range.constants.data(),
+				&& std::memcmp(span.constants.data(), compiledRange.constants.data(),
 					kNativeFontPacketConstantFloatCount * sizeof(float)) == 0;
 		}
 
@@ -256,13 +257,13 @@ namespace fonthook::vectorfont
 			if (effects.precomposedArgb)
 			{
 				NativeFontCompiledRange compiled;
-				compiled.range = range;
-				compiled.range.layer = 3;
-				compiled.range.usesSdf = false;
-				compiled.range.usesLiveTileRgb = true;
-				compiled.range.sdfSpreadPixels = 0.0f;
-				compiled.range.sourceToLogicalScale = 1.0f;
-				compiled.range.layerColorModifier =
+				compiled.drawRange = range;
+				compiled.drawRange.layer = 3;
+				compiled.drawRange.usesSdf = false;
+				compiled.drawRange.usesLiveTileRgb = true;
+				compiled.drawRange.sdfSpreadPixels = 0.0f;
+				compiled.drawRange.sourceToLogicalScale = 1.0f;
+				compiled.drawRange.layerColorModifier =
 					{ 1.0f, 1.0f, 1.0f, 1.0f };
 				compiled.shaderClass = NativeFontCompiledShaderClass::Argb;
 				compiled.staticSmoothSampling = true;
@@ -271,17 +272,17 @@ namespace fonthook::vectorfont
 			if (effects.bakedCoverage)
 			{
 				NativeFontCompiledRange compiled;
-				compiled.range = range;
+				compiled.drawRange = range;
 				// Coverage, effect color and effect opacity already live in the A8
 				// mask plus COLOR0. Normalize all packet-owned state so contiguous
 				// Shadow/Glow/Outline/Fill ranges on one atlas page collapse into a
 				// single draw while retaining their original vertex order.
-				compiled.range.layer = 3;
-				compiled.range.usesSdf = false;
-				compiled.range.usesLiveTileRgb = true;
-				compiled.range.sdfSpreadPixels = 0.0f;
-				compiled.range.sourceToLogicalScale = 1.0f;
-				compiled.range.layerColorModifier =
+				compiled.drawRange.layer = 3;
+				compiled.drawRange.usesSdf = false;
+				compiled.drawRange.usesLiveTileRgb = true;
+				compiled.drawRange.sdfSpreadPixels = 0.0f;
+				compiled.drawRange.sourceToLogicalScale = 1.0f;
+				compiled.drawRange.layerColorModifier =
 					{ 1.0f, 1.0f, 1.0f, 1.0f };
 				compiled.shaderClass = NativeFontCompiledShaderClass::Coverage;
 				compiled.staticSmoothSampling = true;
@@ -339,7 +340,7 @@ namespace fonthook::vectorfont
 			}
 
 			NativeFontCompiledRange compiled;
-			compiled.range = range;
+			compiled.drawRange = range;
 			const float layerAndFlags = static_cast<float>(range.layer)
 				+ (range.usesLiveTileRgb ? 0.0f : 0.25f);
 			compiled.constants = {{

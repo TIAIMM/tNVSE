@@ -62,9 +62,9 @@ namespace fonthook
 				return reinterpret_cast<SIZE_T>(&GetBoundedFontDataReadSize);
 			}
 
-			static hook_site::InstructionCallHook& Site()
+			static hook_site::InstructionCallSite& Site()
 			{
-				static hook_site::InstructionCallHook site{
+				static hook_site::InstructionCallSite site{
 					"Font::Load BSFile::GetSize instructions -> bounded reader (__fastcall, ECX=BSFile*)",
 					kCallSite,
 					kVanillaInstructions,
@@ -75,7 +75,7 @@ namespace fonthook
 
 			static bool HasVanillaInstructions()
 			{
-				return Site().HasOriginal();
+				return Site().MatchesOriginalBytes();
 			}
 
 			static bool IsInstalled()
@@ -114,15 +114,15 @@ namespace fonthook
 					return true;
 				}
 
-				SIZE_T observed = 0;
+				SIZE_T observedTarget = 0;
 				const bool readable = hook_identity::ReadRel32Target(
-					kCallSite, Rel32Opcode::Call, observed);
+					kCallSite, Rel32Opcode::Call, observedTarget);
 				const bool restored = Rollback();
 				gLog.FormattedMessage(
 					"tnvse_font_hook: Font::Load bounded FNT read write verification failed site=%08X expected=%08X observed=%08X readable=%u rollback=%s",
 					static_cast<UInt32>(kCallSite),
 					static_cast<UInt32>(Target()),
-					static_cast<UInt32>(observed),
+					static_cast<UInt32>(observedTarget),
 					readable ? 1u : 0u,
 					restored ? "restored" : "incomplete");
 				return false;
@@ -133,13 +133,13 @@ namespace fonthook
 				if (Site().RollbackOwned())
 					return true;
 
-				SIZE_T observed = 0;
+				SIZE_T observedTarget = 0;
 				const bool readable = hook_identity::ReadRel32Target(
-					kCallSite, Rel32Opcode::Call, observed);
+					kCallSite, Rel32Opcode::Call, observedTarget);
 				gLog.FormattedMessage(
-					"tnvse_font_hook: Font::Load bounded FNT read rollback retained site=%08X observed=%08X hook=%08X readable=%u",
+					"tnvse_font_hook: Font::Load bounded FNT read rollback retained site=%08X observed=%08X replacement=%08X readable=%u",
 					static_cast<UInt32>(kCallSite),
-					static_cast<UInt32>(observed),
+					static_cast<UInt32>(observedTarget),
 					static_cast<UInt32>(Target()),
 					readable ? 1u : 0u);
 				return false;
@@ -149,7 +149,7 @@ namespace fonthook
 		void* __cdecl CopyAnimatingTextEncodedUnits(
 			void* destination, const void* source, SIZE_T unitCount);
 
-		std::array<hook_site::RelCallHook, 5> kCommonFontCallHooks = {{
+		std::array<hook_site::RelCallSite, 5> kCommonFontCallSites = {{
 			{ "FontManager::CreateText -> FontManager::PrepText (__thiscall member)", 0xA18F4A, 0xA18A30, &FontManagerEx::PrepText },
 			{ "FontManager::CreateText -> TextDoc::Render (__thiscall member)", 0xA18F63, 0xA19060, &FontManagerEx::TextDocRender },
 			{ "TextDoc::Render -> Font::AddChar (__thiscall member)", 0xA19622, 0xA142D0, &FontEx::TextDocRenderAddChar },
@@ -157,11 +157,11 @@ namespace fonthook
 			{ "TextLine wrap -> TextLine::AddChar (__thiscall member)", 0xA19C80, 0xA19F70, &FontManagerEx::TextLineAddChar },
 		}};
 
-		std::array<hook_site::RelCallHook, 1> kFreeTypeOnlyCallHooks = {{
+		std::array<hook_site::RelCallSite, 1> kFreeTypeOnlyCallSites = {{
 			{ "TextLine constructor -> TextLine::AddChar (__thiscall member)", 0xA1BDE2, 0xA19F70, &FontManagerEx::TextLineAddChar },
 		}};
 
-		std::array<hook_site::RelCallHook, 27> kMultibyteFontCallHooks = {{
+		std::array<hook_site::RelCallSite, 27> kMultibyteFontCallSites = {{
 			{ "AnimatingText::Update -> encoded-unit memcpy (__cdecl)", 0x6FFFEE, 0x401460, &CopyAnimatingTextEncodedUnits },
 			{ "FontManager::PrepText -> PrepHypertext (__thiscall member)", 0xA18ACC, 0xA17390, &FontManagerEx::PrepHypertext },
 			{ "PrepHypertext CollectTo[0] (__fastcall thiscall shim)", 0xA1772D, 0xA16EA0, &FontManagerEx::CollectTo },
@@ -194,7 +194,7 @@ namespace fonthook
 		constexpr std::array<UInt8, 8> kFontPrepTextPrologue = {
 			0x55, 0x8B, 0xEC, 0x81, 0xEC, 0xE0, 0x07, 0x00
 		};
-		hook_site::EntryJumpHook s_fontPrepTextEntryHook{
+		hook_site::EntryJumpSite s_fontPrepTextEntrySite{
 			"Font::PrepText entry (__thiscall member)",
 			kFontPrepText,
 			kFontPrepTextPrologue,
@@ -204,17 +204,18 @@ namespace fonthook
 
 		template <size_t N>
 		bool ValidateVanillaCallSites(
-			const std::array<hook_site::RelCallHook, N>& sites)
+			const std::array<hook_site::RelCallSite, N>& sites)
 		{
 			bool valid = true;
-			for (const hook_site::RelCallHook& site : sites)
+			for (const hook_site::RelCallSite& site : sites)
 			{
 				SIZE_T actualTarget = 0;
 				if (!site.ReadTarget(actualTarget))
 				{
 					gLog.FormattedMessage(
 						"tnvse_font_hook: identity mismatch site=%s address=%08X expected=CALL rel32",
-						site.name, static_cast<UInt32>(site.address));
+						site.description,
+						static_cast<UInt32>(site.callAddress));
 					valid = false;
 					continue;
 				}
@@ -222,7 +223,8 @@ namespace fonthook
 				{
 					gLog.FormattedMessage(
 						"tnvse_font_hook: identity mismatch site=%s address=%08X expectedTarget=%08X actualTarget=%08X",
-						site.name, static_cast<UInt32>(site.address),
+						site.description,
+						static_cast<UInt32>(site.callAddress),
 						static_cast<UInt32>(site.expectedTarget),
 						static_cast<UInt32>(actualTarget));
 					valid = false;
@@ -233,21 +235,22 @@ namespace fonthook
 
 		template <size_t N>
 		bool VerifyInstalledCallSites(
-			const std::array<hook_site::RelCallHook, N>& sites)
+			const std::array<hook_site::RelCallSite, N>& sites)
 		{
 			bool installed = true;
 			for (size_t i = 0; i < sites.size(); ++i)
 			{
-				SIZE_T observed = 0;
-				const bool readable = sites[i].ReadTarget(observed);
-				if (readable && observed == sites[i].hookTarget)
+				SIZE_T observedTarget = 0;
+				const bool readable = sites[i].ReadTarget(observedTarget);
+				if (readable
+					&& observedTarget == sites[i].replacementTarget)
 					continue;
 				gLog.FormattedMessage(
 					"tnvse_font_hook: installed call verification failed site=%s address=%08X expected=%08X observed=%08X readable=%u",
-					sites[i].name,
-					static_cast<UInt32>(sites[i].address),
-					static_cast<UInt32>(sites[i].hookTarget),
-					static_cast<UInt32>(observed),
+					sites[i].description,
+					static_cast<UInt32>(sites[i].callAddress),
+					static_cast<UInt32>(sites[i].replacementTarget),
+					static_cast<UInt32>(observedTarget),
 					readable ? 1u : 0u);
 				installed = false;
 			}
@@ -256,74 +259,74 @@ namespace fonthook
 
 		template <size_t N>
 		bool RollbackOwnedCallSites(
-			std::array<hook_site::RelCallHook, N>& sites)
+			std::array<hook_site::RelCallSite, N>& sites)
 		{
 			bool restored = true;
 			for (size_t i = 0; i < sites.size(); ++i)
 			{
-				SIZE_T observed = 0;
+				SIZE_T observedTarget = 0;
 				if (sites[i].RollbackOwned(
-						sites[i].expectedTarget, &observed))
+						sites[i].expectedTarget, &observedTarget))
 					continue;
 
 				// Another top-level CALL may already retain tNVSE as a
 				// predecessor. Never replace that later owner with vanilla.
 				gLog.FormattedMessage(
-					"tnvse_font_hook: call rollback retained site=%s address=%08X observed=%08X hook=%08X",
-					sites[i].name,
-					static_cast<UInt32>(sites[i].address),
-					static_cast<UInt32>(observed),
-					static_cast<UInt32>(sites[i].hookTarget));
+					"tnvse_font_hook: call rollback retained site=%s address=%08X observed=%08X replacement=%08X",
+					sites[i].description,
+					static_cast<UInt32>(sites[i].callAddress),
+					static_cast<UInt32>(observedTarget),
+					static_cast<UInt32>(sites[i].replacementTarget));
 				restored = false;
 			}
 			return restored;
 		}
 
-		bool VerifyFontPrepTextEntry(SIZE_T hookTarget)
+		bool VerifyFontPrepTextEntry(SIZE_T replacementTarget)
 		{
-			if (hookTarget == s_fontPrepTextEntryHook.hookTarget
-				&& s_fontPrepTextEntryHook.IsInstalled())
+			if (replacementTarget == s_fontPrepTextEntrySite.replacementTarget
+				&& s_fontPrepTextEntrySite.IsInstalled())
 			{
 				return true;
 			}
-			SIZE_T observed = 0;
+			SIZE_T observedTarget = 0;
 			const bool readable = hook_identity::ReadRel32Target(
-				kFontPrepText, Rel32Opcode::Jump, observed);
+				kFontPrepText, Rel32Opcode::Jump, observedTarget);
 			gLog.FormattedMessage(
 				"tnvse_font_hook: Font::PrepText entry verification failed expected=%08X observed=%08X readable=%u",
-				static_cast<UInt32>(hookTarget),
-				static_cast<UInt32>(observed),
+				static_cast<UInt32>(replacementTarget),
+				static_cast<UInt32>(observedTarget),
 				readable ? 1u : 0u);
 			return false;
 		}
 
-		bool RollbackOwnedFontPrepTextEntry(SIZE_T hookTarget)
+		bool RollbackOwnedFontPrepTextEntry(SIZE_T replacementTarget)
 		{
-			if (hookTarget == s_fontPrepTextEntryHook.hookTarget
-				&& s_fontPrepTextEntryHook.RollbackOwned())
+			if (replacementTarget == s_fontPrepTextEntrySite.replacementTarget
+				&& s_fontPrepTextEntrySite.RollbackOwned())
 			{
 				return true;
 			}
 
-			SIZE_T observed = 0;
+			SIZE_T observedTarget = 0;
 			hook_identity::ReadRel32Target(
-				kFontPrepText, Rel32Opcode::Jump, observed);
+				kFontPrepText, Rel32Opcode::Jump, observedTarget);
 			gLog.FormattedMessage(
-				"tnvse_font_hook: Font::PrepText rollback retained observed=%08X hook=%08X",
-				static_cast<UInt32>(observed),
-				static_cast<UInt32>(hookTarget));
+				"tnvse_font_hook: Font::PrepText rollback retained observed=%08X replacement=%08X",
+				static_cast<UInt32>(observedTarget),
+				static_cast<UInt32>(replacementTarget));
 			return false;
 		}
 
 		bool ValidateRequiredFontHookSites()
 		{
-			bool valid = ValidateVanillaCallSites(kCommonFontCallHooks);
+			bool valid = ValidateVanillaCallSites(kCommonFontCallSites);
 			valid = FontLoadBoundedReadSizeHook::ValidateVanilla() && valid;
 			if (g_bEnableMultibyteFontHook)
 			{
-				valid = ValidateVanillaCallSites(kMultibyteFontCallHooks)
+				valid = ValidateVanillaCallSites(kMultibyteFontCallSites)
 					&& valid;
-				if (!s_fontPrepTextEntryHook.HasOriginal())
+				if (!s_fontPrepTextEntrySite.MatchesOriginalBytes())
 				{
 					gLog.FormattedMessage(
 						"tnvse_font_hook: identity mismatch site=Font::PrepText address=%08X length=%u",
@@ -334,7 +337,7 @@ namespace fonthook
 			}
 			else
 			{
-				valid = ValidateVanillaCallSites(kFreeTypeOnlyCallHooks)
+				valid = ValidateVanillaCallSites(kFreeTypeOnlyCallSites)
 					&& valid;
 			}
 			return valid;
@@ -387,7 +390,7 @@ namespace fonthook
 		constexpr std::array<UInt8, 6> kCalculateDimensionsPrologue = {
 			0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x4C
 		};
-		std::array<hook_site::EntryJumpHook, 5> s_coreFontEntryHooks = {{
+		std::array<hook_site::EntryJumpSite, 5> s_coreFontEntrySites = {{
 			{ "Font::Font entry (__thiscall member)", kFontConstructor,
 				kFontConstructorPrologue, &FontEx::FontConstructor },
 			{ "Font::Load entry (__thiscall member)", kFontLoad,
@@ -404,16 +407,16 @@ namespace fonthook
 
 		struct PendingTrampoline
 		{
-			hook_site::EntryJumpHook* site = nullptr;
+			hook_site::EntryJumpSite* site = nullptr;
 			void* code = nullptr;
 		};
 		std::array<PendingTrampoline, 5> s_coreFontTrampolines = {};
 
 		template <size_t N>
 		bool MatchInstalledCallSitesUnchecked(
-			const std::array<hook_site::RelCallHook, N>& sites)
+			const std::array<hook_site::RelCallSite, N>& sites)
 		{
-			for (const hook_site::RelCallHook& site : sites)
+			for (const hook_site::RelCallSite& site : sites)
 			{
 				if (!site.IsInstalledUnchecked())
 				{
@@ -443,36 +446,37 @@ namespace fonthook
 			}
 
 			if (!MatchInstalledCallSitesUnchecked(
-					kCommonFontCallHooks))
+					kCommonFontCallSites))
 			{
 				return false;
 			}
 
 			if (s_fontHookInstallState.multibyte)
 			{
-				return s_fontPrepTextEntryHook.IsInstalledUnchecked()
+				return s_fontPrepTextEntrySite.IsInstalledUnchecked()
 					&& MatchInstalledCallSitesUnchecked(
-						kMultibyteFontCallHooks);
+						kMultibyteFontCallSites);
 			}
 
 			return MatchInstalledCallSitesUnchecked(
-				kFreeTypeOnlyCallHooks);
+				kFreeTypeOnlyCallSites);
 		}
 
 		bool IsPublishedFontHookGraphCurrent()
 		{
-			const bool current = IsInstalledFontHookGraphCurrentUnchecked();
-			if (!current && !s_fontHookGraphMismatchLogged)
+			const bool graphCurrent =
+				IsInstalledFontHookGraphCurrentUnchecked();
+			if (!graphCurrent && !s_fontHookGraphMismatchLogged)
 			{
 				s_fontHookGraphMismatchLogged = true;
 				gLog.FormattedMessage(
 					"tnvse_font_hook: installed graph is no longer the verified top-level owner; cached multibyte/freetype capabilities revoked");
 			}
-			else if (current)
+			else if (graphCurrent)
 			{
 				s_fontHookGraphMismatchLogged = false;
 			}
-			return current;
+			return graphCurrent;
 		}
 
 		void ClearCoreFontOriginals()
@@ -506,20 +510,20 @@ namespace fonthook
 					&& trampoline.site->RollbackOwned();
 				if (!entryRestored)
 				{
-					SIZE_T observed = 0;
+					SIZE_T observedTarget = 0;
 					if (trampoline.site)
 					{
 						hook_identity::ReadRel32Target(
-							trampoline.site->address,
-							Rel32Opcode::Jump, observed);
+							trampoline.site->entryAddress,
+							Rel32Opcode::Jump, observedTarget);
 					}
 					gLog.FormattedMessage(
-						"tnvse_font_hook: core entry rollback retained address=%08X observed=%08X hook=%08X",
+						"tnvse_font_hook: core entry rollback retained address=%08X observed=%08X replacement=%08X",
 						static_cast<UInt32>(trampoline.site
-							? trampoline.site->address : 0),
-						static_cast<UInt32>(observed),
+							? trampoline.site->entryAddress : 0),
+						static_cast<UInt32>(observedTarget),
 						static_cast<UInt32>(trampoline.site
-							? trampoline.site->hookTarget : 0));
+							? trampoline.site->replacementTarget : 0));
 					restored = false;
 				}
 			}
@@ -548,17 +552,17 @@ namespace fonthook
 
 		bool BuildTrampoline(PendingTrampoline& trampoline)
 		{
-			if (!trampoline.site || !trampoline.site->HasOriginal())
+			if (!trampoline.site || !trampoline.site->MatchesOriginalBytes())
 			{
 				gLog.FormattedMessage(
 					"tnvse_font_hook: original entry signature mismatch address=%08X length=%u",
 					static_cast<UInt32>(trampoline.site
-						? trampoline.site->address : 0),
+						? trampoline.site->entryAddress : 0),
 					static_cast<UInt32>(trampoline.site
 						? trampoline.site->originalLength : 0));
 				return false;
 			}
-			hook_site::EntryJumpHook& site = *trampoline.site;
+			hook_site::EntryJumpSite& site = *trampoline.site;
 
 			constexpr SIZE_T kJumpInstructionSize = 5;
 			const SIZE_T trampolineSize =
@@ -570,7 +574,7 @@ namespace fonthook
 			{
 				gLog.FormattedMessage(
 					"tnvse_font_hook: trampoline allocation failed address=%08X",
-					static_cast<UInt32>(site.address));
+					static_cast<UInt32>(site.entryAddress));
 				return false;
 			}
 
@@ -582,16 +586,16 @@ namespace fonthook
 				VirtualFree(code, 0, MEM_RELEASE);
 				gLog.FormattedMessage(
 					"tnvse_font_hook: trampoline image exceeds backend buffer address=%08X size=%u",
-					static_cast<UInt32>(site.address),
+					static_cast<UInt32>(site.entryAddress),
 					static_cast<UInt32>(trampolineSize));
 				return false;
 			}
 			std::memcpy(image.data(),
-				reinterpret_cast<const void*>(site.address),
+				reinterpret_cast<const void*>(site.entryAddress),
 				site.originalLength);
 			image[site.originalLength] = 0xE9;
 			const UInt32 returnDisplacement =
-				static_cast<UInt32>(site.address + site.originalLength
+				static_cast<UInt32>(site.entryAddress + site.originalLength
 					- reinterpret_cast<SIZE_T>(code + trampolineSize));
 			std::memcpy(image.data() + site.originalLength + 1,
 				&returnDisplacement, sizeof(returnDisplacement));
@@ -601,7 +605,7 @@ namespace fonthook
 				VirtualFree(code, 0, MEM_RELEASE);
 				gLog.FormattedMessage(
 					"tnvse_font_hook: trampoline publication failed address=%08X",
-					static_cast<UInt32>(site.address));
+					static_cast<UInt32>(site.entryAddress));
 				return false;
 			}
 			trampoline.code = code;
@@ -611,11 +615,11 @@ namespace fonthook
 		bool InstallCoreFontEntryHooks()
 		{
 			std::array<PendingTrampoline, 5> trampolines = {{
-				{ &s_coreFontEntryHooks[0] },
-				{ &s_coreFontEntryHooks[1] },
-				{ &s_coreFontEntryHooks[2] },
-				{ &s_coreFontEntryHooks[3] },
-				{ &s_coreFontEntryHooks[4] },
+				{ &s_coreFontEntrySites[0] },
+				{ &s_coreFontEntrySites[1] },
+				{ &s_coreFontEntrySites[2] },
+				{ &s_coreFontEntrySites[3] },
+				{ &s_coreFontEntrySites[4] },
 			}};
 
 			for (PendingTrampoline& trampoline : trampolines)
@@ -651,7 +655,7 @@ namespace fonthook
 				kCalculateDimensionsPrologue.size() - 5);
 
 			bool installed = FontLoadBoundedReadSizeHook::IsInstalled();
-			for (const hook_site::EntryJumpHook& site : s_coreFontEntryHooks)
+			for (const hook_site::EntryJumpSite& site : s_coreFontEntrySites)
 				installed = site.IsInstalled() && installed;
 			if (!installed)
 			{
@@ -782,47 +786,50 @@ namespace fonthook
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry));
 				return false;
 			}
-			const SIZE_T current = *reinterpret_cast<const SIZE_T*>(
+			const SIZE_T currentHandler = *reinterpret_cast<const SIZE_T*>(
 				kTileTextMakeNodeVTableEntry);
-			const SIZE_T hook = reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
-			if (current == hook)
+			const SIZE_T adapterHandler =
+				reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
+			if (currentHandler == adapterHandler)
 			{
 				return s_tileTextMakeNode
-					&& reinterpret_cast<SIZE_T>(s_tileTextMakeNode) != hook
+					&& reinterpret_cast<SIZE_T>(s_tileTextMakeNode)
+						!= adapterHandler
 					&& hook_identity::IsExecutableTarget(
 						reinterpret_cast<SIZE_T>(s_tileTextMakeNode));
 			}
-			if (!hook_identity::IsExecutableTarget(current))
+			if (!hook_identity::IsExecutableTarget(currentHandler))
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: VUI+ effect proxy compatibility skipped; TileText::MakeNode target is not executable target=%08X",
-					static_cast<UInt32>(current));
+					static_cast<UInt32>(currentHandler));
 				return false;
 			}
-			s_tileTextMakeNode = reinterpret_cast<TileTextMakeNodeFn>(current);
+			s_tileTextMakeNode =
+				reinterpret_cast<TileTextMakeNodeFn>(currentHandler);
 			// TileText::MakeNode vtable slot
 			// (__thiscall target via __fastcall shim).
 			SafeWrite32(kTileTextMakeNodeVTableEntry,
 				reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook));
-			const SIZE_T observed = *reinterpret_cast<const SIZE_T*>(
+			const SIZE_T observedHandler = *reinterpret_cast<const SIZE_T*>(
 				kTileTextMakeNodeVTableEntry);
-			if (observed == hook)
+			if (observedHandler == adapterHandler)
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: VUI+ effect proxy compatibility installed entry=%08X target=%08X chained=%d",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
-					static_cast<UInt32>(current),
-					current != kVanillaTileTextMakeNode ? 1 : 0);
+					static_cast<UInt32>(currentHandler),
+					currentHandler != kVanillaTileTextMakeNode ? 1 : 0);
 				return true;
 			}
 
-			if (observed == current)
+			if (observedHandler == currentHandler)
 			{
 				s_tileTextMakeNode = nullptr;
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: VUI+ effect proxy compatibility write did not publish entry=%08X predecessor=%08X",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
-					static_cast<UInt32>(current));
+					static_cast<UInt32>(currentHandler));
 				return false;
 			}
 
@@ -830,9 +837,9 @@ namespace fonthook
 			// Keep that predecessor alive and do not overwrite the new top slot.
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: VUI+ effect proxy compatibility may be retained below observed handler=%08X predecessor=%08X executable=%u; reachability unverified",
-				static_cast<UInt32>(observed),
-				static_cast<UInt32>(current),
-				hook_identity::IsExecutableTarget(observed) ? 1u : 0u);
+				static_cast<UInt32>(observedHandler),
+				static_cast<UInt32>(currentHandler),
+				hook_identity::IsExecutableTarget(observedHandler) ? 1u : 0u);
 			return false;
 		}
 
@@ -840,7 +847,7 @@ namespace fonthook
 			bool multibyte, bool freeType)
 		{
 			const bool commonInstalled = VerifyInstalledCallSites(
-				kCommonFontCallHooks);
+				kCommonFontCallSites);
 			bool modeInstalled = false;
 			bool prepTextInstalled = true;
 			SIZE_T prepTextTarget = 0;
@@ -848,33 +855,33 @@ namespace fonthook
 			if (multibyte)
 			{
 				modeInstalled = VerifyInstalledCallSites(
-					kMultibyteFontCallHooks);
-				prepTextTarget = s_fontPrepTextEntryHook.hookTarget;
+					kMultibyteFontCallSites);
+				prepTextTarget = s_fontPrepTextEntrySite.replacementTarget;
 				prepTextInstalled = VerifyFontPrepTextEntry(prepTextTarget);
 			}
 			else
 			{
 				modeInstalled = VerifyInstalledCallSites(
-					kFreeTypeOnlyCallHooks);
+					kFreeTypeOnlyCallSites);
 			}
 
 			if (!commonInstalled || !modeInstalled || !prepTextInstalled)
 			{
 				const bool commonRestored = RollbackOwnedCallSites(
-					kCommonFontCallHooks);
+					kCommonFontCallSites);
 				bool modeRestored = false;
 				bool prepTextRestored = true;
 				if (multibyte)
 				{
 					modeRestored = RollbackOwnedCallSites(
-						kMultibyteFontCallHooks);
+						kMultibyteFontCallSites);
 					prepTextRestored = RollbackOwnedFontPrepTextEntry(
 						prepTextTarget);
 				}
 				else
 				{
 					modeRestored = RollbackOwnedCallSites(
-						kFreeTypeOnlyCallHooks);
+						kFreeTypeOnlyCallSites);
 				}
 				const bool coreRestored = RollbackCoreFontEntryHooks();
 				s_fontHookInstallState = {};
@@ -1003,29 +1010,30 @@ namespace fonthook
 		}
 	}
 
-	static bool InstallDoorPromptHook(SIZE_T hook, const char* mode)
+	static bool InstallDoorPromptHook(SIZE_T formatterAdapterTarget,
+		const char* mode)
 	{
-		hook_site::RelCallHook doorPromptHook{
+		hook_site::RelCallSite doorPromptCallSite{
 			"Door prompt -> BSsprintf (__cdecl)",
 			0x777006,
 			0x406D00,
-			hook
+			formatterAdapterTarget
 		};
-		if (!doorPromptHook.IsExpected())
+		if (!doorPromptCallSite.IsExpected())
 			return false;
-		WriteRelCall(0x777006, hook);
-		if (doorPromptHook.IsInstalled())
+		WriteRelCall(0x777006, formatterAdapterTarget);
+		if (doorPromptCallSite.IsInstalled())
 		{
 			return true;
 		}
-		SIZE_T observed = 0;
-		const bool readable = doorPromptHook.ReadTarget(observed);
+		SIZE_T observedTarget = 0;
+		const bool readable = doorPromptCallSite.ReadTarget(observedTarget);
 		gLog.FormattedMessage(
-			"tnvse_font_hook: door prompt %s hook write verification failed observed=%08X readable=%u rollback=%s",
+			"tnvse_font_hook: door prompt %s adapter write verification failed observed=%08X readable=%u rollback=%s",
 			mode,
-			static_cast<UInt32>(observed),
+			static_cast<UInt32>(observedTarget),
 			readable ? 1u : 0u,
-			readable && observed == doorPromptHook.expectedTarget
+			readable && observedTarget == doorPromptCallSite.expectedTarget
 				? "vanilla-remains" : "later-owner-or-invalid-retained");
 		return false;
 	}
@@ -1047,13 +1055,13 @@ namespace fonthook
 		constexpr SIZE_T kPluralBranch = 0x753E39;
 		constexpr std::array<UInt8, 1> kOriginal = { 0x74 };
 		constexpr std::array<UInt8, 1> kReplacement = { 0xEB };
-		hook_site::BytePatch pluralBranchHook{
+		hook_site::BytePatchSite pluralBranchPatchSite{
 			"Terminal plural conditional JE -> JMP",
 			kPluralBranch,
 			kOriginal,
 			kReplacement
 		};
-		if (!pluralBranchHook.HasOriginal())
+		if (!pluralBranchPatchSite.MatchesOriginalBytes())
 		{
 			const UInt32 actual = hook_identity::IsAccessibleRegion(
 				kPluralBranch, sizeof(UInt8), true)

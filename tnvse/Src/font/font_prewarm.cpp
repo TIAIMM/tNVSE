@@ -2337,18 +2337,18 @@ namespace fonthook::vectorfont
 			bool& flag;
 			~ResetFlag() { flag = false; }
 		} reset{ s_servicingPrewarmMessages };
-		MSG message = {};
+		MSG windowMessage = {};
 		for (UInt32 count = 0; count < kMaximumHostMessagesPerService; ++count)
 		{
-			if (!PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+			if (!PeekMessageW(&windowMessage, nullptr, 0, 0, PM_REMOVE))
 				break;
-			if (message.message == WM_QUIT)
+			if (windowMessage.message == WM_QUIT)
 			{
-				PostQuitMessage(static_cast<int>(message.wParam));
+				PostQuitMessage(static_cast<int>(windowMessage.wParam));
 				break;
 			}
-			TranslateMessage(&message);
-			DispatchMessageW(&message);
+			TranslateMessage(&windowMessage);
+			DispatchMessageW(&windowMessage);
 		}
 	}
 

@@ -746,9 +746,10 @@ namespace fonthook::vectorfont
 			// The configured transform, embolden and slant still apply below.
 			constexpr FT_Int32 loadFlags = FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP
 				| FT_LOAD_NO_SVG | FT_LOAD_NO_HINTING;
-			if (FT_Load_Glyph(resolved.runtimeFace->face, resolved.glyphIndex, loadFlags))
+			if (FT_Load_Glyph(
+				resolved.runtimeFace->ftFace, resolved.glyphIndex, loadFlags))
 				return nullptr;
-			FT_GlyphSlot slot = resolved.runtimeFace->face->glyph;
+			FT_GlyphSlot slot = resolved.runtimeFace->ftFace->glyph;
 			if (slot->format != FT_GLYPH_FORMAT_OUTLINE)
 			{
 				RefreshGlyphBitmapCpuMemory(*bitmap);
@@ -861,7 +862,7 @@ namespace fonthook::vectorfont
 		}
 		if (!ResolveVectorGlyph(*rasterRuntime, glyph, resolved) || !resolved.role
 			|| !resolved.role->style || !resolved.runtimeFace
-			|| !resolved.runtimeFace->face || !resolved.runtimeFace->file)
+			|| !resolved.runtimeFace->ftFace || !resolved.runtimeFace->file)
 		{
 			return false;
 		}
@@ -887,7 +888,7 @@ namespace fonthook::vectorfont
 			* 3.14159265358979323846f / 180.0f);
 		key = {
 			resolved.runtimeFace->file->contentHash,
-			static_cast<SInt32>(resolved.runtimeFace->face->face_index),
+			static_cast<SInt32>(resolved.runtimeFace->ftFace->face_index),
 			resolved.glyphIndex,
 			GetFreeTypeTextCodePage(),
 			static_cast<UInt16>(effectiveWidth),
@@ -965,7 +966,7 @@ namespace fonthook::vectorfont
 			GetPersistentBitmapProfile(persistentKey,
 				resolved.runtimeFace->file->path, runtime.config->fontId,
 				static_cast<UInt32>(std::max<FT_Long>(1,
-					resolved.runtimeFace->face->num_glyphs)));
+					resolved.runtimeFace->ftFace->num_glyphs)));
 		if (persistentProfile)
 		{
 			std::shared_ptr<GlyphBitmap> diskBitmap =
@@ -1247,7 +1248,7 @@ namespace fonthook::vectorfont
 		workerFace.faceIndex = faceIndex;
 		workerFace.runtimeFace.file = file;
 		if (FT_New_Memory_Face(library, file->data, file->size, faceIndex,
-			&workerFace.runtimeFace.face))
+			&workerFace.runtimeFace.ftFace))
 		{
 			return nullptr;
 		}

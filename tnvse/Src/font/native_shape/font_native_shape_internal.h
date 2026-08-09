@@ -106,7 +106,7 @@ namespace fonthook::vectorfont
 
 	struct NativeFontCompiledRange
 	{
-		NativeFontDrawRange range;
+		NativeFontDrawRange drawRange;
 		std::array<float, kNativeFontPacketConstantFloatCount> constants = {};
 		NativeFontCompiledShaderClass shaderClass = NativeFontCompiledShaderClass::Body;
 		bool staticSmoothSampling = false;
@@ -229,8 +229,8 @@ namespace fonthook::vectorfont
 		RenderImmediateFn originalRenderImmediate = nullptr;
 		RenderImmediateFn originalRenderImmediateAlt = nullptr;
 		DeleteThisFn originalDeleteThis = nullptr;
-		RenderPassImmediatelyFn originalRenderPassImmediately = nullptr;
-		RenderAlphaGeometryFn originalRenderAlphaGeometry = nullptr;
+		RenderPassImmediatelyFn predecessorRenderPassImmediately = nullptr;
+		RenderAlphaGeometryFn predecessorRenderAlphaGeometry = nullptr;
 		bool renderPassImmediatelyHookInstalled = false;
 		bool renderAlphaGeometryHookInstalled = false;
 		bool loggedRenderPassImmediatelyHookConflict = false;

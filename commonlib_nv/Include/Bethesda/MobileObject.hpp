@@ -84,8 +84,8 @@ public:
 	bhkCharacterController* GetCharacterController() const;
 
 	inline CFilter* GetCollisionFilter() {
-		CFilter res{};
-		return ThisStdCall<CFilter*>(0x931ED0, this, &res);
+		CFilter collisionFilter{};
+		return ThisStdCall<CFilter*>(0x931ED0, this, &collisionFilter);
 	}
 };
 static_assert(sizeof(MobileObject) == 0x88);

@@ -46,7 +46,7 @@ namespace fonthook::vectorfont
 		static_assert(kTileRegisterObjectFunctionEntry == 0x11F9FA8);
 		static_assert(sizeof(TileRegisterObjectFn) == sizeof(UInt32));
 
-		std::atomic<TileRegisterObjectFn> s_originalTileRegisterObject = nullptr;
+		std::atomic<TileRegisterObjectFn> s_predecessorTileRegisterObject = nullptr;
 		bool s_loggedTileRegisterObjectConflict = false;
 		bool s_loggedTileRegisterObjectSlotUnavailable = false;
 		std::atomic<UInt32> s_missingMetadataLogCount = 0;
@@ -189,12 +189,12 @@ namespace fonthook::vectorfont
 			mix(reinterpret_cast<const void*>(kRenderPassImmediatelyCallSite), 5);
 			const NativeFontShapeState& state = State();
 			const TileRegisterObjectFn predecessor =
-				s_originalTileRegisterObject.load(std::memory_order_relaxed);
+				s_predecessorTileRegisterObject.load(std::memory_order_relaxed);
 			mix(&predecessor, sizeof(predecessor));
-			mix(&state.originalRenderAlphaGeometry,
-				sizeof(state.originalRenderAlphaGeometry));
-			mix(&state.originalRenderPassImmediately,
-				sizeof(state.originalRenderPassImmediately));
+			mix(&state.predecessorRenderAlphaGeometry,
+				sizeof(state.predecessorRenderAlphaGeometry));
+			mix(&state.predecessorRenderPassImmediately,
+				sizeof(state.predecessorRenderPassImmediately));
 			return hash ? hash : 1;
 		}
 
@@ -524,15 +524,15 @@ namespace fonthook::vectorfont
 
 		RenderAlphaGeometryFn ReadRenderAlphaGeometryCallTarget()
 		{
-			SIZE_T target = 0;
+			SIZE_T callTarget = 0;
 			if (!hook_identity::ReadRel32Target(
 				kRenderAlphaGeometryCallSite,
 				hook_identity::Rel32Opcode::Call,
-				target))
+				callTarget))
 			{
 				return nullptr;
 			}
-			return reinterpret_cast<RenderAlphaGeometryFn>(target);
+			return reinterpret_cast<RenderAlphaGeometryFn>(callTarget);
 		}
 
 		TileRegisterObjectFn ReadTileRegisterObjectTarget()
@@ -1280,9 +1280,9 @@ namespace fonthook::vectorfont
 				*reinterpret_cast<TileRegisterObjectFn volatile*>(
 					kTileRegisterObjectFunctionEntry);
 			return current == &NativeFontRegisterObject
-				&& s_originalTileRegisterObject.load(
+				&& s_predecessorTileRegisterObject.load(
 					std::memory_order_relaxed) != nullptr
-				&& state.originalRenderAlphaGeometry
+				&& state.predecessorRenderAlphaGeometry
 				&& hook_identity::MatchesRel32InstructionImageUnchecked(
 					kRenderAlphaGeometryCallSite,
 					s_renderAlphaGeometryHookImage)
@@ -1294,7 +1294,7 @@ namespace fonthook::vectorfont
 			BSShaderProperty* shaderProperty, BSShader* shader)
 		{
 			const TileRegisterObjectFn original =
-				s_originalTileRegisterObject.load(std::memory_order_relaxed);
+				s_predecessorTileRegisterObject.load(std::memory_order_relaxed);
 			if (!original || !accumulator || !geometry
 				|| accumulator->eRenderMode
 					!= BSShaderManager::BSSM_RENDER_TILES
@@ -1373,7 +1373,7 @@ namespace fonthook::vectorfont
 		void __fastcall NativeFontRenderAlphaGeometry(BSShaderAccumulator* accumulator, void*)
 		{
 			NativeFontShapeState& state = State();
-			if (!state.originalRenderAlphaGeometry)
+			if (!state.predecessorRenderAlphaGeometry)
 				return;
 			FreeTypePerfScope frameRoutePerf(
 				FreeTypePerfPhase::FrameRouteTotal);
@@ -1396,7 +1396,7 @@ namespace fonthook::vectorfont
 				InvalidateNativeFontCommandExecutionSegment(
 					NativeFontCommandFallback::Nested);
 				InvalidateNativeFontSortedShaderState();
-				state.originalRenderAlphaGeometry(accumulator);
+				state.predecessorRenderAlphaGeometry(accumulator);
 				InvalidateNativeFontSortedShaderState();
 				--scratch.nestedBypassDepth;
 				scratch.active = restoreActive;
@@ -1435,7 +1435,7 @@ namespace fonthook::vectorfont
 					{
 						FreeTypePerfScope vanillaRenderPerf(
 							FreeTypePerfPhase::FrameRouteVanillaRender);
-						state.originalRenderAlphaGeometry(accumulator);
+						state.predecessorRenderAlphaGeometry(accumulator);
 					}
 					ClearSortedFrame(scratch);
 					return;
@@ -1869,7 +1869,7 @@ namespace fonthook::vectorfont
 					FreeTypeGpuAlphaEnvelopeScope gpuTiming(
 						renderer ? renderer->GetD3DDevice() : nullptr,
 						hasPreparedPayloads);
-					state.originalRenderAlphaGeometry(accumulator);
+					state.predecessorRenderAlphaGeometry(accumulator);
 				}
 				if (hasPreparedPayloads)
 				{
@@ -1887,7 +1887,7 @@ namespace fonthook::vectorfont
 			{
 				FreeTypePerfScope vanillaRenderPerf(
 					FreeTypePerfPhase::FrameRouteVanillaRender);
-				state.originalRenderAlphaGeometry(accumulator);
+				state.predecessorRenderAlphaGeometry(accumulator);
 			}
 			if (clearSortedOwners)
 				ClearSortedFrame(scratch);
@@ -1896,20 +1896,22 @@ namespace fonthook::vectorfont
 		bool HookRenderAlphaGeometry()
 		{
 			NativeFontShapeState& state = State();
-			const RenderAlphaGeometryFn hook = reinterpret_cast<RenderAlphaGeometryFn>(
+			const RenderAlphaGeometryFn adapterTarget =
+				reinterpret_cast<RenderAlphaGeometryFn>(
 				&NativeFontRenderAlphaGeometry);
-			const RenderAlphaGeometryFn current = ReadRenderAlphaGeometryCallTarget();
-			if (current == hook)
+			const RenderAlphaGeometryFn currentTarget =
+				ReadRenderAlphaGeometryCallTarget();
+			if (currentTarget == adapterTarget)
 			{
 				state.renderAlphaGeometryHookInstalled =
-					state.originalRenderAlphaGeometry
-					&& state.originalRenderAlphaGeometry != hook
+					state.predecessorRenderAlphaGeometry
+					&& state.predecessorRenderAlphaGeometry != adapterTarget
 					&& hook_identity::IsExecutableTarget(
 						reinterpret_cast<SIZE_T>(
-							state.originalRenderAlphaGeometry));
+							state.predecessorRenderAlphaGeometry));
 				return state.renderAlphaGeometryHookInstalled;
 			}
-			if (!current)
+			if (!currentTarget)
 			{
 				if (state.renderAlphaGeometryHookInstalled)
 				{
@@ -1925,14 +1927,14 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			if (!hook_identity::IsExecutableTarget(
-				reinterpret_cast<SIZE_T>(current)))
+				reinterpret_cast<SIZE_T>(currentTarget)))
 			{
 				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
 					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: RenderAlphaGeometry call target is not executable target=%p; frame upload batching left disabled",
-						current);
+						currentTarget);
 				}
 				return false;
 			}
@@ -1954,47 +1956,49 @@ namespace fonthook::vectorfont
 			// may be a successor that already chains through tNVSE; never move back on
 			// top of it or the two hooks could recurse through each other.
 			const RenderAlphaGeometryFn installedPredecessor =
-				state.originalRenderAlphaGeometry;
+				state.predecessorRenderAlphaGeometry;
 			if (installedPredecessor
-				&& current != reinterpret_cast<RenderAlphaGeometryFn>(
+				&& currentTarget != reinterpret_cast<RenderAlphaGeometryFn>(
 					kBSShaderAccumulatorRenderAlphaGeometry)
-				&& current != installedPredecessor)
+				&& currentTarget != installedPredecessor)
 			{
 				if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
 					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: RenderAlphaGeometry frame hook was replaced by a successor target=%p; tNVSE will not reassert ownership",
-						current);
+						currentTarget);
 				}
 				return false;
 			}
 
-			const RenderAlphaGeometryFn previousOriginal = installedPredecessor;
-			state.originalRenderAlphaGeometry = current;
+			const RenderAlphaGeometryFn previousPredecessor =
+				installedPredecessor;
+			state.predecessorRenderAlphaGeometry = currentTarget;
 			// BSShaderAccumulator frame -> RenderAlphaGeometry
 			// (__thiscall target via __fastcall shim).
 			WriteRelCall(kRenderAlphaGeometryCallSite,
 				&NativeFontRenderAlphaGeometry);
 			const RenderAlphaGeometryFn publishedTarget =
 				ReadRenderAlphaGeometryCallTarget();
-			state.renderAlphaGeometryHookInstalled = publishedTarget == hook;
+			state.renderAlphaGeometryHookInstalled =
+				publishedTarget == adapterTarget;
 			if (!state.renderAlphaGeometryHookInstalled)
 			{
 				// If the target is unchanged, publication failed before tNVSE became
 				// reachable and the previous state remains authoritative. Otherwise a
 				// successor may already retain tNVSE, so keep the predecessor that this
 				// publication exposed and never overwrite the successor.
-				if (publishedTarget == current || !publishedTarget)
+				if (publishedTarget == currentTarget || !publishedTarget)
 				{
-					state.originalRenderAlphaGeometry = previousOriginal;
+					state.predecessorRenderAlphaGeometry = previousPredecessor;
 				}
 				else if (!state.loggedRenderAlphaGeometryHookConflict)
 				{
 					state.loggedRenderAlphaGeometryHookConflict = true;
 					gLog.FormattedMessage(
 						"tnvse_freetype_native: RenderAlphaGeometry target changed during publication successor=%p predecessor=%p; tNVSE will not reassert ownership",
-						publishedTarget, current);
+						publishedTarget, currentTarget);
 				}
 				return false;
 			}
@@ -2003,8 +2007,8 @@ namespace fonthook::vectorfont
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: installed RenderAlphaGeometry frame route predecessor=%p vanilla=%u",
-					current,
-					reinterpret_cast<SIZE_T>(current)
+					currentTarget,
+					reinterpret_cast<SIZE_T>(currentTarget)
 						== kBSShaderAccumulatorRenderAlphaGeometry ? 1u : 0u);
 			}
 			return true;
@@ -2094,15 +2098,16 @@ namespace fonthook::vectorfont
 			return false;
 		}
 
-		const TileRegisterObjectFn hook = &NativeFontRegisterObject;
-		const TileRegisterObjectFn current = ReadTileRegisterObjectTarget();
-		if (current == hook)
+		const TileRegisterObjectFn adapterTarget = &NativeFontRegisterObject;
+		const TileRegisterObjectFn currentTarget =
+			ReadTileRegisterObjectTarget();
+		if (currentTarget == adapterTarget)
 		{
-			const TileRegisterObjectFn predecessor =
-				s_originalTileRegisterObject.load(std::memory_order_acquire);
-			if (!predecessor || predecessor == hook
+			const TileRegisterObjectFn predecessorTarget =
+				s_predecessorTileRegisterObject.load(std::memory_order_acquire);
+			if (!predecessorTarget || predecessorTarget == adapterTarget
 				|| !hook_identity::IsExecutableTarget(
-					reinterpret_cast<SIZE_T>(predecessor)))
+					reinterpret_cast<SIZE_T>(predecessorTarget)))
 			{
 				if (!s_loggedTileRegisterObjectConflict)
 				{
@@ -2115,7 +2120,7 @@ namespace fonthook::vectorfont
 			return HookRenderAlphaGeometry();
 		}
 
-		if (!current)
+		if (!currentTarget)
 		{
 			if (g_bEnableFreeTypeFontRenderingLog
 				&& !s_loggedTileRegisterObjectSlotUnavailable)
@@ -2129,14 +2134,14 @@ namespace fonthook::vectorfont
 		}
 
 		if (!hook_identity::IsExecutableTarget(
-			reinterpret_cast<SIZE_T>(current)))
+			reinterpret_cast<SIZE_T>(currentTarget)))
 		{
 			if (!s_loggedTileRegisterObjectConflict)
 			{
 				s_loggedTileRegisterObjectConflict = true;
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch hook skipped; target is not executable target=%p entry=%08X",
-					current, kTileRegisterObjectFunctionEntry);
+					currentTarget, kTileRegisterObjectFunctionEntry);
 				InvalidateAllSingletonFacadeBindings();
 			}
 			return false;
@@ -2147,47 +2152,48 @@ namespace fonthook::vectorfont
 		// may be a successor that already chains to tNVSE; never reassert over it or
 		// the two hooks could recurse through each other.
 		const TileRegisterObjectFn installedPredecessor =
-			s_originalTileRegisterObject.load(std::memory_order_acquire);
+			s_predecessorTileRegisterObject.load(std::memory_order_acquire);
 		if (installedPredecessor
-			&& current != reinterpret_cast<TileRegisterObjectFn>(
+			&& currentTarget != reinterpret_cast<TileRegisterObjectFn>(
 				kBSShaderAccumulatorRegisterObjectInterface)
-			&& current != installedPredecessor)
+			&& currentTarget != installedPredecessor)
 		{
 			if (!s_loggedTileRegisterObjectConflict)
 			{
 				s_loggedTileRegisterObjectConflict = true;
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch was replaced by a successor target=%p; tNVSE will not reassert ownership",
-					current);
+					currentTarget);
 				InvalidateAllSingletonFacadeBindings();
 			}
 			return false;
 		}
 
-		if (reinterpret_cast<SIZE_T>(current)
+		if (reinterpret_cast<SIZE_T>(currentTarget)
 			!= kBSShaderAccumulatorRegisterObjectInterface
 			&& g_bEnableFreeTypeFontRenderingLog)
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_native: chaining pre-existing Tile RegisterObject dispatch target=%p vanilla=%08X",
-				current, kBSShaderAccumulatorRegisterObjectInterface);
+				currentTarget, kBSShaderAccumulatorRegisterObjectInterface);
 		}
 
-		const TileRegisterObjectFn previousOriginal = installedPredecessor;
-		s_originalTileRegisterObject.store(current, std::memory_order_release);
-		if (!PublishTileRegisterObjectHook(current))
+		const TileRegisterObjectFn previousPredecessor = installedPredecessor;
+		s_predecessorTileRegisterObject.store(
+			currentTarget, std::memory_order_release);
+		if (!PublishTileRegisterObjectHook(currentTarget))
 		{
 			// The slot changed after validation.  Preserve an older predecessor if
 			// one may still be reached through a successor chain; otherwise allow a
 			// clean retry against the newly observed initial target.
-			s_originalTileRegisterObject.store(previousOriginal,
+			s_predecessorTileRegisterObject.store(previousPredecessor,
 				std::memory_order_release);
 			if (!s_loggedTileRegisterObjectConflict)
 			{
 				s_loggedTileRegisterObjectConflict = true;
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: Tile RegisterObject dispatch changed during publication; hook not installed expected=%p actual=%p",
-					current, ReadTileRegisterObjectTarget());
+					currentTarget, ReadTileRegisterObjectTarget());
 			}
 			return false;
 		}
@@ -2216,8 +2222,8 @@ namespace fonthook::vectorfont
 		{
 			gLog.FormattedMessage(
 				"tnvse_freetype_native: installed Tile RegisterObject dispatch route entry=%08X predecessor=%p vanilla=%u renderAlphaReady=%u",
-				kTileRegisterObjectFunctionEntry, current,
-				reinterpret_cast<SIZE_T>(current)
+				kTileRegisterObjectFunctionEntry, currentTarget,
+				reinterpret_cast<SIZE_T>(currentTarget)
 					== kBSShaderAccumulatorRegisterObjectInterface ? 1u : 0u,
 				renderAlphaReady ? 1u : 0u);
 		}
@@ -2226,26 +2232,26 @@ namespace fonthook::vectorfont
 
 	bool IsNativeFontAccumulatorHookCurrent()
 	{
-		const TileRegisterObjectFn hook = &NativeFontRegisterObject;
-		const TileRegisterObjectFn predecessor =
-			s_originalTileRegisterObject.load(std::memory_order_acquire);
-		return ReadTileRegisterObjectTarget() == hook
-			&& predecessor && predecessor != hook
+		const TileRegisterObjectFn adapterTarget = &NativeFontRegisterObject;
+		const TileRegisterObjectFn predecessorTarget =
+			s_predecessorTileRegisterObject.load(std::memory_order_acquire);
+		return ReadTileRegisterObjectTarget() == adapterTarget
+			&& predecessorTarget && predecessorTarget != adapterTarget
 			&& hook_identity::IsExecutableTarget(
-				reinterpret_cast<SIZE_T>(predecessor));
+				reinterpret_cast<SIZE_T>(predecessorTarget));
 	}
 
 	bool IsNativeFontRenderAlphaGeometryHookCurrent()
 	{
-		const RenderAlphaGeometryFn hook =
+		const RenderAlphaGeometryFn adapterTarget =
 			reinterpret_cast<RenderAlphaGeometryFn>(
 				&NativeFontRenderAlphaGeometry);
-		const RenderAlphaGeometryFn predecessor =
-			State().originalRenderAlphaGeometry;
-		return predecessor && predecessor != hook
+		const RenderAlphaGeometryFn predecessorTarget =
+			State().predecessorRenderAlphaGeometry;
+		return predecessorTarget && predecessorTarget != adapterTarget
 			&& hook_identity::IsExecutableTarget(
-				reinterpret_cast<SIZE_T>(predecessor))
-			&& ReadRenderAlphaGeometryCallTarget() == hook;
+				reinterpret_cast<SIZE_T>(predecessorTarget))
+			&& ReadRenderAlphaGeometryCallTarget() == adapterTarget;
 	}
 
 	bool IsNativeFontRegistrationHookChainCurrent()
@@ -2257,17 +2263,19 @@ namespace fonthook::vectorfont
 	bool IsNativeFontRegistrationHookChainCurrentFast()
 	{
 		NativeFontShapeState& state = State();
-		const TileRegisterObjectFn tileHook = &NativeFontRegisterObject;
+		const TileRegisterObjectFn tileAdapterTarget =
+			&NativeFontRegisterObject;
 		const TileRegisterObjectFn tilePredecessor =
-			s_originalTileRegisterObject.load(std::memory_order_acquire);
+			s_predecessorTileRegisterObject.load(std::memory_order_acquire);
 		const bool tileCurrent =
-			ReadTileRegisterObjectTarget() == tileHook
-			&& tilePredecessor && tilePredecessor != tileHook;
-		const RenderAlphaGeometryFn renderAlphaHook =
+			ReadTileRegisterObjectTarget() == tileAdapterTarget
+			&& tilePredecessor && tilePredecessor != tileAdapterTarget;
+		const RenderAlphaGeometryFn renderAlphaAdapterTarget =
 			reinterpret_cast<RenderAlphaGeometryFn>(
 				&NativeFontRenderAlphaGeometry);
-		const bool renderAlphaCurrent = state.originalRenderAlphaGeometry
-			&& state.originalRenderAlphaGeometry != renderAlphaHook
+		const bool renderAlphaCurrent = state.predecessorRenderAlphaGeometry
+			&& state.predecessorRenderAlphaGeometry
+				!= renderAlphaAdapterTarget
 			&& hook_identity::MatchesRel32InstructionImageUnchecked(
 				kRenderAlphaGeometryCallSite,
 				s_renderAlphaGeometryHookImage);

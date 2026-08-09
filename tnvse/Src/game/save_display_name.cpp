@@ -1132,19 +1132,19 @@ namespace fonthook
 
 	void InitSaveDisplayNameHook()
 	{
-		hook_site::RelCallHook openSaveFileHook{
+		hook_site::RelCallSite openSaveFileCallSite{
 			"BGSSaveLoadManager::SaveGame -> OpenSaveFile (__thiscall via __fastcall shim)",
 			kOpenSaveFileCallSite,
 			0,
 			&OpenSaveFileWithSafeName
 		};
-		hook_site::RelCallHook scrubFileNameHook{
+		hook_site::RelCallSite scrubFileNameCallSite{
 			"SaveGameManager filename scrub (__fastcall)",
 			kScrubFileNameCallSite,
 			kVanillaScrubFileName,
 			&ScrubFileNameAndCaptureDisplayName
 		};
-		hook_site::RelCallHook generatedFileNameHook{
+		hook_site::RelCallSite generatedFileNameCallSite{
 			"SaveGameManager generated-name test (__fastcall)",
 			kIsSaveFileNameGeneratedCallSite,
 			0,
@@ -1156,7 +1156,7 @@ namespace fonthook
 				Rel32Opcode::Call,
 				openSaveFileTarget)
 			|| !hook_identity::IsExecutableTarget(openSaveFileTarget)
-			|| openSaveFileTarget == openSaveFileHook.hookTarget)
+			|| openSaveFileTarget == openSaveFileCallSite.replacementTarget)
 		{
 			gLog.FormattedMessage(
 				"tnvse_save_display_name: custom save hook target invalid target=%08X; disabled",
@@ -1176,7 +1176,8 @@ namespace fonthook
 					Rel32Opcode::Call,
 					observedOpenSaveFileTarget);
 			if (observedOpenSaveFileCall
-				&& observedOpenSaveFileTarget == openSaveFileHook.hookTarget)
+				&& observedOpenSaveFileTarget
+					== openSaveFileCallSite.replacementTarget)
 			{
 				gLog.FormattedMessage(
 					"tnvse_save_display_name: custom multibyte save sanitizer installed next=%08X",
@@ -1218,7 +1219,8 @@ namespace fonthook
 				Rel32Opcode::Call,
 				generatedFileNameTarget)
 			|| !hook_identity::IsExecutableTarget(generatedFileNameTarget)
-			|| generatedFileNameTarget == generatedFileNameHook.hookTarget)
+			|| generatedFileNameTarget
+				== generatedFileNameCallSite.replacementTarget)
 		{
 			gLog.FormattedMessage(
 				"tnvse_save_display_name: hook identity mismatch scrub=%08X generated=%08X; disabled",
@@ -1236,16 +1238,16 @@ namespace fonthook
 		WriteRelCall(kIsSaveFileNameGeneratedCallSite,
 			&IsSaveFileNameGeneratedWithDisplayName);
 
-		const bool scrubFileNameInstalled = scrubFileNameHook.IsInstalled();
+		const bool scrubFileNameInstalled = scrubFileNameCallSite.IsInstalled();
 		const bool generatedFileNameInstalled =
-			generatedFileNameHook.IsInstalled();
+			generatedFileNameCallSite.IsInstalled();
 		if (!scrubFileNameInstalled || !generatedFileNameInstalled)
 		{
 			SIZE_T observedScrubTarget = 0;
 			SIZE_T observedGeneratedTarget = 0;
-			const bool scrubRestored = scrubFileNameHook.RollbackOwned(
+			const bool scrubRestored = scrubFileNameCallSite.RollbackOwned(
 				scrubFileNameTarget, &observedScrubTarget);
-			const bool generatedRestored = generatedFileNameHook.RollbackOwned(
+			const bool generatedRestored = generatedFileNameCallSite.RollbackOwned(
 				generatedFileNameTarget, &observedGeneratedTarget);
 			if (generatedRestored)
 				s_nextIsSaveFileNameGenerated = 0;

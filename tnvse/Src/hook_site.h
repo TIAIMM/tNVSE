@@ -21,209 +21,220 @@
 namespace fonthook::hook_site
 {
 	template <class Target>
-	SIZE_T FunctionAddress(Target target)
+	SIZE_T FunctionAddress(Target functionPointer)
 	{
 		static_assert(std::is_pointer_v<Target>
 			|| std::is_member_function_pointer_v<Target>,
 			"a hook target must be a function or member-function pointer");
-		static_assert(sizeof(target) == sizeof(SIZE_T),
+		static_assert(sizeof(functionPointer) == sizeof(SIZE_T),
 			"Fallout New Vegas hooks require an x86 single-address target");
-		SIZE_T address = 0;
-		std::memcpy(&address, &target, sizeof(address));
-		return address;
+		SIZE_T functionAddress = 0;
+		std::memcpy(&functionAddress, &functionPointer,
+			sizeof(functionAddress));
+		return functionAddress;
 	}
 
-	struct RelCallHook
+	struct RelCallSite
 	{
-		const char* name = nullptr;
-		SIZE_T address = 0;
+		const char* description = nullptr;
+		SIZE_T callAddress = 0;
 		SIZE_T expectedTarget = 0;
-		SIZE_T hookTarget = 0;
-		SIZE_T predecessor = 0;
+		SIZE_T replacementTarget = 0;
+		SIZE_T predecessorTarget = 0;
 
-		RelCallHook() = default;
-		RelCallHook(const char* siteName, SIZE_T callAddress,
-			SIZE_T vanillaTarget, SIZE_T target)
-			: name(siteName), address(callAddress),
-			expectedTarget(vanillaTarget), hookTarget(target)
+		RelCallSite() = default;
+		RelCallSite(const char* siteName, SIZE_T addressOfCall,
+			SIZE_T vanillaTarget, SIZE_T replacement)
+			: description(siteName), callAddress(addressOfCall),
+			expectedTarget(vanillaTarget), replacementTarget(replacement)
 		{}
 
 		template <class Target>
-		RelCallHook(const char* siteName, SIZE_T callAddress,
-			SIZE_T vanillaTarget, Target target)
-			: name(siteName), address(callAddress),
-			expectedTarget(vanillaTarget), hookTarget(FunctionAddress(target))
+		RelCallSite(const char* siteName, SIZE_T addressOfCall,
+			SIZE_T vanillaTarget, Target replacement)
+			: description(siteName), callAddress(addressOfCall),
+			expectedTarget(vanillaTarget),
+			replacementTarget(FunctionAddress(replacement))
 		{}
 
-		bool ReadTarget(SIZE_T& target) const
+		bool ReadTarget(SIZE_T& outTarget) const
 		{
-			return hook_identity::ReadRel32Target(address,
-				hook_identity::Rel32Opcode::Call, target);
+			return hook_identity::ReadRel32Target(callAddress,
+				hook_identity::Rel32Opcode::Call, outTarget);
 		}
 
 		bool IsExpected() const
 		{
-			SIZE_T target = 0;
-			return expectedTarget && ReadTarget(target)
-				&& target == expectedTarget;
+			SIZE_T observedTarget = 0;
+			return expectedTarget && ReadTarget(observedTarget)
+				&& observedTarget == expectedTarget;
 		}
 
 		bool IsInstalled() const
 		{
-			SIZE_T target = 0;
-			return hookTarget && ReadTarget(target) && target == hookTarget;
+			SIZE_T observedTarget = 0;
+			return replacementTarget && ReadTarget(observedTarget)
+				&& observedTarget == replacementTarget;
 		}
 
 		bool IsInstalledUnchecked() const
 		{
-			return hook_identity::MatchesRel32TargetUnchecked(address,
-				hook_identity::Rel32Opcode::Call, hookTarget);
+			return hook_identity::MatchesRel32TargetUnchecked(callAddress,
+				hook_identity::Rel32Opcode::Call, replacementTarget);
 		}
 
 		// itr-nvse-style compare-before-restore: never overwrite a successor
 		// which may already retain this hook as its predecessor.
-		bool RollbackOwned(SIZE_T restoreTarget = 0, SIZE_T* observed = nullptr)
+		bool RollbackOwned(SIZE_T restoreTarget = 0,
+			SIZE_T* observedTarget = nullptr)
 		{
-			SIZE_T current = 0;
-			if (!ReadTarget(current))
+			SIZE_T currentTarget = 0;
+			if (!ReadTarget(currentTarget))
 				return false;
-			if (observed)
-				*observed = current;
+			if (observedTarget)
+				*observedTarget = currentTarget;
 
-			const SIZE_T restore = restoreTarget ? restoreTarget
-				: (predecessor ? predecessor : expectedTarget);
-			if (!restore || restore == hookTarget)
+			const SIZE_T restorationTarget = restoreTarget ? restoreTarget
+				: (predecessorTarget ? predecessorTarget : expectedTarget);
+			if (!restorationTarget || restorationTarget == replacementTarget)
 				return false;
-			if (current == hookTarget)
+			if (currentTarget == replacementTarget)
 			{
-				if (!::ReplaceCall(address, restore) || !ReadTarget(current))
+				if (!::ReplaceCall(callAddress, restorationTarget)
+					|| !ReadTarget(currentTarget))
 					return false;
-				if (observed)
-					*observed = current;
+				if (observedTarget)
+					*observedTarget = currentTarget;
 			}
-			return current == restore;
+			return currentTarget == restorationTarget;
 		}
 	};
 
-	struct VTableHook
+	struct VTableSlotSite
 	{
-		const char* name = nullptr;
-		SIZE_T entry = 0;
+		const char* description = nullptr;
+		SIZE_T slotAddress = 0;
 		SIZE_T expectedTarget = 0;
-		SIZE_T hookTarget = 0;
-		SIZE_T predecessor = 0;
+		SIZE_T replacementTarget = 0;
+		SIZE_T predecessorTarget = 0;
 
-		VTableHook() = default;
-		VTableHook(const char* siteName, SIZE_T slotAddress,
-			SIZE_T vanillaTarget, SIZE_T target)
-			: name(siteName), entry(slotAddress),
-			expectedTarget(vanillaTarget), hookTarget(target)
+		VTableSlotSite() = default;
+		VTableSlotSite(const char* siteName, SIZE_T addressOfSlot,
+			SIZE_T vanillaTarget, SIZE_T replacement)
+			: description(siteName), slotAddress(addressOfSlot),
+			expectedTarget(vanillaTarget), replacementTarget(replacement)
 		{}
 
 		template <class Target>
-		VTableHook(const char* siteName, SIZE_T slotAddress,
-			SIZE_T vanillaTarget, Target target)
-			: name(siteName), entry(slotAddress),
-			expectedTarget(vanillaTarget), hookTarget(FunctionAddress(target))
+		VTableSlotSite(const char* siteName, SIZE_T addressOfSlot,
+			SIZE_T vanillaTarget, Target replacement)
+			: description(siteName), slotAddress(addressOfSlot),
+			expectedTarget(vanillaTarget),
+			replacementTarget(FunctionAddress(replacement))
 		{}
 
-		bool ReadTarget(SIZE_T& target) const
+		bool ReadTarget(SIZE_T& outTarget) const
 		{
-			target = 0;
+			outTarget = 0;
 			if (!hook_identity::IsAccessibleRegion(
-					entry, sizeof(SIZE_T), false))
+					slotAddress, sizeof(SIZE_T), false))
 			{
 				return false;
 			}
-			target = *reinterpret_cast<const SIZE_T*>(entry);
+			outTarget = *reinterpret_cast<const SIZE_T*>(slotAddress);
 			return true;
 		}
 
 		bool IsExpected() const
 		{
-			SIZE_T target = 0;
-			return expectedTarget && ReadTarget(target)
-				&& target == expectedTarget;
+			SIZE_T observedTarget = 0;
+			return expectedTarget && ReadTarget(observedTarget)
+				&& observedTarget == expectedTarget;
 		}
 
 		bool IsInstalled() const
 		{
-			SIZE_T target = 0;
-			return hookTarget && ReadTarget(target) && target == hookTarget;
+			SIZE_T observedTarget = 0;
+			return replacementTarget && ReadTarget(observedTarget)
+				&& observedTarget == replacementTarget;
 		}
 
-		bool RollbackOwned(SIZE_T restoreTarget = 0, SIZE_T* observed = nullptr)
+		bool RollbackOwned(SIZE_T restoreTarget = 0,
+			SIZE_T* observedTarget = nullptr)
 		{
-			SIZE_T current = 0;
-			if (!ReadTarget(current))
+			SIZE_T currentTarget = 0;
+			if (!ReadTarget(currentTarget))
 				return false;
-			if (observed)
-				*observed = current;
-			const SIZE_T restore = restoreTarget ? restoreTarget
-				: (predecessor ? predecessor : expectedTarget);
-			if (!restore || restore == hookTarget)
+			if (observedTarget)
+				*observedTarget = currentTarget;
+			const SIZE_T restorationTarget = restoreTarget ? restoreTarget
+				: (predecessorTarget ? predecessorTarget : expectedTarget);
+			if (!restorationTarget || restorationTarget == replacementTarget)
 				return false;
-			if (current == hookTarget)
+			if (currentTarget == replacementTarget)
 			{
-				if (!::SafeWrite32(entry, restore) || !ReadTarget(current))
+				if (!::SafeWrite32(slotAddress, restorationTarget)
+					|| !ReadTarget(currentTarget))
 					return false;
-				if (observed)
-					*observed = current;
+				if (observedTarget)
+					*observedTarget = currentTarget;
 			}
-			return current == restore;
+			return currentTarget == restorationTarget;
 		}
 	};
 
-	struct EntryJumpHook
+	struct EntryJumpSite
 	{
-		const char* name = nullptr;
-		SIZE_T address = 0;
-		const UInt8* original = nullptr;
+		const char* description = nullptr;
+		SIZE_T entryAddress = 0;
+		const UInt8* originalBytes = nullptr;
 		SIZE_T originalLength = 0;
 		SIZE_T patchLength = 0;
-		SIZE_T hookTarget = 0;
+		SIZE_T replacementTarget = 0;
 
-		EntryJumpHook() = default;
+		EntryJumpSite() = default;
 
 		template <class Target, size_t N>
-		EntryJumpHook(const char* siteName, SIZE_T entryAddress,
-			const std::array<UInt8, N>& originalBytes, Target target)
-			: name(siteName), address(entryAddress), original(originalBytes.data()),
-			originalLength(N), patchLength(N), hookTarget(FunctionAddress(target))
+		EntryJumpSite(const char* siteName, SIZE_T addressOfEntry,
+			const std::array<UInt8, N>& expectedBytes, Target replacement)
+			: description(siteName), entryAddress(addressOfEntry),
+			originalBytes(expectedBytes.data()), originalLength(N), patchLength(N),
+			replacementTarget(FunctionAddress(replacement))
 		{}
 
 		template <class Target, size_t N>
-		EntryJumpHook(const char* siteName, SIZE_T entryAddress,
-			const std::array<UInt8, N>& originalBytes,
-			SIZE_T bytesToReplace, Target target)
-			: name(siteName), address(entryAddress), original(originalBytes.data()),
-			originalLength(N), patchLength(bytesToReplace),
-			hookTarget(FunctionAddress(target))
+		EntryJumpSite(const char* siteName, SIZE_T addressOfEntry,
+			const std::array<UInt8, N>& expectedBytes,
+			SIZE_T bytesToReplace, Target replacement)
+			: description(siteName), entryAddress(addressOfEntry),
+			originalBytes(expectedBytes.data()), originalLength(N),
+			patchLength(bytesToReplace),
+			replacementTarget(FunctionAddress(replacement))
 		{}
 
-		bool HasOriginal() const
+		bool MatchesOriginalBytes() const
 		{
 			return hook_identity::IsAccessibleRegion(
-					address, originalLength, true)
-				&& original && originalLength >= 5 && patchLength >= 5
+					entryAddress, originalLength, true)
+				&& originalBytes && originalLength >= 5 && patchLength >= 5
 				&& patchLength <= originalLength
-				&& std::memcmp(reinterpret_cast<const void*>(address),
-					original, originalLength) == 0;
+				&& std::memcmp(reinterpret_cast<const void*>(entryAddress),
+					originalBytes, originalLength) == 0;
 		}
 
-		bool OwnsHead() const
+		bool OwnsJumpHead() const
 		{
-			return hook_identity::MatchesRel32Target(address,
-				hook_identity::Rel32Opcode::Jump, hookTarget);
+			return hook_identity::MatchesRel32Target(entryAddress,
+				hook_identity::Rel32Opcode::Jump, replacementTarget);
 		}
 
 		bool IsInstalled() const
 		{
-			if (!OwnsHead())
+			if (!OwnsJumpHead())
 				return false;
 			for (SIZE_T offset = 5; offset < patchLength; ++offset)
 			{
-				if (*reinterpret_cast<const UInt8*>(address + offset) != 0x90)
+				if (*reinterpret_cast<const UInt8*>(entryAddress + offset) != 0x90)
 					return false;
 			}
 			return true;
@@ -231,14 +242,14 @@ namespace fonthook::hook_site
 
 		bool IsInstalledUnchecked() const
 		{
-			if (!hook_identity::MatchesRel32TargetUnchecked(address,
-					hook_identity::Rel32Opcode::Jump, hookTarget))
+			if (!hook_identity::MatchesRel32TargetUnchecked(entryAddress,
+					hook_identity::Rel32Opcode::Jump, replacementTarget))
 			{
 				return false;
 			}
 			for (SIZE_T offset = 5; offset < patchLength; ++offset)
 			{
-				if (*reinterpret_cast<const UInt8*>(address + offset) != 0x90)
+				if (*reinterpret_cast<const UInt8*>(entryAddress + offset) != 0x90)
 					return false;
 			}
 			return true;
@@ -246,134 +257,140 @@ namespace fonthook::hook_site
 
 		bool RollbackOwned()
 		{
-			if (OwnsHead()
-				&& !::SafeWriteBuf(address, original, originalLength))
+			if (OwnsJumpHead()
+				&& !::SafeWriteBuf(
+					entryAddress, originalBytes, originalLength))
 				return false;
-			return HasOriginal();
+			return MatchesOriginalBytes();
 		}
 	};
 
-	struct InstructionCallHook
+	struct InstructionCallSite
 	{
-		const char* name = nullptr;
-		SIZE_T address = 0;
-		const UInt8* original = nullptr;
+		const char* description = nullptr;
+		SIZE_T instructionAddress = 0;
+		const UInt8* originalBytes = nullptr;
 		SIZE_T originalLength = 0;
-		SIZE_T hookTarget = 0;
+		SIZE_T replacementTarget = 0;
 
-		InstructionCallHook() = default;
+		InstructionCallSite() = default;
 
 		template <class Target, size_t N>
-		InstructionCallHook(const char* siteName, SIZE_T instructionAddress,
-			const std::array<UInt8, N>& originalBytes, Target target)
-			: name(siteName), address(instructionAddress),
-			original(originalBytes.data()), originalLength(N),
-			hookTarget(FunctionAddress(target))
+		InstructionCallSite(const char* siteName, SIZE_T addressOfInstruction,
+			const std::array<UInt8, N>& expectedBytes, Target replacement)
+			: description(siteName), instructionAddress(addressOfInstruction),
+			originalBytes(expectedBytes.data()), originalLength(N),
+			replacementTarget(FunctionAddress(replacement))
 		{}
 
-		bool HasOriginal() const
+		bool MatchesOriginalBytes() const
 		{
-			return original && originalLength >= 5
-				&& hook_identity::IsAccessibleRegion(address, originalLength, true)
-				&& std::memcmp(reinterpret_cast<const void*>(address),
-					original, originalLength) == 0;
+			return originalBytes && originalLength >= 5
+				&& hook_identity::IsAccessibleRegion(
+					instructionAddress, originalLength, true)
+				&& std::memcmp(reinterpret_cast<const void*>(instructionAddress),
+					originalBytes, originalLength) == 0;
 		}
 
 		bool IsInstalled() const
 		{
-			return hook_identity::MatchesRel32Target(address,
-				hook_identity::Rel32Opcode::Call, hookTarget);
+			return hook_identity::MatchesRel32Target(instructionAddress,
+				hook_identity::Rel32Opcode::Call, replacementTarget);
 		}
 
 		bool IsInstalledUnchecked() const
 		{
-			return hook_identity::MatchesRel32TargetUnchecked(address,
-				hook_identity::Rel32Opcode::Call, hookTarget);
+			return hook_identity::MatchesRel32TargetUnchecked(
+				instructionAddress, hook_identity::Rel32Opcode::Call,
+				replacementTarget);
 		}
 
 		bool RollbackOwned()
 		{
 			if (IsInstalled()
-				&& !::SafeWriteBuf(address, original, originalLength))
+				&& !::SafeWriteBuf(
+					instructionAddress, originalBytes, originalLength))
 			{
 				return false;
 			}
-			return HasOriginal();
+			return MatchesOriginalBytes();
 		}
 	};
 
-	struct BytePatch
+	struct BytePatchSite
 	{
-		const char* name = nullptr;
-		SIZE_T address = 0;
-		const UInt8* original = nullptr;
-		const UInt8* replacement = nullptr;
+		const char* description = nullptr;
+		SIZE_T patchAddress = 0;
+		const UInt8* originalBytes = nullptr;
+		const UInt8* replacementBytes = nullptr;
 		SIZE_T length = 0;
 
 		template <size_t N>
-		BytePatch(const char* siteName, SIZE_T patchAddress,
-			const std::array<UInt8, N>& originalBytes,
-			const std::array<UInt8, N>& replacementBytes)
-			: name(siteName), address(patchAddress),
-			original(originalBytes.data()), replacement(replacementBytes.data()),
+		BytePatchSite(const char* siteName, SIZE_T addressOfPatch,
+			const std::array<UInt8, N>& expectedBytes,
+			const std::array<UInt8, N>& patchedBytes)
+			: description(siteName), patchAddress(addressOfPatch),
+			originalBytes(expectedBytes.data()),
+			replacementBytes(patchedBytes.data()),
 			length(N)
 		{}
 
-		bool HasOriginal() const
+		bool MatchesOriginalBytes() const
 		{
-			return hook_identity::IsAccessibleRegion(address, length, true)
-				&& std::memcmp(reinterpret_cast<const void*>(address),
-					original, length) == 0;
+			return hook_identity::IsAccessibleRegion(patchAddress, length, true)
+				&& std::memcmp(reinterpret_cast<const void*>(patchAddress),
+					originalBytes, length) == 0;
 		}
 
 		bool IsInstalled() const
 		{
-			return hook_identity::IsAccessibleRegion(address, length, true)
-				&& std::memcmp(reinterpret_cast<const void*>(address),
-					replacement, length) == 0;
+			return hook_identity::IsAccessibleRegion(patchAddress, length, true)
+				&& std::memcmp(reinterpret_cast<const void*>(patchAddress),
+					replacementBytes, length) == 0;
 		}
 
 		bool RollbackOwned()
 		{
-			if (IsInstalled() && !::SafeWriteBuf(address, original, length))
+			if (IsInstalled()
+				&& !::SafeWriteBuf(patchAddress, originalBytes, length))
 				return false;
-			return HasOriginal();
+			return MatchesOriginalBytes();
 		}
 	};
 
-	struct WindowProcHook
+	struct WindowProcSite
 	{
-		const char* name = nullptr;
-		WNDPROC hookTarget = nullptr;
-		HWND window = nullptr;
-		WNDPROC predecessor = nullptr;
+		const char* description = nullptr;
+		WNDPROC replacementProc = nullptr;
+		HWND windowHandle = nullptr;
+		WNDPROC predecessorProc = nullptr;
 
-		WindowProcHook(const char* siteName, WNDPROC target)
-			: name(siteName), hookTarget(target)
+		WindowProcSite(const char* siteName, WNDPROC replacement)
+			: description(siteName), replacementProc(replacement)
 		{}
 
-		bool RollbackOwned(WNDPROC* observed = nullptr)
+		bool RollbackOwned(WNDPROC* observedProc = nullptr)
 		{
-			if (!window || !predecessor)
+			if (!windowHandle || !predecessorProc)
 				return false;
-			WNDPROC current = reinterpret_cast<WNDPROC>(
-				GetWindowLongPtrA(window, GWLP_WNDPROC));
-			if (observed)
-				*observed = current;
-			if (current != hookTarget)
-				return current == predecessor;
+			WNDPROC currentProc = reinterpret_cast<WNDPROC>(
+				GetWindowLongPtrA(windowHandle, GWLP_WNDPROC));
+			if (observedProc)
+				*observedProc = currentProc;
+			if (currentProc != replacementProc)
+				return currentProc == predecessorProc;
 
 			LONG_PTR displaced = 0;
-			if (!::SafeSetWindowLongPtrA(window, GWLP_WNDPROC,
-				reinterpret_cast<LONG_PTR>(predecessor), &displaced))
+			if (!::SafeSetWindowLongPtrA(windowHandle, GWLP_WNDPROC,
+				reinterpret_cast<LONG_PTR>(predecessorProc), &displaced))
 			{
 				return false;
 			}
-			current = reinterpret_cast<WNDPROC>(
-				GetWindowLongPtrA(window, GWLP_WNDPROC));
-			if (observed)
-				*observed = current;
-			return current == predecessor;
+			currentProc = reinterpret_cast<WNDPROC>(
+				GetWindowLongPtrA(windowHandle, GWLP_WNDPROC));
+			if (observedProc)
+				*observedProc = currentProc;
+			return currentProc == predecessorProc;
 		}
 	};
 }

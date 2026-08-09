@@ -567,10 +567,10 @@ namespace fonthook::vectorfont
 					!= FALSE;
 		}
 
-		bool SameRect(const RECT& left, const RECT& right)
+		bool SameRect(const RECT& lhs, const RECT& rhs)
 		{
-			return left.left == right.left && left.top == right.top
-				&& left.right == right.right && left.bottom == right.bottom;
+			return lhs.left == rhs.left && lhs.top == rhs.top
+				&& lhs.right == rhs.right && lhs.bottom == rhs.bottom;
 		}
 
 		UInt32 FloatBits(float value)

@@ -134,7 +134,7 @@ namespace fonthook::vectorfont
 	struct RuntimeFace
 	{
 		std::shared_ptr<MappedFontFile> file;
-		FT_Face face = nullptr;
+		FT_Face ftFace = nullptr;
 		bool configured = false;
 		bool configuredRaster = false;
 		FT_UInt configuredWidth = 0;
@@ -149,7 +149,7 @@ namespace fonthook::vectorfont
 		RuntimeFace(const RuntimeFace&) = delete;
 		RuntimeFace& operator=(const RuntimeFace&) = delete;
 		RuntimeFace(RuntimeFace&& other) noexcept
-			: file(std::move(other.file)), face(other.face),
+			: file(std::move(other.file)), ftFace(other.ftFace),
 			configured(other.configured), configuredRaster(other.configuredRaster),
 			configuredWidth(other.configuredWidth), configuredHeight(other.configuredHeight),
 			sourceConfigIndex(other.sourceConfigIndex),
@@ -158,16 +158,16 @@ namespace fonthook::vectorfont
 			directLayoutMetrics(std::move(other.directLayoutMetrics)),
 			directLayoutMetricMemory(std::move(other.directLayoutMetricMemory))
 		{
-			other.face = nullptr;
+			other.ftFace = nullptr;
 		}
 		RuntimeFace& operator=(RuntimeFace&& other) noexcept
 		{
 			if (this != &other)
 			{
-				if (face)
-					FT_Done_Face(face);
+				if (ftFace)
+					FT_Done_Face(ftFace);
 				file = std::move(other.file);
-				face = other.face;
+				ftFace = other.ftFace;
 				configured = other.configured;
 				configuredRaster = other.configuredRaster;
 				configuredWidth = other.configuredWidth;
@@ -177,14 +177,14 @@ namespace fonthook::vectorfont
 				visualCenterCorrection = other.visualCenterCorrection;
 				directLayoutMetrics = std::move(other.directLayoutMetrics);
 				directLayoutMetricMemory = std::move(other.directLayoutMetricMemory);
-				other.face = nullptr;
+				other.ftFace = nullptr;
 			}
 			return *this;
 		}
 		~RuntimeFace()
 		{
-			if (face)
-				FT_Done_Face(face);
+			if (ftFace)
+				FT_Done_Face(ftFace);
 		}
 	};
 

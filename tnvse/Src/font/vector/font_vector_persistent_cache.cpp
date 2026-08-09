@@ -651,7 +651,7 @@ namespace fonthook::vectorfont
 				if (!usedFaces[roleIndex][faceIndex])
 					continue;
 				RuntimeFace& face = role.faces[faceIndex];
-				if (!face.file || !face.face)
+				if (!face.file || !face.ftFace)
 					return false;
 				for (GlyphMaskType mask : masks)
 				{
@@ -666,7 +666,7 @@ namespace fonthook::vectorfont
 					}
 					const PersistentBitmapProfileKey key = {
 						face.file->contentHash,
-						static_cast<SInt32>(face.face->face_index),
+						static_cast<SInt32>(face.ftFace->face_index),
 						GetFreeTypeTextCodePage(),
 						effectiveWidth,
 						effectiveHeight,
@@ -680,7 +680,7 @@ namespace fonthook::vectorfont
 					PersistentBitmapProfile* profile =
 						GetPersistentBitmapProfile(key, face.file->path,
 							config.fontId, static_cast<UInt32>(
-								std::max<FT_Long>(1, face.face->num_glyphs)));
+								std::max<FT_Long>(1, face.ftFace->num_glyphs)));
 					if (!profile || !profile->initialized
 						|| !profile->recordCount || profile->path.empty())
 					{

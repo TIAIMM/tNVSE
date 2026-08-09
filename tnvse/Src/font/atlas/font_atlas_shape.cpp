@@ -1745,9 +1745,9 @@ namespace fonthook::vectorfont
 		}
 
 		VectorFontByteClass GetDirectGlyphByteClass(
-			const AtlasGlyphInstance& glyph)
+			const AtlasGlyphInstance& instance)
 		{
-			return glyph.glyph.byteClass;
+			return instance.glyph.byteClass;
 		}
 
 		VectorFontByteClass GetDirectGlyphByteClass(
@@ -1758,9 +1758,9 @@ namespace fonthook::vectorfont
 
 		float GetDirectGlyphBaselineOffset(RuntimeFont& runtime,
 			const DirectAtlasGlyphBatch&,
-			const AtlasGlyphInstance& glyph)
+			const AtlasGlyphInstance& instance)
 		{
-			return GetGlyphBaselineOffset(runtime, glyph.glyph);
+			return GetGlyphBaselineOffset(runtime, instance.glyph);
 		}
 
 		float GetDirectGlyphBaselineOffset(RuntimeFont&,

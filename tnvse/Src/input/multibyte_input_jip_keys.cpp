@@ -187,13 +187,13 @@ namespace fonthook::multibyte_input
 			return false;
 		const SIZE_T callSite =
 			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
-		hook_site::InstructionCallHook hook{
+		hook_site::InstructionCallSite rawKeyStateCallSite{
 			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
 			kJipRawKeyStateOriginalInstruction,
 			&JipRawKeyStateCompareHook
 		};
-		return hook.IsInstalled();
+		return rawKeyStateCallSite.IsInstalled();
 	}
 
 	void TryInstallJipKeyEventSuppressionHook()
@@ -230,7 +230,7 @@ namespace fonthook::multibyte_input
 
 		const SIZE_T callSite =
 			reinterpret_cast<SIZE_T>(hJIP) + kJipRawKeyStateCompareRva;
-		hook_site::InstructionCallHook hook{
+		hook_site::InstructionCallSite rawKeyStateCallSite{
 			"JIP LN 57.30 raw key-state compare -> CALL (__declspec(naked))",
 			callSite,
 			kJipRawKeyStateOriginalInstruction,
@@ -238,14 +238,14 @@ namespace fonthook::multibyte_input
 		};
 		// JIP LN raw key-state compare instruction -> naked CALL adapter.
 		WriteRelCall(callSite, &JipRawKeyStateCompareHook);
-		if (!hook.IsInstalled())
+		if (!rawKeyStateCallSite.IsInstalled())
 		{
 			SIZE_T observedTarget = 0;
 			const bool observedCall = hook_identity::ReadRel32Target(
 				callSite, hook_identity::Rel32Opcode::Call, observedTarget);
 			// Restore only while this CALL is still ours. A later owner may
 			// already have captured the adapter as its predecessor.
-			const bool restored = hook.RollbackOwned();
+			const bool restored = rawKeyStateCallSite.RollbackOwned();
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input: JIP key-event suppression write verification failed observedCall=%u target=0x%08X rollback=%s",
 				observedCall ? 1u : 0u,

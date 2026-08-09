@@ -62,24 +62,25 @@ NiNode* NiNode::FindObjectByName(const NiFixedString& akName) {
 }
 
 std::vector<NiNode*> NiNode::FindObjectsByName(const NiFixedString& akName) {
-    std::vector<NiNode*> res{};
-    if (m_kName.m_kHandle && m_kName == akName) {
-        res.push_back(this);
-    }
+	std::vector<NiNode*> matches{};
+	if (m_kName.m_kHandle && m_kName == akName) {
+		matches.push_back(this);
+	}
 
-    if (!GetArrayCount()) {
-        return res;
-    }
+	if (!GetArrayCount()) {
+		return matches;
+	}
 
     for (UInt32 i = 0; i < GetArrayCount(); i++) {
-        NiAVObject* pkChild = GetAt(i);
-        if (pkChild && IS_NODE(pkChild)) {
-            auto curRes = pkChild->NiDynamicCast<NiNode>()->FindObjectsByName(akName);
-            res.insert(res.end(), curRes.begin(), curRes.end());
-        }
-    }
+		NiAVObject* pkChild = GetAt(i);
+		if (pkChild && IS_NODE(pkChild)) {
+			auto childMatches =
+				pkChild->NiDynamicCast<NiNode>()->FindObjectsByName(akName);
+			matches.insert(matches.end(), childMatches.begin(), childMatches.end());
+		}
+	}
 
-    return res;
+	return matches;
 }
 
 // 0xA5E3A0

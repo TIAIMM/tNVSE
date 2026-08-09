@@ -147,9 +147,9 @@ namespace fonthook
 		// the 18 virtual entries used by Menu.
 		std::array<SIZE_T, kMenuVTableEntryCount + 1>
 			s_imeMenuVtable = {};
-		CreateMenuByClassFn s_originalCreateMenuByClass = nullptr;
-		RenderedMenuDrawFn s_originalPipboyDraw = nullptr;
-		LoadingMenuUpdateFn s_originalLoadingMenuUpdate = nullptr;
+		CreateMenuByClassFn s_predecessorCreateMenuByClass = nullptr;
+		RenderedMenuDrawFn s_predecessorPipboyDraw = nullptr;
+		LoadingMenuUpdateFn s_predecessorLoadingMenuUpdate = nullptr;
 		bool s_imeMenuFactoryInstalled = false;
 		bool s_imeMenuFactoryInstallFailed = false;
 		bool s_pipboyDrawHookInstalled = false;
@@ -173,8 +173,8 @@ namespace fonthook
 
 		void __fastcall LoadingMenuUpdateHook(void* loadingMenu, void*)
 		{
-			if (s_originalLoadingMenuUpdate)
-				s_originalLoadingMenuUpdate(loadingMenu);
+			if (s_predecessorLoadingMenuUpdate)
+				s_predecessorLoadingMenuUpdate(loadingMenu);
 			ConsumeNativePrewarmOverlayCommand();
 		}
 
@@ -184,17 +184,17 @@ namespace fonthook
 				return false;
 
 			SIZE_T currentTarget = 0;
-			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 				&LoadingMenuUpdateHook);
-			const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-				s_originalLoadingMenuUpdate);
+			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+				s_predecessorLoadingMenuUpdate);
 			return hook_identity::ReadRel32Target(
 					kLoadingMenuThreadUpdateCallSite,
 					hook_identity::Rel32Opcode::Call,
 					currentTarget)
-				&& currentTarget == hookTarget
-				&& predecessor != hookTarget
-				&& hook_identity::IsExecutableTarget(predecessor);
+				&& currentTarget == adapterTarget
+				&& predecessorTarget != adapterTarget
+				&& hook_identity::IsExecutableTarget(predecessorTarget);
 		}
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
@@ -229,8 +229,8 @@ namespace fonthook
 		{
 			if (menuClass == kImeMenuClass && s_creatingImeMenu)
 				return CreateImeMenu();
-			return s_originalCreateMenuByClass
-				? s_originalCreateMenuByClass(factory, menuClass)
+			return s_predecessorCreateMenuByClass
+				? s_predecessorCreateMenuByClass(factory, menuClass)
 				: nullptr;
 		}
 
@@ -261,9 +261,9 @@ namespace fonthook
 				}
 			}
 
-			if (s_originalPipboyDraw)
+			if (s_predecessorPipboyDraw)
 			{
-				s_originalPipboyDraw(renderedMenu, currentTexture,
+				s_predecessorPipboyDraw(renderedMenu, currentTexture,
 					clearMode, alternateTexture);
 			}
 
@@ -298,23 +298,23 @@ namespace fonthook
 				const SIZE_T currentTarget =
 					*reinterpret_cast<const SIZE_T*>(
 						kFOPipboyManagerDrawVTableEntry);
-				const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+				const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 					&PipboyRenderedMenuDrawHook);
-				const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-					s_originalPipboyDraw);
-				if (currentTarget == hookTarget
-					&& predecessor != hookTarget
-					&& hook_identity::IsExecutableTarget(predecessor))
+				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+					s_predecessorPipboyDraw);
+				if (currentTarget == adapterTarget
+					&& predecessorTarget != adapterTarget
+					&& hook_identity::IsExecutableTarget(predecessorTarget))
 				{
 					return true;
 				}
-				if (currentTarget == predecessor
+				if (currentTarget == predecessorTarget
 					&& hook_identity::IsExecutableTarget(currentTarget))
 				{
 					// A clean restoration to our predecessor cannot retain a chain
 					// through this hook. It is safe to publish it again below.
 					s_pipboyDrawHookInstalled = false;
-					s_originalPipboyDraw = nullptr;
+					s_predecessorPipboyDraw = nullptr;
 				}
 				else
 				{
@@ -323,10 +323,10 @@ namespace fonthook
 					s_pipboyDrawHookInstalled = false;
 					s_pipboyDrawHookInstallFailed = true;
 					gLog.FormattedMessage(
-						"tnvse_native_overlay: Pip-Boy RTT exclusion capability revoked; observed handler=0x%08X hook=0x%08X predecessor=0x%08X",
+						"tnvse_native_overlay: Pip-Boy RTT exclusion capability revoked; observed handler=0x%08X adapter=0x%08X predecessor=0x%08X",
 						static_cast<UInt32>(currentTarget),
-						static_cast<UInt32>(hookTarget),
-						static_cast<UInt32>(predecessor));
+						static_cast<UInt32>(adapterTarget),
+						static_cast<UInt32>(predecessorTarget));
 					return false;
 				}
 			}
@@ -349,16 +349,17 @@ namespace fonthook
 			if (currentTarget == reinterpret_cast<SIZE_T>(
 					&PipboyRenderedMenuDrawHook))
 			{
-				const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-					s_originalPipboyDraw);
-				s_pipboyDrawHookInstalled = predecessor != currentTarget
-					&& hook_identity::IsExecutableTarget(predecessor);
+				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+					s_predecessorPipboyDraw);
+				s_pipboyDrawHookInstalled =
+					predecessorTarget != currentTarget
+					&& hook_identity::IsExecutableTarget(predecessorTarget);
 				if (!s_pipboyDrawHookInstalled)
 				{
 					s_pipboyDrawHookInstallFailed = true;
 					gLog.FormattedMessage(
 						"tnvse_native_overlay: Pip-Boy RTT exclusion hook is present but its predecessor is unavailable predecessor=0x%08X",
-						static_cast<UInt32>(predecessor));
+						static_cast<UInt32>(predecessorTarget));
 				}
 				return s_pipboyDrawHookInstalled;
 			}
@@ -372,9 +373,9 @@ namespace fonthook
 				return false;
 			}
 
-			s_originalPipboyDraw =
+			s_predecessorPipboyDraw =
 				reinterpret_cast<RenderedMenuDrawFn>(currentTarget);
-			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 				&PipboyRenderedMenuDrawHook);
 			// FOPipboyManager::Draw vtable slot
 			// (__thiscall target via __fastcall shim).
@@ -383,7 +384,7 @@ namespace fonthook
 			const SIZE_T observedTarget =
 				*reinterpret_cast<const SIZE_T*>(
 					kFOPipboyManagerDrawVTableEntry);
-			if (observedTarget == hookTarget)
+			if (observedTarget == adapterTarget)
 			{
 				s_pipboyDrawHookInstalled = true;
 				gLog.FormattedMessage(
@@ -395,7 +396,7 @@ namespace fonthook
 
 			if (observedTarget == currentTarget)
 			{
-				s_originalPipboyDraw = nullptr;
+				s_predecessorPipboyDraw = nullptr;
 				s_pipboyDrawHookInstallFailed = true;
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: Pip-Boy FORenderedMenu::Draw hook write did not publish entry=0x%08X predecessor=0x%08X",
@@ -433,33 +434,33 @@ namespace fonthook
 					kCreateMenuByClassCallSite,
 					hook_identity::Rel32Opcode::Call,
 					currentTarget);
-				const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+				const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 					&CreateMenuByClassHook);
-				const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-					s_originalCreateMenuByClass);
+				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+					s_predecessorCreateMenuByClass);
 				if (targetReadable
-					&& currentTarget == hookTarget
-					&& predecessor != hookTarget
-					&& hook_identity::IsExecutableTarget(predecessor))
+					&& currentTarget == adapterTarget
+					&& predecessorTarget != adapterTarget
+					&& hook_identity::IsExecutableTarget(predecessorTarget))
 				{
 					return true;
 				}
 				if (targetReadable
-					&& currentTarget == predecessor
+					&& currentTarget == predecessorTarget
 					&& hook_identity::IsExecutableTarget(currentTarget))
 				{
 					s_imeMenuFactoryInstalled = false;
-					s_originalCreateMenuByClass = nullptr;
+					s_predecessorCreateMenuByClass = nullptr;
 				}
 				else
 				{
 					s_imeMenuFactoryInstalled = false;
 					s_imeMenuFactoryInstallFailed = true;
 					gLog.FormattedMessage(
-						"tnvse_native_overlay: IME Menu factory capability revoked; observed target=0x%08X hook=0x%08X predecessor=0x%08X readable=%u",
+						"tnvse_native_overlay: IME Menu factory capability revoked; observed target=0x%08X adapter=0x%08X predecessor=0x%08X readable=%u",
 						static_cast<UInt32>(currentTarget),
-						static_cast<UInt32>(hookTarget),
-						static_cast<UInt32>(predecessor),
+						static_cast<UInt32>(adapterTarget),
+						static_cast<UInt32>(predecessorTarget),
 						targetReadable ? 1u : 0u);
 					return false;
 				}
@@ -483,16 +484,17 @@ namespace fonthook
 			if (currentTarget == reinterpret_cast<SIZE_T>(
 					&CreateMenuByClassHook))
 			{
-				const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-					s_originalCreateMenuByClass);
-				s_imeMenuFactoryInstalled = predecessor != currentTarget
-					&& hook_identity::IsExecutableTarget(predecessor);
+				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+					s_predecessorCreateMenuByClass);
+				s_imeMenuFactoryInstalled =
+					predecessorTarget != currentTarget
+					&& hook_identity::IsExecutableTarget(predecessorTarget);
 				if (!s_imeMenuFactoryInstalled)
 				{
 					s_imeMenuFactoryInstallFailed = true;
 					gLog.FormattedMessage(
 						"tnvse_native_overlay: IME Menu factory hook is present but its predecessor is unavailable predecessor=0x%08X",
-						static_cast<UInt32>(predecessor));
+						static_cast<UInt32>(predecessorTarget));
 				}
 				return s_imeMenuFactoryInstalled;
 			}
@@ -518,19 +520,19 @@ namespace fonthook
 				s_imeMenuVtable.begin() + 1);
 			s_imeMenuVtable[kMenuGetIdVtableIndex + 1] =
 				reinterpret_cast<SIZE_T>(&ImeMenuGetId);
-			s_originalCreateMenuByClass =
+			s_predecessorCreateMenuByClass =
 				reinterpret_cast<CreateMenuByClassFn>(currentTarget);
 			// InterfaceManager menu factory -> CreateMenuByClass
 			// (__thiscall target via __fastcall shim).
 			WriteRelCall(kCreateMenuByClassCallSite, &CreateMenuByClassHook);
-			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 				&CreateMenuByClassHook);
 			SIZE_T observedTarget = 0;
 			const bool observedReadable = hook_identity::ReadRel32Target(
 				kCreateMenuByClassCallSite,
 				hook_identity::Rel32Opcode::Call,
 				observedTarget);
-			if (observedReadable && observedTarget == hookTarget)
+			if (observedReadable && observedTarget == adapterTarget)
 			{
 				s_imeMenuFactoryInstalled = true;
 				gLog.FormattedMessage(
@@ -542,7 +544,7 @@ namespace fonthook
 
 			if (observedReadable && observedTarget == currentTarget)
 			{
-				s_originalCreateMenuByClass = nullptr;
+				s_predecessorCreateMenuByClass = nullptr;
 				s_imeMenuFactoryInstallFailed = true;
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: IME Menu factory hook write did not publish call=0x%08X predecessor=0x%08X",
@@ -1782,23 +1784,23 @@ namespace fonthook
 				kLoadingMenuThreadUpdateCallSite,
 				hook_identity::Rel32Opcode::Call,
 				currentTarget);
-			const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 				&LoadingMenuUpdateHook);
-			const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-				s_originalLoadingMenuUpdate);
+			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+				s_predecessorLoadingMenuUpdate);
 			if (targetReadable
-				&& currentTarget == hookTarget
-				&& predecessor != hookTarget
-				&& hook_identity::IsExecutableTarget(predecessor))
+				&& currentTarget == adapterTarget
+				&& predecessorTarget != adapterTarget
+				&& hook_identity::IsExecutableTarget(predecessorTarget))
 			{
 				return true;
 			}
 			if (targetReadable
-				&& currentTarget == predecessor
+				&& currentTarget == predecessorTarget
 				&& hook_identity::IsExecutableTarget(currentTarget))
 			{
 				s_loadingMenuUpdateHookInstalled = false;
-				s_originalLoadingMenuUpdate = nullptr;
+				s_predecessorLoadingMenuUpdate = nullptr;
 			}
 			else
 			{
@@ -1808,10 +1810,10 @@ namespace fonthook
 				s_prewarmReady.store(false, std::memory_order_release);
 				s_prewarmActive.store(false, std::memory_order_release);
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: LoadingMenuThread prewarm capability revoked; observed target=0x%08X hook=0x%08X predecessor=0x%08X readable=%u",
+					"tnvse_native_overlay: LoadingMenuThread prewarm capability revoked; observed target=0x%08X adapter=0x%08X predecessor=0x%08X readable=%u",
 					static_cast<UInt32>(currentTarget),
-					static_cast<UInt32>(hookTarget),
-					static_cast<UInt32>(predecessor),
+					static_cast<UInt32>(adapterTarget),
+					static_cast<UInt32>(predecessorTarget),
 					targetReadable ? 1u : 0u);
 				return false;
 			}
@@ -1854,34 +1856,35 @@ namespace fonthook
 		if (currentUpdateTarget == reinterpret_cast<SIZE_T>(
 				&LoadingMenuUpdateHook))
 		{
-			const SIZE_T predecessor = reinterpret_cast<SIZE_T>(
-				s_originalLoadingMenuUpdate);
-			s_loadingMenuUpdateHookInstalled = predecessor != currentUpdateTarget
-				&& hook_identity::IsExecutableTarget(predecessor);
+			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
+				s_predecessorLoadingMenuUpdate);
+			s_loadingMenuUpdateHookInstalled =
+				predecessorTarget != currentUpdateTarget
+				&& hook_identity::IsExecutableTarget(predecessorTarget);
 			if (!s_loadingMenuUpdateHookInstalled)
 			{
 				s_loadingMenuUpdateHookInstallFailed = true;
 				s_prewarmConsumerDisabled.store(true, std::memory_order_release);
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: LoadingMenuThread prewarm hook is present but its predecessor is unavailable predecessor=0x%08X",
-					static_cast<UInt32>(predecessor));
+					static_cast<UInt32>(predecessorTarget));
 			}
 			return s_loadingMenuUpdateHookInstalled;
 		}
 
-		s_originalLoadingMenuUpdate =
+		s_predecessorLoadingMenuUpdate =
 			reinterpret_cast<LoadingMenuUpdateFn>(currentUpdateTarget);
 		// LoadingMenuThread -> LoadingMenu::Update
 		// (__thiscall target via __fastcall shim).
 		WriteRelCall(kLoadingMenuThreadUpdateCallSite, &LoadingMenuUpdateHook);
-		const SIZE_T hookTarget = reinterpret_cast<SIZE_T>(
+		const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
 			&LoadingMenuUpdateHook);
 		SIZE_T observedTarget = 0;
 		const bool observedReadable = hook_identity::ReadRel32Target(
 			kLoadingMenuThreadUpdateCallSite,
 			hook_identity::Rel32Opcode::Call,
 			observedTarget);
-		if (observedReadable && observedTarget == hookTarget)
+		if (observedReadable && observedTarget == adapterTarget)
 		{
 			s_loadingMenuUpdateHookInstalled = true;
 			gLog.FormattedMessage(
@@ -1896,7 +1899,7 @@ namespace fonthook
 
 		if (observedReadable && observedTarget == currentUpdateTarget)
 		{
-			s_originalLoadingMenuUpdate = nullptr;
+			s_predecessorLoadingMenuUpdate = nullptr;
 			s_loadingMenuUpdateHookInstallFailed = true;
 			gLog.FormattedMessage(
 				"tnvse_native_overlay: LoadingMenuThread prewarm hook write did not publish call=0x%08X predecessor=0x%08X",

@@ -17,7 +17,7 @@ namespace fonthook
 	namespace multibyte_input
 	{
 		HWND s_window = nullptr;
-		WNDPROC s_originalWndProc = nullptr;
+		WNDPROC s_predecessorWndProc = nullptr;
 		bool s_hooksInstalled = false;
 		bool s_imeComposing = false;
 		DWORD s_lastWndProcAsciiTick = 0;
@@ -91,7 +91,7 @@ namespace fonthook
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
-			if (s_hooksInstalled && !s_originalWndProc
+			if (s_hooksInstalled && !s_predecessorWndProc
 				&& TryInstallWindowProc())
 			{
 				// A successful ExitToMainMenu detach also shuts down the TSF

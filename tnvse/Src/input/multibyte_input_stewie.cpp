@@ -35,7 +35,7 @@ namespace fonthook
 		struct MenuSearchReplayStats
 		{
 			UInt32 commits = 0;
-			UInt32 originalCalls = 0;
+			UInt32 predecessorCalls = 0;
 			UInt32 legacyEquivalentCalls = 0;
 		};
 
@@ -75,10 +75,10 @@ namespace fonthook
 		bool s_stewieChecked = false;
 		bool s_stewieAvailable = false;
 		bool s_stewieReplay = false;
-		SIZE_T s_stewMenuOriginalInputHandler = 0;
-		SIZE_T s_stewMenuHookedEntry = 0;
-		SIZE_T s_stewMenuObservedSuccessor = 0;
-		thread_local UInt32 s_stewieOriginalCallDepth = 0;
+		SIZE_T s_stewMenuPredecessorInputHandler = 0;
+		SIZE_T s_stewMenuInputVtableEntry = 0;
+		SIZE_T s_stewMenuObservedSuccessorHandler = 0;
+		thread_local UInt32 s_stewiePredecessorCallDepth = 0;
 		UInt32 s_tileTraitIsActive = 0;
 		UInt32 s_tileTraitIsSearchActive = 0;
 		UInt32 s_tileTraitCaretIndex = 0;
@@ -94,7 +94,7 @@ namespace fonthook
 		DWORD s_lastStewTargetPollTick = 0;
 		StewieInputTarget s_observedStewTarget;
 
-		class StewieTweaksInputTargetEx
+		class StewieTweaksInputAdapter
 		{
 		public:
 			static bool __fastcall StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput);
@@ -492,38 +492,42 @@ namespace fonthook
 			return {};
 		}
 
-		SIZE_T OriginalStewieHandlerForMenu(Menu* menu)
+		SIZE_T PredecessorStewieHandlerForMenu(Menu* menu)
 		{
 			if (!menu)
 				return 0;
 
 			if (MenuID(menu) == kMenuType_StewMenu)
-				return s_stewMenuOriginalInputHandler;
+				return s_stewMenuPredecessorInputHandler;
 
-			return GetStewieMenuSearchOriginalInputHandler(menu);
+			return GetStewieMenuSearchPredecessorInputHandler(menu);
 		}
 
-		bool CallStewieOriginalInput(Menu* menu, UInt32 input)
+		bool CallStewiePredecessorInput(Menu* menu, UInt32 input)
 		{
-			const SIZE_T original = OriginalStewieHandlerForMenu(menu);
-			const SIZE_T hook = reinterpret_cast<SIZE_T>(
-				&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
-			if (!original || original == hook || s_stewieOriginalCallDepth
-				|| !hook_identity::IsExecutableTarget(original))
+			const SIZE_T predecessorHandler =
+				PredecessorStewieHandlerForMenu(menu);
+			const SIZE_T stewMenuAdapterHandler = reinterpret_cast<SIZE_T>(
+				&StewieTweaksInputAdapter::StewMenuKeyboardInput);
+			if (!predecessorHandler
+				|| predecessorHandler == stewMenuAdapterHandler
+				|| s_stewiePredecessorCallDepth
+				|| !hook_identity::IsExecutableTarget(predecessorHandler))
 				return false;
 
-			struct OriginalCallGuard
+			struct PredecessorCallGuard
 			{
-				OriginalCallGuard()
+				PredecessorCallGuard()
 				{
-					++s_stewieOriginalCallDepth;
+					++s_stewiePredecessorCallDepth;
 				}
-				~OriginalCallGuard()
+				~PredecessorCallGuard()
 				{
-					--s_stewieOriginalCallDepth;
+					--s_stewiePredecessorCallDepth;
 				}
 			} guard;
-			return reinterpret_cast<StewieKeyboardHandler>(original)(menu, input);
+			return reinterpret_cast<StewieKeyboardHandler>(
+				predecessorHandler)(menu, input);
 		}
 
 		void EnsureStewieShadow(const StewieInputTarget& target)
@@ -551,16 +555,16 @@ namespace fonthook
 				kStewieMaxShadowBytes);
 
 			s_stewieReplay = true;
-			CallStewieOriginalInput(target.menu, kInputCode_End);
+			CallStewiePredecessorInput(target.menu, kInputCode_End);
 			for (size_t i = 0; i < clearCount; ++i)
-				CallStewieOriginalInput(target.menu, kInputCode_Backspace);
+				CallStewiePredecessorInput(target.menu, kInputCode_Backspace);
 
 			for (unsigned char ch : s_stewieShadow.text)
-				CallStewieOriginalInput(target.menu, ch);
+				CallStewiePredecessorInput(target.menu, ch);
 
 			const size_t caret = ClampStewieBoundary(target, s_stewieShadow.text, s_stewieShadow.caret);
 			for (size_t i = caret; i < s_stewieShadow.text.size(); ++i)
-				CallStewieOriginalInput(target.menu, kInputCode_ArrowLeft);
+				CallStewiePredecessorInput(target.menu, kInputCode_ArrowLeft);
 			s_stewieReplay = false;
 
 			s_stewieShadow.appliedText = s_stewieShadow.text;
@@ -693,7 +697,7 @@ namespace fonthook
 			{
 				if (g_bMultibyteInputLog)
 					++issuedCalls;
-				CallStewieOriginalInput(target.menu, input);
+				CallStewiePredecessorInput(target.menu, input);
 			};
 
 			s_stewieReplay = true;
@@ -769,7 +773,7 @@ namespace fonthook
 			if (g_bMultibyteInputLog)
 			{
 				++s_menuSearchReplayStats.commits;
-				s_menuSearchReplayStats.originalCalls += issuedCalls;
+				s_menuSearchReplayStats.predecessorCalls += issuedCalls;
 				s_menuSearchReplayStats.legacyEquivalentCalls += legacyCalls;
 			}
 			return true;
@@ -1245,14 +1249,14 @@ namespace fonthook
 			{
 				const UInt32 savedCalls =
 					s_menuSearchReplayStats.legacyEquivalentCalls
-						> s_menuSearchReplayStats.originalCalls
+						> s_menuSearchReplayStats.predecessorCalls
 					? s_menuSearchReplayStats.legacyEquivalentCalls
-						- s_menuSearchReplayStats.originalCalls
+						- s_menuSearchReplayStats.predecessorCalls
 					: 0;
 				DebugLog(
-					"tnvse_multibyte_input_performance: target=MenuSearch strategy=incremental commits=%u original_calls=%u legacy_equivalent_calls=%u saved_calls=%u",
+					"tnvse_multibyte_input_performance: target=MenuSearch strategy=incremental commits=%u predecessor_calls=%u legacy_equivalent_calls=%u saved_calls=%u",
 					s_menuSearchReplayStats.commits,
-					s_menuSearchReplayStats.originalCalls,
+					s_menuSearchReplayStats.predecessorCalls,
 					s_menuSearchReplayStats.legacyEquivalentCalls,
 					savedCalls);
 				s_menuSearchReplayStats = {};
@@ -1270,11 +1274,11 @@ namespace fonthook
 		bool HandleStewieInput(Menu* menu, UInt32 input)
 		{
 			if (s_stewieReplay)
-				return CallStewieOriginalInput(menu, input);
+				return CallStewiePredecessorInput(menu, input);
 
 			// MenuSearch target traits can flicker while Win+Space is owned by the
 			// shell. Reject the hotkey Space before target discovery so a transient
-			// miss cannot fall through to Stewie's original ASCII handler.
+			// miss cannot fall through to Stewie's predecessor ASCII handler.
 			if (input == ' ' && ShouldSuppressInputLanguageSwitchAscii(' '))
 			{
 				DebugLog(
@@ -1313,10 +1317,10 @@ namespace fonthook
 						reinterpret_cast<UInt32>(subsettingTile),
 						subsettingInputType);
 				}
-				const bool handled = CallStewieOriginalInput(menu, input);
+				const bool handled = CallStewiePredecessorInput(menu, input);
 				if (MenuID(menu) == kMenuType_StewMenu)
 				{
-					// StewMenu activates its search/InputField inside the original
+					// StewMenu activates its search/InputField inside the predecessor
 					// handler. The pre-call probe above therefore cannot see a target
 					// for the key/controller action that opens it. Probe once after the
 					// state change and start the IME session in the same input event.
@@ -1352,7 +1356,7 @@ namespace fonthook
 
 			if (IsCtrlKeyDown())
 			{
-				const bool handled = CallStewieOriginalInput(menu, input);
+				const bool handled = CallStewiePredecessorInput(menu, input);
 				ClearStewieInputState();
 				return handled;
 			}
@@ -1405,9 +1409,9 @@ namespace fonthook
 				return MoveStewieCaretEnd(target);
 			case kInputCode_Enter:
 				ClearStewieInputState();
-				return CallStewieOriginalInput(menu, input);
+				return CallStewiePredecessorInput(menu, input);
 			default:
-				return CallStewieOriginalInput(menu, input);
+				return CallStewiePredecessorInput(menu, input);
 			}
 		}
 
@@ -1416,7 +1420,7 @@ namespace fonthook
 			if (!IsStewieTweaksAvailable())
 				return;
 
-			TryInstallStewieMenuSearchHooks();
+			TryInstallStewieMenuSearchAdapterSites();
 
 			if (!s_tileTraitIsActive)
 				s_tileTraitIsActive = Tile::TraitNameToID("_IsActive");
@@ -1433,94 +1437,98 @@ namespace fonthook
 				{
 					return;
 				}
-				const SIZE_T vtable = *reinterpret_cast<const SIZE_T*>(menuAddress);
-				if (vtable > std::numeric_limits<SIZE_T>::max()
+				const SIZE_T menuVtable =
+					*reinterpret_cast<const SIZE_T*>(menuAddress);
+				if (menuVtable > std::numeric_limits<SIZE_T>::max()
 						- kMenuHandleKeyboardInputVTableOffset)
 				{
 					return;
 				}
-				const SIZE_T entry =
-					vtable + kMenuHandleKeyboardInputVTableOffset;
+				const SIZE_T keyboardInputVtableEntry =
+					menuVtable + kMenuHandleKeyboardInputVTableOffset;
 				if (!hook_identity::IsAccessibleRegion(
-						entry, sizeof(SIZE_T), false))
+						keyboardInputVtableEntry, sizeof(SIZE_T), false))
 				{
 					return;
 				}
-				const SIZE_T current = *reinterpret_cast<const SIZE_T*>(entry);
-				const SIZE_T hook = reinterpret_cast<SIZE_T>(&StewieTweaksInputTargetEx::StewMenuKeyboardInput);
-				if (!s_stewMenuHookedEntry)
+				const SIZE_T currentHandler =
+					*reinterpret_cast<const SIZE_T*>(keyboardInputVtableEntry);
+				const SIZE_T adapterHandler = reinterpret_cast<SIZE_T>(
+					&StewieTweaksInputAdapter::StewMenuKeyboardInput);
+				if (!s_stewMenuInputVtableEntry)
 				{
-					if (current == hook)
+					if (currentHandler == adapterHandler)
 					{
 						gLog.FormattedMessage(
 							"tnvse_multibyte_input: StewMenu adapter is present but its predecessor is unavailable");
 						return;
 					}
-					if (!hook_identity::IsExecutableTarget(current)
-						|| !hook_identity::IsExecutableTarget(hook))
+					if (!hook_identity::IsExecutableTarget(currentHandler)
+						|| !hook_identity::IsExecutableTarget(adapterHandler))
 					{
 						return;
 					}
-					s_stewMenuOriginalInputHandler = current;
-					s_stewMenuHookedEntry = entry;
+					s_stewMenuPredecessorInputHandler = currentHandler;
+					s_stewMenuInputVtableEntry = keyboardInputVtableEntry;
 					// Stewie Tweaks StewMenu::HandleKeyboardInput vtable slot
 					// (__thiscall target via __fastcall shim).
-					SafeWrite32(entry, hook);
-					const SIZE_T observed =
-						*reinterpret_cast<const SIZE_T*>(entry);
-					if (observed == hook)
+					SafeWrite32(keyboardInputVtableEntry, adapterHandler);
+					const SIZE_T observedHandler =
+						*reinterpret_cast<const SIZE_T*>(keyboardInputVtableEntry);
+					if (observedHandler == adapterHandler)
 					{
 						DebugLog(
 							"tnvse_multibyte_input: chained StewMenu handler=0x%08X",
-							static_cast<UInt32>(current));
+							static_cast<UInt32>(currentHandler));
 						gLog.FormattedMessage("tnvse_multibyte_input: Stewie Tweaks StewMenu input adapter installed");
 						return;
 					}
 
-					if (observed == current)
+					if (observedHandler == currentHandler)
 					{
-						s_stewMenuOriginalInputHandler = 0;
-						s_stewMenuHookedEntry = 0;
+						s_stewMenuPredecessorInputHandler = 0;
+						s_stewMenuInputVtableEntry = 0;
 						gLog.FormattedMessage(
 							"tnvse_multibyte_input: StewMenu adapter write did not publish predecessor=0x%08X",
-							static_cast<UInt32>(current));
+							static_cast<UInt32>(currentHandler));
 						return;
 					}
 
 					// A later owner may already chain through this adapter. Retain
 					// its predecessor instead of overwriting the new top-level slot.
-					s_stewMenuObservedSuccessor = observed;
+					s_stewMenuObservedSuccessorHandler = observedHandler;
 					gLog.FormattedMessage(
 						"tnvse_multibyte_input: StewMenu adapter retained below observed handler=0x%08X predecessor=0x%08X executable=%u",
-						static_cast<UInt32>(observed),
-						static_cast<UInt32>(current),
-						hook_identity::IsExecutableTarget(observed) ? 1u : 0u);
+						static_cast<UInt32>(observedHandler),
+						static_cast<UInt32>(currentHandler),
+						hook_identity::IsExecutableTarget(observedHandler) ? 1u : 0u);
 					return;
 				}
 
-				if (entry != s_stewMenuHookedEntry || current == hook)
+				if (keyboardInputVtableEntry != s_stewMenuInputVtableEntry
+					|| currentHandler == adapterHandler)
 					return;
-				if (current == s_stewMenuOriginalInputHandler)
+				if (currentHandler == s_stewMenuPredecessorInputHandler)
 				{
 					// The complete adapter chain was removed. Forget the stale
 					// predecessor so a later active StewMenu can be hooked anew.
-					s_stewMenuOriginalInputHandler = 0;
-					s_stewMenuHookedEntry = 0;
-					s_stewMenuObservedSuccessor = 0;
+					s_stewMenuPredecessorInputHandler = 0;
+					s_stewMenuInputVtableEntry = 0;
+					s_stewMenuObservedSuccessorHandler = 0;
 					return;
 				}
 
 				// A later plugin now owns the vtable slot.  It may already keep
 				// this adapter as its predecessor, so writing ourselves back on
 				// top can form tNVSE -> successor -> tNVSE and recurse forever.
-				// Leave the later hook in place and retain our original
+				// Leave the later hook in place and retain our predecessor
 				// predecessor for calls that still reach this adapter.
-				if (current != s_stewMenuObservedSuccessor)
+				if (currentHandler != s_stewMenuObservedSuccessorHandler)
 				{
-					s_stewMenuObservedSuccessor = current;
+					s_stewMenuObservedSuccessorHandler = currentHandler;
 					gLog.FormattedMessage(
 						"tnvse_multibyte_input: StewMenu adapter left below later handler=0x%08X",
-						static_cast<UInt32>(current));
+						static_cast<UInt32>(currentHandler));
 				}
 			}
 		}
@@ -1585,10 +1593,10 @@ namespace fonthook
 			s_stewieReplay = false;
 			s_lastStewTargetPollTick = 0;
 			s_observedStewTarget = {};
-			s_stewMenuObservedSuccessor = 0;
+			s_stewMenuObservedSuccessorHandler = 0;
 		}
 
-		bool __fastcall StewieTweaksInputTargetEx::StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
+		bool __fastcall StewieTweaksInputAdapter::StewMenuKeyboardInput(Menu* apMenu, void*, UInt32 aiInput)
 		{
 			return HandleStewieInput(apMenu, aiInput);
 		}

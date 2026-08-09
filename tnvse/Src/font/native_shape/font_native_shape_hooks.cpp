@@ -501,23 +501,23 @@ namespace fonthook::vectorfont
 				{
 					return;
 				}
-				m_original = *reinterpret_cast<void***>(m_shape);
-				void** hook = &State().triShapeVtable[1];
-				if (!m_original || !hook)
+				m_originalVtable = *reinterpret_cast<void***>(m_shape);
+				void** nativeVtable = &State().triShapeVtable[1];
+				if (!m_originalVtable || !nativeVtable)
 					return;
-				if (m_original != hook)
+				if (m_originalVtable != nativeVtable)
 				{
-					*reinterpret_cast<void***>(m_shape) = hook;
+					*reinterpret_cast<void***>(m_shape) = nativeVtable;
 					m_changed = true;
 				}
 				m_active =
-					*reinterpret_cast<void***>(m_shape) == hook;
+					*reinterpret_cast<void***>(m_shape) == nativeVtable;
 			}
 
 			~NativeImmediateHookVtableScope()
 			{
 				if (m_changed && m_shape)
-					*reinterpret_cast<void***>(m_shape) = m_original;
+					*reinterpret_cast<void***>(m_shape) = m_originalVtable;
 			}
 
 			bool Active() const
@@ -527,7 +527,7 @@ namespace fonthook::vectorfont
 
 		private:
 			NiTriShape* m_shape = nullptr;
-			void** m_original = nullptr;
+			void** m_originalVtable = nullptr;
 			bool m_changed = false;
 			bool m_active = false;
 		};
@@ -3039,7 +3039,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 			InvalidateSegmentDeviceStateCache();
-			State().originalRenderPassImmediately(pass, currentPass,
+			State().predecessorRenderPassImmediately(pass, currentPass,
 				testAlpha, blendAlpha, setupRenderStates);
 			return false;
 		}
@@ -3811,7 +3811,7 @@ namespace fonthook::vectorfont
 					else
 					{
 						InvalidateSegmentDeviceStateCache();
-						State().originalRenderPassImmediately(pass,
+						State().predecessorRenderPassImmediately(pass,
 							currentPass, false, true,
 							setupRenderStates);
 					}
@@ -4025,7 +4025,7 @@ namespace fonthook::vectorfont
 						break;
 					}
 					packetScope.Select(proxyShape);
-					State().originalRenderPassImmediately(pass,
+					State().predecessorRenderPassImmediately(pass,
 						currentPass, false, true,
 						setupRenderStates);
 					draw.drewPacket = true;
@@ -4356,7 +4356,7 @@ namespace fonthook::vectorfont
 				else
 				{
 					InvalidateSegmentDeviceStateCache();
-					State().originalRenderPassImmediately(pass,
+					State().predecessorRenderPassImmediately(pass,
 						currentPass, false, true,
 						setupRenderStates);
 				}
@@ -4718,44 +4718,45 @@ namespace fonthook::vectorfont
 
 	RenderPassImmediatelyFn ReadRenderPassImmediatelyCallTarget()
 	{
-		SIZE_T target = 0;
+		SIZE_T callTarget = 0;
 		if (!hook_identity::ReadRel32Target(
 			kRenderPassImmediatelyCallSite,
 			hook_identity::Rel32Opcode::Call,
-			target))
+			callTarget))
 		{
 			return nullptr;
 		}
-		return reinterpret_cast<RenderPassImmediatelyFn>(target);
+		return reinterpret_cast<RenderPassImmediatelyFn>(callTarget);
 	}
 
 	bool IsNativeFontRenderPassImmediatelyHookCurrent()
 	{
-		const RenderPassImmediatelyFn hook = &NativeFontRenderPassImmediately;
-		const RenderPassImmediatelyFn predecessor =
-			State().originalRenderPassImmediately;
-		return predecessor && predecessor != hook
+		const RenderPassImmediatelyFn adapterTarget =
+			&NativeFontRenderPassImmediately;
+		const RenderPassImmediatelyFn predecessorTarget =
+			State().predecessorRenderPassImmediately;
+		return predecessorTarget && predecessorTarget != adapterTarget
 			&& hook_identity::IsExecutableTarget(
-				reinterpret_cast<SIZE_T>(predecessor))
-			&& ReadRenderPassImmediatelyCallTarget() == hook;
+				reinterpret_cast<SIZE_T>(predecessorTarget))
+			&& ReadRenderPassImmediatelyCallTarget() == adapterTarget;
 	}
 
 	bool IsNativeFontRenderPassImmediatelyHookCurrentFast()
 	{
-		const bool current =
+		const bool routeCurrent =
 			IsNativeFontRenderPassImmediatelyHookCurrentUnchecked();
-		if (!current)
+		if (!routeCurrent)
 		{
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				StructuralReadinessImmediateMismatch);
 		}
-		return current;
+		return routeCurrent;
 	}
 
 	bool IsNativeFontRenderPassImmediatelyHookCurrentUnchecked()
 	{
-		return State().originalRenderPassImmediately
-			&& State().originalRenderPassImmediately
+		return State().predecessorRenderPassImmediately
+			&& State().predecessorRenderPassImmediately
 				!= &NativeFontRenderPassImmediately
 			&& hook_identity::MatchesRel32InstructionImageUnchecked(
 				kRenderPassImmediatelyCallSite,
@@ -4766,7 +4767,7 @@ namespace fonthook::vectorfont
 		UInt32 currentPass, bool testAlpha, bool blendAlpha, bool setupRenderStates)
 	{
 		NativeFontShapeState& state = State();
-		if (!state.originalRenderPassImmediately)
+		if (!state.predecessorRenderPassImmediately)
 			return;
 		NiTriShape* shape = pass
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
@@ -4782,7 +4783,7 @@ namespace fonthook::vectorfont
 			// pass is a hard private-constant boundary even when renderer and
 			// viewport identity remain unchanged.
 			InvalidateNativeFontSortedShaderStateForForeignRenderPass();
-			state.originalRenderPassImmediately(pass, currentPass, testAlpha,
+			state.predecessorRenderPassImmediately(pass, currentPass, testAlpha,
 				blendAlpha, setupRenderStates);
 			// Clear any state rebuilt by a nested callback without advancing the
 			// command boundary twice. The next native submission must republish all
@@ -4927,7 +4928,7 @@ namespace fonthook::vectorfont
 							vanillaLayoutTransition =
 								BeginNativeFontVanillaLayoutShaderTransition(
 									shader, currentPass);
-							state.originalRenderPassImmediately(pass,
+							state.predecessorRenderPassImmediately(pass,
 								currentPass, testAlpha, blendAlpha,
 								setupRenderStates);
 							vanillaLayoutDrawn = true;
@@ -5210,21 +5211,23 @@ namespace fonthook::vectorfont
 
 	bool HookRenderPassImmediately()
 	{
-		RenderPassImmediatelyFn current = ReadRenderPassImmediatelyCallTarget();
-		const RenderPassImmediatelyFn hook = &NativeFontRenderPassImmediately;
-		if (current == hook)
+		RenderPassImmediatelyFn currentTarget =
+			ReadRenderPassImmediatelyCallTarget();
+		const RenderPassImmediatelyFn adapterTarget =
+			&NativeFontRenderPassImmediately;
+		if (currentTarget == adapterTarget)
 		{
-			const RenderPassImmediatelyFn predecessor =
-				State().originalRenderPassImmediately;
-			State().renderPassImmediatelyHookInstalled = predecessor
-				&& predecessor != hook
+			const RenderPassImmediatelyFn predecessorTarget =
+				State().predecessorRenderPassImmediately;
+			State().renderPassImmediatelyHookInstalled = predecessorTarget
+				&& predecessorTarget != adapterTarget
 				&& hook_identity::IsExecutableTarget(
-					reinterpret_cast<SIZE_T>(predecessor));
+					reinterpret_cast<SIZE_T>(predecessorTarget));
 			if (!State().renderPassImmediatelyHookInstalled)
 				InvalidateAllSingletonFacadeBindings();
 			return State().renderPassImmediatelyHookInstalled;
 		}
-		if (!current)
+		if (!currentTarget)
 		{
 			if (State().renderPassImmediatelyHookInstalled)
 			{
@@ -5251,7 +5254,7 @@ namespace fonthook::vectorfont
 			}
 			return false;
 		}
-		if (reinterpret_cast<UInt32>(current)
+		if (reinterpret_cast<UInt32>(currentTarget)
 			!= kBSBatchRendererRenderPassImmediately)
 		{
 			if (!State().loggedRenderPassImmediatelyHookConflict)
@@ -5259,47 +5262,47 @@ namespace fonthook::vectorfont
 				State().loggedRenderPassImmediatelyHookConflict = true;
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: RenderPassImmediately call site already has a non-vanilla target=%p; leaving it untouched",
-					current);
+					currentTarget);
 			}
 			return false;
 		}
 
-		State().originalRenderPassImmediately = current;
+		State().predecessorRenderPassImmediately = currentTarget;
 		// BSBatchRenderer immediate pass call (__cdecl).
 		WriteRelCall(kRenderPassImmediatelyCallSite,
 			&NativeFontRenderPassImmediately);
-		const RenderPassImmediatelyFn observed =
+		const RenderPassImmediatelyFn observedTarget =
 			ReadRenderPassImmediatelyCallTarget();
-		if (observed == hook)
+		if (observedTarget == adapterTarget)
 		{
 			State().renderPassImmediatelyHookInstalled = true;
 			if (g_bEnableFreeTypeFontRenderingLog)
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: installed RenderPassImmediately native route original=%p vanilla=1",
-					current);
+					currentTarget);
 			}
 			return true;
 		}
 
 		State().renderPassImmediatelyHookInstalled = false;
-		if (observed == current)
+		if (observedTarget == currentTarget)
 		{
-			State().originalRenderPassImmediately = nullptr;
+			State().predecessorRenderPassImmediately = nullptr;
 			gLog.FormattedMessage(
 				"tnvse_freetype_native: RenderPassImmediately hook write did not publish; vanilla target remains=%p",
-				current);
+				currentTarget);
 			return false;
 		}
 
 		// Do not replace an observed later owner with vanilla. It may already
-		// chain through this hook, so retain the original target for any call
+		// chain through this hook, so retain the predecessor target for any call
 		// that still reaches tNVSE while the strict top-level route fails closed.
 		State().loggedRenderPassImmediatelyHookConflict = true;
 		gLog.FormattedMessage(
-			"tnvse_freetype_native: RenderPassImmediately hook retained below observed target=%p original=%p; native route marked unavailable",
-			observed,
-			current);
+			"tnvse_freetype_native: RenderPassImmediately hook retained below observed target=%p predecessor=%p; native route marked unavailable",
+			observedTarget,
+			currentTarget);
 		return false;
 	}
 

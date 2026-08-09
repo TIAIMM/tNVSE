@@ -1,12 +1,12 @@
 #pragma once
 
 template <typename T1, typename T2, typename T3>
-T2* DYNAMIC_CAST(T3* obj) {
-	if (!obj) {
+T2* DYNAMIC_CAST(T3* object) {
+	if (!object) {
 		return nullptr;
 	}
 
-	return CdeclCall<T2*>(0xEC43FB, obj, 0, T1::bs_rtti, T2::bs_rtti, 0);
+	return CdeclCall<T2*>(0xEC43FB, object, 0, T1::bs_rtti, T2::bs_rtti, 0);
 }
 
 inline const void* RTTI_BGSDehydrationStage                        = reinterpret_cast<void*>(0x01183004);

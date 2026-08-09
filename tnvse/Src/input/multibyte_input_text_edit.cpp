@@ -22,10 +22,10 @@ namespace fonthook
 		constexpr UInt32 kJipNumericOnlyFlag = 1;
 		constexpr UInt32 kJipEnterAcceptsOkFlag = 2;
 
-		SIZE_T s_jipOriginalInputHandler = 0;
-		SIZE_T s_jipObservedSuccessor = 0;
+		SIZE_T s_jipPredecessorInputHandler = 0;
+		SIZE_T s_jipObservedSuccessorHandler = 0;
 		bool s_jipAdapterPublished = false;
-		thread_local UInt32 s_jipOriginalCallDepth = 0;
+		thread_local UInt32 s_jipPredecessorCallDepth = 0;
 
 		class JipTextInputAdapterEx
 		{
@@ -193,37 +193,37 @@ namespace fonthook
 
 		void ClearJipTextInputHookState()
 		{
-			s_jipOriginalInputHandler = 0;
-			s_jipObservedSuccessor = 0;
+			s_jipPredecessorInputHandler = 0;
+			s_jipObservedSuccessorHandler = 0;
 			s_jipAdapterPublished = false;
 		}
 
-		bool CallJipOriginalInput(TextEditMenu* menu, UInt32 input)
+		bool CallJipPredecessorInput(TextEditMenu* menu, UInt32 input)
 		{
-			if (!menu || !s_jipOriginalInputHandler
-				|| s_jipOriginalInputHandler == JipTextInputHandlerAddress()
-				|| s_jipOriginalCallDepth)
+			if (!menu || !s_jipPredecessorInputHandler
+				|| s_jipPredecessorInputHandler == JipTextInputHandlerAddress()
+				|| s_jipPredecessorCallDepth)
 				return false;
 
-			struct OriginalCallGuard
+			struct PredecessorCallGuard
 			{
-				OriginalCallGuard()
+				PredecessorCallGuard()
 				{
-					++s_jipOriginalCallDepth;
+					++s_jipPredecessorCallDepth;
 				}
-				~OriginalCallGuard()
+				~PredecessorCallGuard()
 				{
-					--s_jipOriginalCallDepth;
+					--s_jipPredecessorCallDepth;
 				}
 			} guard;
 			using InputHandler = bool(__thiscall*)(TextEditMenu*, UInt32);
-			return reinterpret_cast<InputHandler>(s_jipOriginalInputHandler)(menu, input);
+			return reinterpret_cast<InputHandler>(s_jipPredecessorInputHandler)(menu, input);
 		}
 
 		void TryInstallJipTextInputHook()
 		{
 			const SIZE_T currentHandler = CurrentTextEditInputHandler();
-			const SIZE_T hookHandler = JipTextInputHandlerAddress();
+			const SIZE_T adapterHandler = JipTextInputHandlerAddress();
 
 			if (currentHandler == kTextEditMenuHandleKeyboardInput)
 			{
@@ -231,24 +231,24 @@ namespace fonthook
 				return;
 			}
 
-			if (currentHandler == hookHandler)
+			if (currentHandler == adapterHandler)
 			{
 				if (hook_identity::IsExecutableTarget(
-						s_jipOriginalInputHandler))
+						s_jipPredecessorInputHandler))
 				{
 					s_jipAdapterPublished = true;
 				}
 				else
 				{
 					gLog.FormattedMessage(
-						"tnvse_multibyte_input: JIP TextInput adapter is present but its predecessor is unavailable original=0x%08X",
-						static_cast<UInt32>(s_jipOriginalInputHandler));
+						"tnvse_multibyte_input: JIP TextInput adapter is present but its predecessor is unavailable predecessor=0x%08X",
+						static_cast<UInt32>(s_jipPredecessorInputHandler));
 				}
 				return;
 			}
 
 			if (s_jipAdapterPublished
-				&& currentHandler == s_jipOriginalInputHandler)
+				&& currentHandler == s_jipPredecessorInputHandler)
 			{
 				// The entire adapter chain has been removed and the slot is back at
 				// the saved predecessor. Forget the stale guard so this live JIP
@@ -262,9 +262,9 @@ namespace fonthook
 				// it still chains to tNVSE would create a two-node recursive
 				// vtable loop.  Keep our saved predecessor and stay below the
 				// later owner until the slot returns to the vanilla handler.
-				if (currentHandler != s_jipObservedSuccessor)
+				if (currentHandler != s_jipObservedSuccessorHandler)
 				{
-					s_jipObservedSuccessor = currentHandler;
+					s_jipObservedSuccessorHandler = currentHandler;
 					gLog.FormattedMessage(
 						"tnvse_multibyte_input: JIP TextInput adapter left below later handler=0x%08X",
 						static_cast<UInt32>(currentHandler));
@@ -276,22 +276,22 @@ namespace fonthook
 			if (!LooksLikeJipTextInput(current))
 				return;
 			if (!hook_identity::IsExecutableTarget(currentHandler)
-				|| !hook_identity::IsExecutableTarget(hookHandler))
+				|| !hook_identity::IsExecutableTarget(adapterHandler))
 			{
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: cannot chain JIP TextInput adapter predecessor=0x%08X hook=0x%08X",
+					"tnvse_multibyte_input: cannot chain JIP TextInput adapter predecessor=0x%08X adapter=0x%08X",
 					static_cast<UInt32>(currentHandler),
-					static_cast<UInt32>(hookHandler));
+					static_cast<UInt32>(adapterHandler));
 				return;
 			}
 
-			s_jipOriginalInputHandler = currentHandler;
+			s_jipPredecessorInputHandler = currentHandler;
 			// JIP TextInput TextEditMenu::HandleKeyboardInput vtable slot
 			// (__thiscall target via __fastcall shim).
 			SafeWrite32(kTextEditMenuHandleKeyboardInputVTableEntry,
-				hookHandler);
+				adapterHandler);
 			const SIZE_T observedHandler = CurrentTextEditInputHandler();
-			if (observedHandler == hookHandler)
+			if (observedHandler == adapterHandler)
 			{
 				s_jipAdapterPublished = true;
 				DebugLog(
@@ -314,7 +314,7 @@ namespace fonthook
 			// was published. Preserve the predecessor and remain below that owner;
 			// republishing above it could create a recursive two-node chain.
 			s_jipAdapterPublished = true;
-			s_jipObservedSuccessor = observedHandler;
+			s_jipObservedSuccessorHandler = observedHandler;
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input: JIP TextInput adapter retained below observed handler=0x%08X predecessor=0x%08X executable=%u",
 				static_cast<UInt32>(observedHandler),
@@ -566,7 +566,7 @@ namespace fonthook
 		bool __fastcall JipTextInputAdapterEx::Input(TextEditMenu* apMenu, void*, UInt32 aiInput)
 		{
 			if (!LooksLikeJipTextInputStorage(apMenu))
-				return CallJipOriginalInput(apMenu, aiInput);
+				return CallJipPredecessorInput(apMenu, aiInput);
 
 			GameInputFilterClass inputClass = GameInputFilterClass::None;
 			if (aiInput >= 0x20 && aiInput <= 0x7E)
@@ -597,7 +597,7 @@ namespace fonthook
 			if (aiInput >= 0x20 && aiInput <= 0x7E)
 			{
 				if (!editActive)
-					return CallJipOriginalInput(apMenu, aiInput);
+					return CallJipPredecessorInput(apMenu, aiInput);
 
 				const UInt8 asciiInput = ResolveAsciiLetterCaseFromKeyboard(static_cast<UInt8>(aiInput));
 				if (AsciiEqualsIgnoreCase(s_lastWndProcAsciiChar, asciiInput)
@@ -626,7 +626,7 @@ namespace fonthook
 			}
 
 			if (!editActive)
-				return CallJipOriginalInput(apMenu, aiInput);
+				return CallJipPredecessorInput(apMenu, aiInput);
 
 			switch (aiInput)
 			{
@@ -652,7 +652,7 @@ namespace fonthook
 				if (JipMiscFlags(apMenu) & kJipEnterAcceptsOkFlag)
 				{
 					DebugLogJipState("JipTextInputAdapter::Input", "pass_enter_to_jip", apMenu, aiInput);
-					return CallJipOriginalInput(apMenu, aiInput);
+					return CallJipPredecessorInput(apMenu, aiInput);
 				}
 				DebugLogJipState("JipTextInputAdapter::Input", "insert_newline", apMenu, aiInput);
 				return InsertJipTextAtCaret(apMenu, std::string_view("\n", 1));
@@ -665,10 +665,10 @@ namespace fonthook
 			case kInputCode_ArrowUp:
 			case kInputCode_ArrowDown:
 				DebugLogJipState("JipTextInputAdapter::Input", "pass_vertical_arrow_to_jip", apMenu, aiInput);
-				return CallJipOriginalInput(apMenu, aiInput);
+				return CallJipPredecessorInput(apMenu, aiInput);
 			default:
 				DebugLogJipState("JipTextInputAdapter::Input", "pass_original", apMenu, aiInput);
-				return CallJipOriginalInput(apMenu, aiInput);
+				return CallJipPredecessorInput(apMenu, aiInput);
 			}
 		}
 
@@ -1014,13 +1014,13 @@ namespace fonthook
 		bool InstallTextEditHooks()
 		{
 			using hook_identity::Rel32Opcode;
-			hook_site::RelCallHook openHook{
+			hook_site::RelCallSite openCallSite{
 				"PlayerNameEntryMenu -> TextEditMenu::Open (__fastcall)",
 				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				kVanillaTextEditMenuOpen,
 				&TextEditMenuEx::Open
 			};
-			hook_site::RelCallHook inputHook{
+			hook_site::RelCallSite inputCallSite{
 				"TextEditMenu::HandleKeyboardInput -> TextEditState::Input (__fastcall)",
 				kTextEditStateInputCallSiteInHandleKeyboardInput,
 				kVanillaTextEditStateInput,
@@ -1053,15 +1053,15 @@ namespace fonthook
 			// (__fastcall).
 			WriteRelCall(kTextEditStateInputCallSiteInHandleKeyboardInput,
 				&TextEditStateEx::Input);
-			const bool openInstalled = openHook.IsInstalled();
-			const bool inputInstalled = inputHook.IsInstalled();
+			const bool openInstalled = openCallSite.IsInstalled();
+			const bool inputInstalled = inputCallSite.IsInstalled();
 			if (!openInstalled || !inputInstalled)
 			{
 				SIZE_T observedOpen = 0;
 				SIZE_T observedInput = 0;
-				const bool openRestored = openHook.RollbackOwned(
+				const bool openRestored = openCallSite.RollbackOwned(
 					kVanillaTextEditMenuOpen, &observedOpen);
-				const bool inputRestored = inputHook.RollbackOwned(
+				const bool inputRestored = inputCallSite.RollbackOwned(
 					kVanillaTextEditStateInput, &observedInput);
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: TextEdit hook write verification failed openInstalled=%u inputInstalled=%u openObserved=%08X inputObserved=%08X rollback=%s",
@@ -1078,42 +1078,43 @@ namespace fonthook
 
 		void RestoreTextEditInputHook()
 		{
-			const SIZE_T hookHandler = JipTextInputHandlerAddress();
+			const SIZE_T adapterHandler = JipTextInputHandlerAddress();
 			const SIZE_T currentHandler = CurrentTextEditInputHandler();
-			if (currentHandler == hookHandler)
+			if (currentHandler == adapterHandler)
 			{
-				const SIZE_T predecessor = s_jipOriginalInputHandler
-					&& s_jipOriginalInputHandler != hookHandler
-					? s_jipOriginalInputHandler
+				const SIZE_T predecessorHandler = s_jipPredecessorInputHandler
+					&& s_jipPredecessorInputHandler != adapterHandler
+					? s_jipPredecessorInputHandler
 					: kTextEditMenuHandleKeyboardInput;
-				hook_site::VTableHook jipTextInputVtableHook{
+				hook_site::VTableSlotSite jipTextInputVtableSite{
 					"JIP TextInput TextEditMenu::HandleKeyboardInput (__thiscall via __fastcall shim)",
 					kTextEditMenuHandleKeyboardInputVTableEntry,
-					predecessor,
-					hookHandler
+					predecessorHandler,
+					adapterHandler
 				};
-				jipTextInputVtableHook.predecessor = predecessor;
-				jipTextInputVtableHook.RollbackOwned();
+				jipTextInputVtableSite.predecessorTarget =
+					predecessorHandler;
+				jipTextInputVtableSite.RollbackOwned();
 				const SIZE_T observedHandler = CurrentTextEditInputHandler();
-				if (observedHandler == predecessor)
+				if (observedHandler == predecessorHandler)
 				{
 					ClearJipTextInputHookState();
 					return;
 				}
 
 				s_jipAdapterPublished = true;
-				s_jipObservedSuccessor = observedHandler == hookHandler
+				s_jipObservedSuccessorHandler = observedHandler == adapterHandler
 					? 0
 					: observedHandler;
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: JIP TextInput adapter detach not confirmed observed=0x%08X predecessor=0x%08X; chain state retained",
 					static_cast<UInt32>(observedHandler),
-					static_cast<UInt32>(predecessor));
+					static_cast<UInt32>(predecessorHandler));
 				return;
 			}
 
 			if (s_jipAdapterPublished
-				&& currentHandler == s_jipOriginalInputHandler)
+				&& currentHandler == s_jipPredecessorInputHandler)
 			{
 				ClearJipTextInputHookState();
 				return;
@@ -1122,7 +1123,7 @@ namespace fonthook
 			if (s_jipAdapterPublished
 				&& currentHandler != kTextEditMenuHandleKeyboardInput)
 			{
-				s_jipObservedSuccessor = currentHandler;
+				s_jipObservedSuccessorHandler = currentHandler;
 				gLog.FormattedMessage(
 					"tnvse_multibyte_input: JIP TextInput adapter detach deferred below later handler=0x%08X",
 					static_cast<UInt32>(currentHandler));

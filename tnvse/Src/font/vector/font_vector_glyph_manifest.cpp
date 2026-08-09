@@ -32,8 +32,8 @@ namespace fonthook::vectorfont
 				for (const RuntimeFace& face : role.faces)
 				{
 					const UInt64 contentHash = face.file ? face.file->contentHash : 0;
-					const SInt32 faceIndex = face.face
-						? static_cast<SInt32>(face.face->face_index) : 0;
+					const SInt32 faceIndex = face.ftFace
+						? static_cast<SInt32>(face.ftFace->face_index) : 0;
 					hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
 					hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
 				}
@@ -71,8 +71,8 @@ namespace fonthook::vectorfont
 			for (const RuntimeFace& face : role.faces)
 			{
 				const UInt64 contentHash = face.file ? face.file->contentHash : 0;
-				const SInt32 faceIndex = face.face
-					? static_cast<SInt32>(face.face->face_index) : 0;
+				const SInt32 faceIndex = face.ftFace
+					? static_cast<SInt32>(face.ftFace->face_index) : 0;
 				hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
 				hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
 			}

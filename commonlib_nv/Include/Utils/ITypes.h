@@ -42,27 +42,27 @@ inline UInt32 Swap32(UInt32 in)
 
 inline UInt64 Swap64(UInt64 in)
 {
-	UInt64	temp;
+	UInt64	swappedValue;
 
-	temp = Swap32(in);
-	temp <<= 32;
-	temp |= Swap32(in >> 32);
+	swappedValue = Swap32(in);
+	swappedValue <<= 32;
+	swappedValue |= Swap32(in >> 32);
 
-	return temp;
+	return swappedValue;
 }
 
 inline void SwapFloat(float* in)
 {
-	UInt32* temp = (UInt32*)in;
+	UInt32* bitPattern = (UInt32*)in;
 
-	*temp = Swap32(*temp);
+	*bitPattern = Swap32(*bitPattern);
 }
 
 inline void SwapDouble(double* in)
 {
-	UInt64* temp = (UInt64*)in;
+	UInt64* bitPattern = (UInt64*)in;
 
-	*temp = Swap64(*temp);
+	*bitPattern = Swap64(*bitPattern);
 }
 
 inline bool IsBigEndian(void)
@@ -71,11 +71,11 @@ inline bool IsBigEndian(void)
 	{
 		UInt16	u16;
 		UInt8	u8[2];
-	} temp;
+	} byteOrderProbe;
 
-	temp.u16 = 0x1234;
+	byteOrderProbe.u16 = 0x1234;
 
-	return temp.u8[0] == 0x12;
+	return byteOrderProbe.u8[0] == 0x12;
 }
 
 inline bool IsLittleEndian(void)

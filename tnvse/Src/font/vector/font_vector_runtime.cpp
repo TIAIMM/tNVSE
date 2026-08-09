@@ -184,7 +184,7 @@ namespace fonthook::vectorfont
 			{
 				return true;
 			}
-			if (!ConfigureFace(runtimeFace.face, style, safeScale, raster))
+			if (!ConfigureFace(runtimeFace.ftFace, style, safeScale, raster))
 				return false;
 			runtimeFace.configured = true;
 			runtimeFace.configuredRaster = raster;
@@ -199,7 +199,7 @@ namespace fonthook::vectorfont
 			if (!result.file)
 				return false;
 			FT_Error error = FT_New_Memory_Face(State().library, result.file->data,
-				result.file->size, config.faceIndex, &result.face);
+				result.file->size, config.faceIndex, &result.ftFace);
 			if (error)
 			{
 				gLog.FormattedMessage(
@@ -207,7 +207,7 @@ namespace fonthook::vectorfont
 					config.path.c_str(), config.faceIndex, static_cast<UInt32>(error));
 				return false;
 			}
-			error = FT_Select_Charmap(result.face, FT_ENCODING_UNICODE);
+			error = FT_Select_Charmap(result.ftFace, FT_ENCODING_UNICODE);
 			if (error)
 			{
 				gLog.FormattedMessage(
@@ -227,9 +227,9 @@ namespace fonthook::vectorfont
 				FreeTypeFontDebugLog(
 					"tnvse_freetype_font: loaded face path=%ls index=%ld family=%s style=%s faces=%ld glyphs=%ld",
 					config.path.c_str(), config.faceIndex,
-					result.face->family_name ? result.face->family_name : "",
-					result.face->style_name ? result.face->style_name : "",
-					result.face->num_faces, result.face->num_glyphs);
+					result.ftFace->family_name ? result.ftFace->family_name : "",
+					result.ftFace->style_name ? result.ftFace->style_name : "",
+					result.ftFace->num_faces, result.ftFace->num_glyphs);
 			}
 			return true;
 		}
@@ -237,7 +237,7 @@ namespace fonthook::vectorfont
 		bool EnsureRuntimeFaceLoaded(RuntimeRole& role,
 			RuntimeFace& runtimeFace)
 		{
-			if (runtimeFace.face && runtimeFace.file)
+			if (runtimeFace.ftFace && runtimeFace.file)
 				return true;
 			if (!role.style
 				|| runtimeFace.sourceConfigIndex
@@ -271,20 +271,20 @@ namespace fonthook::vectorfont
 				return false;
 			if (!ConfigureRuntimeFace(face, *role.style, 1.0f, false))
 				return false;
-			if (FT_Load_Glyph(face.face, glyphIndex, kGlyphLoadFlags))
+			if (FT_Load_Glyph(face.ftFace, glyphIndex, kGlyphLoadFlags))
 				return false;
-			if (face.face->glyph->format == FT_GLYPH_FORMAT_OUTLINE && role.style->embolden > 0.0f)
+			if (face.ftFace->glyph->format == FT_GLYPH_FORMAT_OUTLINE && role.style->embolden > 0.0f)
 			{
 				const FT_Pos strength = static_cast<FT_Pos>(std::lround(role.style->embolden * 64.0f));
-				FT_Outline_EmboldenXY(&face.face->glyph->outline, strength, strength);
+				FT_Outline_EmboldenXY(&face.ftFace->glyph->outline, strength, strength);
 			}
 			const size_t previousBytes = face.directLayoutMetrics.GetAllocatedBytes();
 			if (DirectLayoutGlyphMetric* metric =
 				face.directLayoutMetrics.GetOrCreate(glyphIndex))
 			{
-				metric->advance = static_cast<float>(face.face->glyph->advance.x) / 64.0f;
+				metric->advance = static_cast<float>(face.ftFace->glyph->advance.x) / 64.0f;
 				metric->fixedOffset = GetFixedCellGlyphOffset(
-					*role.style, face.face->glyph);
+					*role.style, face.ftFace->glyph);
 				metric->valid = true;
 				const size_t allocatedBytes =
 					face.directLayoutMetrics.GetAllocatedBytes();
@@ -304,7 +304,7 @@ namespace fonthook::vectorfont
 				RuntimeFace& face = role.faces[i];
 				if (!EnsureRuntimeFaceLoaded(role, face))
 					continue;
-				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face, codePoint);
+				const FT_UInt glyphIndex = FT_Get_Char_Index(face.ftFace, codePoint);
 				if (!glyphIndex)
 					continue;
 				result = { &role, &face, i, glyphIndex, codePoint };
@@ -421,7 +421,7 @@ namespace fonthook::vectorfont
 				return false;
 			if (!LoadGlyph(role, *glyph.runtimeFace, glyph.glyphIndex))
 				return false;
-			FT_GlyphSlot slot = glyph.runtimeFace->face->glyph;
+			FT_GlyphSlot slot = glyph.runtimeFace->ftFace->glyph;
 			if (slot->format == FT_GLYPH_FORMAT_OUTLINE)
 				FT_Outline_Get_CBox(&slot->outline, &box);
 			else
@@ -659,14 +659,14 @@ namespace fonthook::vectorfont
 			bottoms.reserve(references.count);
 			for (size_t index = 0; index < references.count; ++index)
 			{
-				const FT_UInt glyphIndex = FT_Get_Char_Index(face.face,
+				const FT_UInt glyphIndex = FT_Get_Char_Index(face.ftFace,
 					references.codePoints[index]);
-				if (!glyphIndex || FT_Load_Glyph(face.face, glyphIndex,
+				if (!glyphIndex || FT_Load_Glyph(face.ftFace, glyphIndex,
 					kGlyphLoadFlags | FT_LOAD_TARGET_NORMAL))
 				{
 					continue;
 				}
-				FT_GlyphSlot slot = face.face->glyph;
+				FT_GlyphSlot slot = face.ftFace->glyph;
 				if (slot->format != FT_GLYPH_FORMAT_OUTLINE || !slot->outline.n_points)
 					continue;
 				if (role.style->embolden > 0.0f)
@@ -889,7 +889,7 @@ namespace fonthook::vectorfont
 				if (role.faces.empty())
 					return nullptr;
 
-				FT_Face primary = role.faces.front().face;
+				FT_Face primary = role.faces.front().ftFace;
 				role.ascender = static_cast<float>(primary->size->metrics.ascender) / 64.0f
 					* role.style->scaleY + role.style->embolden;
 				role.descender = static_cast<float>(primary->size->metrics.descender) / 64.0f
@@ -1420,8 +1420,8 @@ namespace fonthook::vectorfont
 		for (const RuntimeFace& face : role.faces)
 		{
 			const UInt64 contentHash = face.file ? face.file->contentHash : 0;
-			const SInt32 faceIndex = face.face
-				? static_cast<SInt32>(face.face->face_index) : 0;
+			const SInt32 faceIndex = face.ftFace
+				? static_cast<SInt32>(face.ftFace->face_index) : 0;
 			hash = HashBytes64(&contentHash, sizeof(contentHash), hash);
 			hash = HashBytes64(&faceIndex, sizeof(faceIndex), hash);
 		}
@@ -1554,10 +1554,10 @@ namespace fonthook::vectorfont
 			{
 				face.directLayoutMetrics.Clear();
 				face.directLayoutMetricMemory.Release();
-				if (face.face)
+				if (face.ftFace)
 				{
-					FT_Done_Face(face.face);
-					face.face = nullptr;
+					FT_Done_Face(face.ftFace);
+					face.ftFace = nullptr;
 					++releasedFaces;
 				}
 				face.file.reset();
@@ -1599,7 +1599,7 @@ namespace fonthook::vectorfont
 			{
 				for (const RuntimeFace& face : role.faces)
 				{
-					if (face.face)
+					if (face.ftFace)
 					{
 						hasLiveFaces = true;
 						break;

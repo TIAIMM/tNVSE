@@ -21,11 +21,14 @@ namespace fonthook
 		{
 			if (value.empty())
 				return {};
-			const int len = WideCharToMultiByte(codePage, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-			if (len <= 1)
+			const int encodedByteCountWithTerminator = WideCharToMultiByte(
+				codePage, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+			if (encodedByteCountWithTerminator <= 1)
 				return {};
-			std::string result(static_cast<size_t>(len - 1), '\0');
-			WideCharToMultiByte(codePage, 0, value.c_str(), -1, &result[0], len, nullptr, nullptr);
+			std::string result(
+				static_cast<size_t>(encodedByteCountWithTerminator - 1), '\0');
+			WideCharToMultiByte(codePage, 0, value.c_str(), -1, &result[0],
+				encodedByteCountWithTerminator, nullptr, nullptr);
 			return result;
 		}
 	}

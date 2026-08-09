@@ -8,13 +8,13 @@ namespace
 
 	int __cdecl CreateHeapStub(UInt32) { return 1; }
 
-	struct HeapBootstrapCallHook
+	struct HeapBootstrapCallSite
 	{
 		const char* name;
 		UInt32 heapAddress;
 		UInt32 callAddress;
 		CreateHeapFn createHeap;
-		UInt32 predecessor = 0;
+		UInt32 predecessorTarget = 0;
 
 		bool ReadTarget(UInt32& target) const
 		{
@@ -32,28 +32,28 @@ namespace
 
 		bool RollbackOwned()
 		{
-			UInt32 current = 0;
-			if (!predecessor || !ReadTarget(current))
+			UInt32 currentTarget = 0;
+			if (!predecessorTarget || !ReadTarget(currentTarget))
 				return false;
-			if (current == reinterpret_cast<UInt32>(&CreateHeapStub))
+			if (currentTarget == reinterpret_cast<UInt32>(&CreateHeapStub))
 			{
-				if (!ReplaceCall(callAddress, predecessor)
-					|| !ReadTarget(current))
+				if (!ReplaceCall(callAddress, predecessorTarget)
+					|| !ReadTarget(currentTarget))
 				{
 					return false;
 				}
 			}
-			return current == predecessor;
+			return currentTarget == predecessorTarget;
 		}
 	};
 
-	HeapBootstrapCallHook s_gameHeapBootstrapHook{
+	HeapBootstrapCallSite s_gameHeapBootstrapSite{
 		"FalloutNV heap bootstrap CALL (__cdecl)",
 		0xF9907C,
 		0xC62B21,
 		reinterpret_cast<CreateHeapFn>(0xC770C3),
 	};
-	HeapBootstrapCallHook s_geckHeapBootstrapHook{
+	HeapBootstrapCallSite s_geckHeapBootstrapSite{
 		"GECK heap bootstrap CALL (__cdecl)",
 		0x12705BC,
 		0xECC3CB,
@@ -64,23 +64,24 @@ namespace
 bool	bInitialized = false;
 
 _declspec(noinline) void InitializeHeap() {
-	HeapBootstrapCallHook& hook = *(UInt8*)0x401190 != 0x55
-		? s_gameHeapBootstrapHook : s_geckHeapBootstrapHook;
-	if (!*reinterpret_cast<HANDLE*>(hook.heapAddress) && hook.createHeap)
+	HeapBootstrapCallSite& bootstrapSite = *(UInt8*)0x401190 != 0x55
+		? s_gameHeapBootstrapSite : s_geckHeapBootstrapSite;
+	if (!*reinterpret_cast<HANDLE*>(bootstrapSite.heapAddress)
+		&& bootstrapSite.createHeap)
 	{
-		hook.createHeap(true);
-		UInt32 predecessor = 0;
-		if (hook.ReadTarget(predecessor))
+		bootstrapSite.createHeap(true);
+		UInt32 predecessorTarget = 0;
+		if (bootstrapSite.ReadTarget(predecessorTarget))
 		{
-			hook.predecessor = predecessor;
+			bootstrapSite.predecessorTarget = predecessorTarget;
 			// FalloutNV/GECK heap bootstrap CALL (__cdecl).
 			const bool published =
-				WriteRelCall(hook.callAddress, &CreateHeapStub);
-			UInt32 installed = 0;
-			if (!published || !hook.ReadTarget(installed)
-				|| installed != reinterpret_cast<UInt32>(&CreateHeapStub))
+				WriteRelCall(bootstrapSite.callAddress, &CreateHeapStub);
+			UInt32 publishedTarget = 0;
+			if (!published || !bootstrapSite.ReadTarget(publishedTarget)
+				|| publishedTarget != reinterpret_cast<UInt32>(&CreateHeapStub))
 			{
-				hook.RollbackOwned();
+				bootstrapSite.RollbackOwned();
 			}
 		}
 	}
