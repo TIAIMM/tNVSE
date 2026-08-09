@@ -1099,9 +1099,12 @@ A preflight cull is revalidated when the final sorted entry is dispatched. A
 matching result is consumed without packet preparation, upload, Tile callbacks,
 or driver submission; an identity or frame mismatch revokes it and fails open.
 The dispatch gate compares the live transform and model bound directly against
-the stored bitwise witness in field order. It does not first materialize second
-13-word and 4-word snapshots on the stack; signed zero, NaN payloads, and every
-other floating-point bit pattern retain the same exact-match behavior.
+the stored bitwise witness. Retail `NiTransform` and `NiBound` are statically
+verified as unpadded contiguous 13-word and 4-word objects, so cache-key capture
+and comparison use fixed-size object-representation copies/comparisons instead
+of per-float conversion loops. It does not materialize a second witness on the
+dispatch stack; signed zero, NaN payloads, and every other floating-point bit
+pattern retain the same exact-match behavior.
 Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
 `RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
 only decrements that index and loads the next sorted pointer. Therefore adjacent

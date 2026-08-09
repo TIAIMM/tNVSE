@@ -10,8 +10,10 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <emmintrin.h>
 
 namespace fonthook::vectorfont
 {
@@ -31,6 +33,17 @@ namespace fonthook::vectorfont
 		inline constexpr size_t kClipProofCacheSetCount = 1024;
 		inline constexpr size_t kClipProofCacheWays = 4;
 		inline constexpr size_t kClipRectNdcCacheEntries = 16;
+		static_assert(sizeof(NiTransform) == 13u * sizeof(UInt32));
+		static_assert(offsetof(NiTransform, m_Rotate) == 0u);
+		static_assert(offsetof(NiTransform, m_Translate)
+			== 9u * sizeof(UInt32));
+		static_assert(offsetof(NiTransform, m_fScale)
+			== 12u * sizeof(UInt32));
+		static_assert(sizeof(NiBound) == 4u * sizeof(UInt32));
+		static_assert(offsetof(NiBound, m_kCenter) == 0u);
+		static_assert(offsetof(NiBound, m_fRadius)
+			== 3u * sizeof(UInt32));
+		static_assert(sizeof(RECT) == 4u * sizeof(UInt32));
 
 		enum class ClipProofResult : UInt8
 		{
@@ -611,10 +624,43 @@ namespace fonthook::vectorfont
 					!= FALSE;
 		}
 
+		__forceinline bool SameRawBits16(const void* left, const void* right)
+		{
+			const __m128i leftWords = _mm_loadu_si128(
+				reinterpret_cast<const __m128i*>(left));
+			const __m128i rightWords = _mm_loadu_si128(
+				reinterpret_cast<const __m128i*>(right));
+			const __m128i equalBytes = _mm_cmpeq_epi8(leftWords, rightWords);
+			return _mm_movemask_epi8(equalBytes) == 0xFFFF;
+		}
+
+		__forceinline bool SameRawBits52(const void* left, const void* right)
+		{
+			const auto* leftBytes = static_cast<const UInt8*>(left);
+			const auto* rightBytes = static_cast<const UInt8*>(right);
+			__m128i differences = _mm_xor_si128(
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(leftBytes)),
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(rightBytes)));
+			differences = _mm_or_si128(differences, _mm_xor_si128(
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(leftBytes + 16)),
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(rightBytes + 16))));
+			differences = _mm_or_si128(differences, _mm_xor_si128(
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(leftBytes + 32)),
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(rightBytes + 32))));
+			// The final unaligned load overlaps bytes 36..47 and reaches the exact
+			// 52-byte end. It avoids an aliased scalar tail load without reading past
+			// either object.
+			differences = _mm_or_si128(differences, _mm_xor_si128(
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(leftBytes + 36)),
+				_mm_loadu_si128(reinterpret_cast<const __m128i*>(rightBytes + 36))));
+			const __m128i equalBytes = _mm_cmpeq_epi8(
+				differences, _mm_setzero_si128());
+			return _mm_movemask_epi8(equalBytes) == 0xFFFF;
+		}
+
 		bool SameRect(const RECT& lhs, const RECT& rhs)
 		{
-			return lhs.left == rhs.left && lhs.top == rhs.top
-				&& lhs.right == rhs.right && lhs.bottom == rhs.bottom;
+			return SameRawBits16(&lhs, &rhs);
 		}
 
 		UInt32 FloatBits(float value)
@@ -628,28 +674,19 @@ namespace fonthook::vectorfont
 			const NiTransform& transform)
 		{
 			std::array<UInt32, 13> bits = {};
-			size_t write = 0;
-			for (UInt32 row = 0; row < 3; ++row)
-			{
-				for (UInt32 column = 0; column < 3; ++column)
-				{
-					bits[write++] = FloatBits(
-						transform.m_Rotate.m_pEntry[row][column]);
-				}
-			}
-			bits[write++] = FloatBits(transform.m_Translate.x);
-			bits[write++] = FloatBits(transform.m_Translate.y);
-			bits[write++] = FloatBits(transform.m_Translate.z);
-			bits[write] = FloatBits(transform.m_fScale);
+			// Retail NiTransform is exactly thirteen contiguous float words. Copying
+			// its object representation preserves the former FloatBits semantics for
+			// NaNs and signed zero without thirteen scalar conversions and branches.
+			std::memcpy(bits.data(), &transform, sizeof(transform));
 			return bits;
 		}
 
 		std::array<UInt32, 4> CaptureBoundBits(const NiBound& bound)
 		{
-			return {
-				FloatBits(bound.m_kCenter.x), FloatBits(bound.m_kCenter.y),
-				FloatBits(bound.m_kCenter.z), FloatBits(bound.m_fRadius)
-			};
+			std::array<UInt32, 4> bits = {};
+			// NiBound is likewise four contiguous float words in the retail ABI.
+			std::memcpy(bits.data(), &bound, sizeof(bound));
+			return bits;
 		}
 
 		NativeFontVisibilityProofStatus ToVisibilityProofStatus(
@@ -863,31 +900,13 @@ namespace fonthook::vectorfont
 			const std::array<UInt32, 13>& expected,
 			const NiTransform& transform)
 		{
-			size_t read = 0;
-			for (UInt32 row = 0; row < 3; ++row)
-			{
-				for (UInt32 column = 0; column < 3; ++column)
-				{
-					if (expected[read++] != FloatBits(
-							transform.m_Rotate.m_pEntry[row][column]))
-					{
-						return false;
-					}
-				}
-			}
-			return expected[read++] == FloatBits(transform.m_Translate.x)
-				&& expected[read++] == FloatBits(transform.m_Translate.y)
-				&& expected[read++] == FloatBits(transform.m_Translate.z)
-				&& expected[read] == FloatBits(transform.m_fScale);
+			return SameRawBits52(expected.data(), &transform);
 		}
 
 		bool SameLiveBoundBits(const std::array<UInt32, 4>& expected,
 			const NiBound& bound)
 		{
-			return expected[0] == FloatBits(bound.m_kCenter.x)
-				&& expected[1] == FloatBits(bound.m_kCenter.y)
-				&& expected[2] == FloatBits(bound.m_kCenter.z)
-				&& expected[3] == FloatBits(bound.m_fRadius);
+			return SameRawBits16(expected.data(), &bound);
 		}
 
 		bool SameProofKeyLive(const ClipProofCacheEntry& entry,
