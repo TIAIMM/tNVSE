@@ -886,12 +886,7 @@ namespace fonthook::vectorfont
 				for (size_t index = 0; index < bitmapResults.size(); ++index)
 					sourceResults[index].bitmap = bitmapResults[index];
 			}
-			if (sourceResults.size() != glyphs.size()
-				|| std::any_of(sourceResults.begin(), sourceResults.end(),
-					[](const PendingQuad::GlyphSource& source)
-					{
-						return !source.IsAvailable();
-					}))
+			if (sourceResults.size() != glyphs.size())
 				return false;
 
 			const bool drawShadow = !suppressEffects && config.shadow.enabled;
@@ -917,6 +912,13 @@ namespace fonthook::vectorfont
 				const AtlasGlyphInstance& instance = glyphs[glyphOrdinal];
 				const PendingQuad::GlyphSource& source =
 					sourceResults[glyphOrdinal];
+				if (!source.IsAvailable())
+				{
+					// Preserve the old all-or-nothing failure surface: callers and
+					// diagnostics must never observe a partially built shader batch.
+					quads.clear();
+					return false;
+				}
 				const size_t roleIndex =
 					static_cast<size_t>(instance.glyph.byteClass);
 				if (roleIndex >= rasterProfiles.size()
@@ -959,16 +961,22 @@ namespace fonthook::vectorfont
 						true, sdfLayerMask, profile.sourceToLogicalScale,
 						glyphOrdinal);
 				}
-			}
-			for (const PendingQuad& quad : quads)
-			{
-				UInt8 mask = quad.layerMask;
-				while (mask)
+				if (source.IsDrawable())
 				{
-					build.drawQuadCount += mask & 1u;
-					mask >>= 1;
+					// The emitted masks contain Fill plus every enabled effect. An
+					// offset shadow lives in its own quad, but contributes the same
+					// one draw that its in-place mask would have contributed.
+					build.drawQuadCount += 1u
+						+ static_cast<UInt32>(drawShadow)
+						+ static_cast<UInt32>(drawGlow)
+						+ static_cast<UInt32>(drawOutline);
 				}
 			}
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				ShaderEffectSourceValidationElementScanSaved,
+				sourceResults.size());
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				ShaderEffectDrawCountElementScanSaved, quads.size());
 			return true;
 		}
 
@@ -4171,17 +4179,10 @@ namespace fonthook::vectorfont
 				roleBitmaps[roleIndex].clear();
 				placementRecords[roleIndex].clear();
 			}
-			const bool directSources = std::all_of(activeQuads->begin(),
-				activeQuads->end(), [](const PendingQuad& quad)
-				{
-					return quad.source.IsDirect();
-				});
 			std::array<std::array<std::shared_ptr<AtlasResource>,
 				kMaximumAtlasSnapshotPages>, 2> directRolePages;
-			std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
-				directPageOrdinals;
-			for (auto& role : directPageOrdinals)
-				role.fill(std::numeric_limits<UInt16>::max());
+			bool directSources = true;
+			bool directSourcesValid = true;
 			for (const PendingQuad& quad : *activeQuads)
 			{
 				if (quad.source.bitmap)
@@ -4189,32 +4190,51 @@ namespace fonthook::vectorfont
 					roleUnique[static_cast<size_t>(quad.byteClass)].emplace(
 						quad.source.bitmap->cacheId, quad.source.bitmap);
 				}
+				if (!quad.source.IsDirect())
+				{
+					directSources = false;
+					continue;
+				}
+				if (!quad.source.atlas
+					|| !IsAtlasGlyphPlacementForAtlas(
+						quad.source.placement, *quad.source.atlas))
+				{
+					directSourcesValid = false;
+					continue;
+				}
+				const size_t roleIndex =
+					static_cast<size_t>(quad.byteClass);
+				const UInt16 rolePage = quad.source.placement.pageIndex;
+				if (roleIndex >= directRolePages.size()
+					|| rolePage >= kMaximumAtlasSnapshotPages)
+				{
+					directSourcesValid = false;
+					continue;
+				}
+				std::shared_ptr<AtlasResource>& known =
+					directRolePages[roleIndex][rolePage];
+				if (known && known.get() != quad.source.atlas.get())
+				{
+					directSourcesValid = false;
+					continue;
+				}
+				known = quad.source.atlas;
 			}
+			std::array<std::array<UInt16, kMaximumAtlasSnapshotPages>, 2>
+				directPageOrdinals;
+			for (auto& role : directPageOrdinals)
+				role.fill(std::numeric_limits<UInt16>::max());
 			std::vector<std::shared_ptr<AtlasResource>> availableAtlases;
 			if (directSources)
 			{
-				for (const PendingQuad& quad : *activeQuads)
-				{
-					if (!quad.source.atlas
-						|| !IsAtlasGlyphPlacementForAtlas(
-							quad.source.placement, *quad.source.atlas))
-					{
-						return nullptr;
-					}
-					const size_t roleIndex =
-						static_cast<size_t>(quad.byteClass);
-					const UInt16 rolePage = quad.source.placement.pageIndex;
-					if (roleIndex >= directRolePages.size()
-						|| rolePage >= kMaximumAtlasSnapshotPages)
-					{
-						return nullptr;
-					}
-					std::shared_ptr<AtlasResource>& known =
-						directRolePages[roleIndex][rolePage];
-					if (known && known.get() != quad.source.atlas.get())
-						return nullptr;
-					known = quad.source.atlas;
-				}
+				if (!directSourcesValid)
+					return nullptr;
+				// This mandatory walk now classifies the batch, gathers bitmap
+				// fallbacks and proves direct Atlas ownership. The old successful
+				// direct path visited every quad three times here.
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					DirectSourceClassificationElementScanSaved,
+					static_cast<UInt64>(activeQuads->size()) * 2u);
 				for (size_t roleIndex = 0;
 					roleIndex < directRolePages.size(); ++roleIndex)
 				{

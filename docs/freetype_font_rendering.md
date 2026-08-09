@@ -2050,6 +2050,17 @@ geometry. A missing, stale, or structurally inconsistent seal remains
 ineligible and follows the existing fallback. The periodic Vanilla-layout line
 reports the removed traversal as `certified_vertex_scans_avoided`.
 
+The direct MTSDF build front end also keeps source validation and draw-layer
+accounting inside the glyph-to-quad construction loop. Its following Atlas
+selection walk simultaneously classifies direct sources, gathers bitmap
+fallback identities, and validates direct Atlas ownership. Successful direct
+batches therefore no longer perform four additional linear passes over the
+same source/quad arrays. The main periodic line reports the removed element
+visits as `shader_source_scan_elements_saved`,
+`shader_draw_count_scan_elements_saved`, and
+`direct_source_scan_elements_saved`; all rendering order, range construction,
+Atlas page assignment, and fail-closed fallback rules remain unchanged.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
