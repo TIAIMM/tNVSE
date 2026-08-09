@@ -1102,6 +1102,15 @@ The dispatch gate compares the live transform and model bound directly against
 the stored bitwise witness in field order. It does not first materialize second
 13-word and 4-word snapshots on the stack; signed zero, NaN payloads, and every
 other floating-point bit pattern retain the same exact-match behavior.
+Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
+`RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
+only decrements that index and loads the next sorted pointer. Therefore adjacent
+reverse-order culls may reuse the preceding successful camera-current check,
+but only while the exact retail item index, direct tNVSE call site, frame token,
+and nested-traversal serial remain continuous. A foreign pass, visible/native
+draw, hash fallback, index gap, nested traversal, or new frame breaks the run;
+the next cull performs the complete live camera comparison again. The
+`camera_validations` and `camera_run_reuses` fields report that boundary.
 Surviving direct commands do not repeat the same visibility calculation. This
 leaves one conservative proof per facade instead of pre-slot and post-slot
 copies of equivalent work.

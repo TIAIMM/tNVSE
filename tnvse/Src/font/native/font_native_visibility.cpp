@@ -1453,7 +1453,8 @@ namespace fonthook::vectorfont
 	}
 
 	bool HonorNativeFontPreflightClipCull(const NiTriShape* facade,
-		const NativeFontVisibilityPreflight& preflight)
+		const NativeFontVisibilityPreflight& preflight,
+		bool reuseCertifiedCamera)
 	{
 		FreeTypePerfScope honorGatePerf(
 			FreeTypePerfPhase::PreflightClipHonorGate,
@@ -1498,8 +1499,24 @@ namespace fonthook::vectorfont
 		if (!s_clipFrameContext.active || !s_clipFrameContext.valid
 			|| witness.renderer != s_clipFrameContext.camera.renderer
 			|| !witness.cameraEpoch
-			|| witness.cameraEpoch != s_clipFrameContext.cameraEpoch
-			|| !IsClipFrameCameraCurrent(s_clipFrameContext))
+			|| witness.cameraEpoch != s_clipFrameContext.cameraEpoch)
+		{
+			return reject(FreeTypePerfCounter::
+				VisibilityPreflightClipRevokeCamera);
+		}
+		bool cameraCurrent = true;
+		if (reuseCertifiedCamera)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VisibilityPreflightClipCameraRunReuse);
+		}
+		else
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VisibilityPreflightClipCameraValidation);
+			cameraCurrent = IsClipFrameCameraCurrent(s_clipFrameContext);
+		}
+		if (!cameraCurrent)
 		{
 			return reject(FreeTypePerfCounter::
 				VisibilityPreflightClipRevokeCamera);

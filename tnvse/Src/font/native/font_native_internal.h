@@ -707,6 +707,12 @@ namespace fonthook::vectorfont
 		UInt32 commandSpanIndex = std::numeric_limits<UInt32>::max();
 		UInt32 singlePacketCommandIndex =
 			std::numeric_limits<UInt32>::max();
+		// Set only when retail B64F90's live m_iCurrItem, sorted slot and
+		// captured frame entry all agree while B64FD1 still calls tNVSE
+		// directly. Hash-fallback lookups intentionally leave this false.
+		SInt32 retailSortedItemIndex = -1;
+		UInt64 nestedTraversalSerial = 0;
+		bool retailSortedItemMatched = false;
 	};
 
 	inline constexpr UInt32 kInvalidNativeFontCommandIndex =
@@ -1212,7 +1218,8 @@ namespace fonthook::vectorfont
 	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
 		const NiTriShape* facade, const NativeFontShapePayload& payload);
 	bool HonorNativeFontPreflightClipCull(const NiTriShape* facade,
-		const NativeFontVisibilityPreflight& preflight);
+		const NativeFontVisibilityPreflight& preflight,
+		bool reuseCertifiedCamera);
 	bool ReuseNativeFontPreflightClipOverlap(
 		const NativeFontVisibilityPreflight& preflight);
 	void RecordNativeFontVisibilityCull(NativeFontVisibilityCull reason,

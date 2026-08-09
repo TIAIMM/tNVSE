@@ -150,6 +150,7 @@ namespace fonthook::vectorfont
 			UInt64 activeValidationToken = 0;
 			bool active = false;
 			bool stockRenderAlphaTraversal = false;
+			bool stockImmediateDispatch = false;
 		};
 
 		thread_local SortedPayloadScratch s_sortedPayloadScratch;
@@ -417,6 +418,7 @@ namespace fonthook::vectorfont
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
 			scratch.stockRenderAlphaTraversal = false;
+			scratch.stockImmediateDispatch = false;
 		}
 
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
@@ -443,6 +445,7 @@ namespace fonthook::vectorfont
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
 			scratch.stockRenderAlphaTraversal = false;
+			scratch.stockImmediateDispatch = false;
 
 			if (scratch.metadataShapes.capacity() > 8192)
 				std::vector<NiTriShape*>().swap(scratch.metadataShapes);
@@ -818,6 +821,7 @@ namespace fonthook::vectorfont
 
 		bool CaptureSortedTrackedShapeTopology(SortedPayloadScratch& scratch,
 			BSShaderAccumulator* accumulator, bool stockRenderAlphaTraversal,
+			bool stockImmediateDispatch,
 			SInt64* topologyTicks)
 		{
 			const SInt64 topologyStart = BeginFreeTypePerfSample();
@@ -976,6 +980,7 @@ namespace fonthook::vectorfont
 
 			scratch.frameAccumulator = accumulator;
 			scratch.stockRenderAlphaTraversal = stockRenderAlphaTraversal;
+			scratch.stockImmediateDispatch = stockImmediateDispatch;
 			return finishTopology(true);
 		}
 
@@ -1462,8 +1467,10 @@ namespace fonthook::vectorfont
 					state.predecessorRenderAlphaGeometry
 						== reinterpret_cast<RenderAlphaGeometryFn>(
 							kBSShaderAccumulatorRenderAlphaGeometry);
+				const bool stockImmediateDispatch = stockRenderAlphaTraversal
+					&& IsNativeFontRenderPassImmediatelyHookCurrentUnchecked();
 				CaptureSortedTrackedShapeTopology(scratch, accumulator,
-					stockRenderAlphaTraversal,
+					stockRenderAlphaTraversal, stockImmediateDispatch,
 					&prepTailSample.topologyTicks);
 				if (scratch.metadataShapes.empty())
 				{
@@ -2139,7 +2146,8 @@ namespace fonthook::vectorfont
 		// agree.  A plugin traversal, tie repair, mutation, or nested route falls
 		// through to the identity-based hash table.
 		const BSShaderAccumulator* accumulator = scratch.frameAccumulator;
-		if (scratch.stockRenderAlphaTraversal && accumulator
+		if (scratch.stockRenderAlphaTraversal
+			&& scratch.stockImmediateDispatch && accumulator
 			&& accumulator->m_iNumItems > 0
 			&& static_cast<size_t>(accumulator->m_iNumItems)
 				== scratch.sortedFrameEntryIndices.size()
@@ -2156,6 +2164,10 @@ namespace fonthook::vectorfont
 				if (entryIndex != kInvalidNativeFontCommandIndex
 					&& publishEntry(static_cast<size_t>(entryIndex)))
 				{
+					view.retailSortedItemIndex = currentItem;
+					view.nestedTraversalSerial =
+						scratch.nestedTraversalSerial;
+					view.retailSortedItemMatched = true;
 					RecordFreeTypePerf(FreeTypePerfCounter::
 						SortedFrameItemIndexLookupHit);
 					return true;

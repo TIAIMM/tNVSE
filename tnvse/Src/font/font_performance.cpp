@@ -1489,7 +1489,7 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				TextArtifactAdmissionEstablishedReplacement));
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu cache_key_materializations_elided=%llu cache_route_validations_elided=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu rect_hot_hits=%llu rect_set_hits=%llu rect_builds=%llu sorted_tile_property_lookups_elided=%llu sorted_alpha_property_lookups_elided=%llu",
+			"tnvse_freetype_preflight_clip_cull: checks=%llu culled=%llu viewport=%llu scissor=%llu fail_open=%llu honored=%llu camera_validations=%llu camera_run_reuses=%llu revoked=%llu revoke_invalid=%llu revoke_frame=%llu revoke_camera=%llu revoke_geometry=%llu revoke_transform=%llu revoke_bound=%llu revoke_scissor=%llu revoke_proof=%llu transform_hits=%llu cache_key_materializations_elided=%llu cache_route_validations_elided=%llu transform_misses=%llu transform_identity_misses=%llu transform_key_misses=%llu transform_unavailable=%llu vanilla_ui_ortho_translation=%llu generic_transforms=%llu rect_hot_hits=%llu rect_set_hits=%llu rect_builds=%llu sorted_tile_property_lookups_elided=%llu sorted_alpha_property_lookups_elided=%llu",
 			counterValue(FreeTypePerfCounter::VisibilityPreflightClipCheck),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipCulled),
@@ -1501,6 +1501,10 @@ namespace fonthook::vectorfont
 				VisibilityPreflightClipFailOpen),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipHonored),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipCameraValidation),
+			counterValue(FreeTypePerfCounter::
+				VisibilityPreflightClipCameraRunReuse),
 			counterValue(FreeTypePerfCounter::
 				VisibilityPreflightClipRevoked),
 			counterValue(FreeTypePerfCounter::

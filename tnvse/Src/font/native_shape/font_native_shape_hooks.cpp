@@ -1248,8 +1248,60 @@ namespace fonthook::vectorfont
 
 		thread_local VanillaLayoutStandardLiteBindingRunTracker
 			s_vanillaLayoutStandardLiteBindingRun;
+		struct VisibilityCameraRunTracker
+		{
+			UInt64 frameToken = 0;
+			UInt64 nestedTraversalSerial = 0;
+			SInt32 previousSortedItem = -1;
+			bool ready = false;
+		};
+		thread_local VisibilityCameraRunTracker s_visibilityCameraRun;
 		thread_local UInt32 s_vanillaLayoutStandardLiteCpuSampleCursor = 0;
 		thread_local UInt32 s_nativeFontDispatchRouteSampleCursor = 0;
+
+		void BreakVisibilityCameraRun()
+		{
+			s_visibilityCameraRun.ready = false;
+		}
+
+		bool CanReuseVisibilityCameraRun(
+			const NativeFontSortedFrameEntryView& frameEntry,
+			const NativeFontVisibilityPreflight& visibility)
+		{
+			const VisibilityCameraRunTracker& tracker =
+				s_visibilityCameraRun;
+			return tracker.ready && visibility.frameToken
+				&& frameEntry.retailSortedItemMatched
+				&& tracker.frameToken == visibility.frameToken
+				&& tracker.nestedTraversalSerial
+					== frameEntry.nestedTraversalSerial
+				&& tracker.previousSortedItem > 0
+				&& frameEntry.retailSortedItemIndex
+					== tracker.previousSortedItem - 1;
+		}
+
+		void ContinueVisibilityCameraRun(
+			const NativeFontSortedFrameEntryView& frameEntry,
+			const NativeFontVisibilityPreflight& visibility)
+		{
+			if (!visibility.frameToken
+				|| !frameEntry.retailSortedItemMatched
+				|| frameEntry.retailSortedItemIndex < 0
+				|| !frameEntry.nestedTraversalSerial)
+			{
+				BreakVisibilityCameraRun();
+				return;
+			}
+			VisibilityCameraRunTracker& tracker = s_visibilityCameraRun;
+			if (!tracker.ready)
+			{
+				tracker.frameToken = visibility.frameToken;
+				tracker.nestedTraversalSerial =
+					frameEntry.nestedTraversalSerial;
+				tracker.ready = true;
+			}
+			tracker.previousSortedItem = frameEntry.retailSortedItemIndex;
+		}
 
 		void FinishVanillaLayoutStandardLiteBindingRun()
 		{
@@ -5646,6 +5698,7 @@ namespace fonthook::vectorfont
 			BreakVanillaLayoutStandardLiteBindingRun();
 		if (!nativeFontShape)
 		{
+			BreakVisibilityCameraRun();
 			RecordFreeTypeGpuEnvelopeForeignPass();
 			if (s_constantOwnershipBatch.FrameActive())
 				ReleaseNativeConstantOwnershipBatch(
@@ -5690,8 +5743,12 @@ namespace fonthook::vectorfont
 			// must precede the singleton-facade direct-draw path so culled
 			// singleton texts never arm a packet draw. Any drift revokes the frame
 			// proof and falls open to the ordinary draw path.
+			const bool reuseCertifiedCamera =
+				CanReuseVisibilityCameraRun(frameEntry, *frameVisibility);
+			if (!reuseCertifiedCamera)
+				BreakVisibilityCameraRun();
 			if (HonorNativeFontPreflightClipCull(shape,
-					*frameVisibility))
+					*frameVisibility, reuseCertifiedCamera))
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VisibilityPreflightClipHonored);
@@ -5710,11 +5767,16 @@ namespace fonthook::vectorfont
 					RecordGpuEnvelopeVanillaCull(
 						frameVisibility->cull);
 				}
+				// Retail B64FD6-B64FEC performs only index/pointer updates before
+				// the next B994F0 call. Publish continuity last so no engine or
+				// plugin callback can occur after certification in this hook.
+				ContinueVisibilityCameraRun(frameEntry, *frameVisibility);
 				return;
 			}
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipRevoked);
 		}
+		BreakVisibilityCameraRun();
 		if (frameVisibility
 			&& frameVisibility->cull
 				== NativeFontVisibilityCull::ZeroAlpha

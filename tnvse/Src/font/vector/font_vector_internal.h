@@ -194,6 +194,8 @@ namespace fonthook::vectorfont
 		VisibilityPreflightClipScissor,
 		VisibilityPreflightClipFailOpen,
 		VisibilityPreflightClipHonored,
+		VisibilityPreflightClipCameraValidation,
+		VisibilityPreflightClipCameraRunReuse,
 		VisibilityPreflightClipRevoked,
 		VisibilityPreflightClipRevokeInvalid,
 		VisibilityPreflightClipRevokeFrame,
