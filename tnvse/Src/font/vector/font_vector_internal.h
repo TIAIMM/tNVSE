@@ -145,6 +145,7 @@ namespace fonthook::vectorfont
 		TextArtifactVertexInitializationBytesAvoided,
 		DirectShapeVertexInitializationBytesAvoided,
 		DirectShapeRangeInitializationBytesAvoided,
+		DirectShapeCommonResolutionsSaved,
 		DirectShapeVertexCoverageFailure,
 		TextArtifactCompositeProfileVertex,
 		TextArtifactCompositeProfileVertexScanSaved,

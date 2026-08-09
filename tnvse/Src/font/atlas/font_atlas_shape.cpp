@@ -1932,15 +1932,18 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		auto resolve = [&](const DirectGlyphCommand& command,
-			size_t layer, const AtlasSnapshotPlacement*& placement,
-			UInt16& pageOrdinal, float& baselineOffset,
-			bool& knownEmpty)
+		struct CommonCommandResolution
 		{
-			placement = nullptr;
-			pageOrdinal = kInvalidDirectAtlasPageSlot;
-			baselineOffset = 0.0f;
-			knownEmpty = false;
+			const DirectCachedLetter* letter = nullptr;
+			size_t roleIndex = 0;
+			float baselineOffset = 0.0f;
+			bool knownEmpty = false;
+		};
+
+		auto resolveCommand = [&](const DirectGlyphCommand& command,
+			CommonCommandResolution& resolution)
+		{
+			resolution = {};
 			const size_t roleIndex = command.byteClass;
 			if (roleIndex >= sealed->tables.size()
 				|| !sealed->tables[roleIndex]
@@ -1966,16 +1969,39 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
+			resolution.letter = &letter;
+			resolution.roleIndex = roleIndex;
 			if (letter.flags & kDirectCachedLetterKnownEmpty)
 			{
-				knownEmpty = true;
+				resolution.knownEmpty = true;
 				return true;
+			}
+			const UInt8 faceIndex =
+				table.faceIndices[command.directSlot];
+			const auto& baselines =
+				sealed->faceBaselineOffsets[roleIndex];
+			resolution.baselineOffset = faceIndex < baselines.size()
+				? baselines[faceIndex]
+				: sealed->roleBaselineOffsets[roleIndex];
+			return true;
+		};
+
+		auto resolveLayer = [&](const CommonCommandResolution& resolution,
+			size_t layer, const AtlasSnapshotPlacement*& placement,
+			UInt16& pageOrdinal)
+		{
+			placement = nullptr;
+			pageOrdinal = kInvalidDirectAtlasPageSlot;
+			if (!resolution.letter || resolution.knownEmpty
+				|| layer >= masks.size())
+			{
+				return false;
 			}
 			const UInt8 maskType =
 				static_cast<UInt8>(masks[layer]);
 			const DirectAtlasGlyphLayer* direct = nullptr;
 			for (const DirectAtlasGlyphLayer& candidate :
-				letter.layers)
+				resolution.letter->layers)
 			{
 				if (candidate.valid()
 					&& candidate.maskType == maskType)
@@ -1990,7 +2016,7 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			pageOrdinal =
-				sealed->pageOrdinals[roleIndex][direct->pageSlot];
+				sealed->pageOrdinals[resolution.roleIndex][direct->pageSlot];
 			if (pageOrdinal >= sealed->atlases.size()
 				|| pageOrdinal >= kMaximumAtlasSnapshotPages)
 			{
@@ -2016,13 +2042,6 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			placement = &source;
-			const UInt8 faceIndex =
-				table.faceIndices[command.directSlot];
-			const auto& baselines =
-				sealed->faceBaselineOffsets[roleIndex];
-			baselineOffset = faceIndex < baselines.size()
-				? baselines[faceIndex]
-				: sealed->roleBaselineOffsets[roleIndex];
 			return true;
 		};
 
@@ -2039,23 +2058,27 @@ namespace fonthook::vectorfont
 		bool originInitialized = false;
 		for (const DirectGlyphCommand& command : glyphs)
 		{
+			CommonCommandResolution resolution;
+			if (!resolveCommand(command, resolution))
+			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			if (resolution.knownEmpty)
+				continue;
 			for (size_t layer = 0; layer < enabled.size(); ++layer)
 			{
 				if (!enabled[layer])
 					continue;
 				const AtlasSnapshotPlacement* placement = nullptr;
 				UInt16 page = kInvalidDirectAtlasPageSlot;
-				float baselineOffset = 0.0f;
-				bool knownEmpty = false;
-				if (!resolve(command, layer, placement, page,
-					baselineOffset, knownEmpty))
+				if (!resolveLayer(
+					resolution, layer, placement, page))
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				if (knownEmpty)
-					continue;
 				if (!placement || page >= sealed->atlases.size())
 				{
 					result.outcome =
@@ -2126,27 +2149,38 @@ namespace fonthook::vectorfont
 		NativeFontShapeColorContract colorContract;
 		bool colorContractInitialized = false;
 		NiColorA facadeColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		std::array<NiColorA, 4> sanitizedLayerColors;
 		for (size_t layer = 0; layer < enabled.size(); ++layer)
 		{
-			if (!enabled[layer])
-				continue;
-			const NiColorA layerColor =
-				SanitizeColor(layerColors[layer]);
-			for (const DirectGlyphCommand& command : glyphs)
+			if (enabled[layer])
+				sanitizedLayerColors[layer] =
+					SanitizeColor(layerColors[layer]);
+		}
+		for (const DirectGlyphCommand& command : glyphs)
+		{
+			CommonCommandResolution resolution;
+			if (!resolveCommand(command, resolution))
 			{
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			}
+			if (resolution.knownEmpty)
+				continue;
+			const NiColorA baseColor = ResolveBaseColor(
+				UnpackNativeBaseColor(command.packedColor), tileColor);
+			for (size_t layer = 0; layer < enabled.size(); ++layer)
+			{
+				if (!enabled[layer])
+					continue;
 				const AtlasSnapshotPlacement* placement = nullptr;
 				UInt16 page = kInvalidDirectAtlasPageSlot;
-				float baselineOffset = 0.0f;
-				bool knownEmpty = false;
-				if (!resolve(command, layer, placement, page,
-					baselineOffset, knownEmpty))
+				if (!resolveLayer(
+					resolution, layer, placement, page))
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				if (knownEmpty)
-					continue;
 				if (!placement || page >= sealed->atlases.size())
 				{
 					result.outcome =
@@ -2160,9 +2194,7 @@ namespace fonthook::vectorfont
 						DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				const NiColorA baseColor = ResolveBaseColor(
-					UnpackNativeBaseColor(command.packedColor),
-					tileColor);
+				const NiColorA& layerColor = sanitizedLayerColors[layer];
 				const NiColorA bakedColor = usesLiveTileRgb[layer]
 					? NiColorA{
 						baseColor.r * layerColor.r,
@@ -2178,7 +2210,8 @@ namespace fonthook::vectorfont
 					colorContractInitialized, bakedColor);
 				if (!WriteDirectQuadVertices(*placement,
 					command.pen, origin, offsetsX[layer],
-					offsetsY[layer], rasterScale, baselineOffset,
+					offsetsY[layer], rasterScale,
+					resolution.baselineOffset,
 					1.0f, false,
 					PackNativeBaseColor(bakedColor),
 					static_cast<UInt8>(
@@ -2203,6 +2236,15 @@ namespace fonthook::vectorfont
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::DirectShapeRangeInitializationBytesAvoided,
 			rangeInitializationBytesAvoided);
+		const UInt64 enabledLayerCount = static_cast<UInt64>(
+			std::count(enabled.begin(), enabled.end(), true));
+		if (enabledLayerCount > 1)
+		{
+			RecordFreeTypePerf(
+				FreeTypePerfCounter::DirectShapeCommonResolutionsSaved,
+				static_cast<UInt64>(glyphs.size()) * 2u
+					* (enabledLayerCount - 1u));
+		}
 		if (!colorContractInitialized)
 		{
 			result.outcome = DirectAtlasShapeOutcome::Failed;

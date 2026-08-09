@@ -2072,6 +2072,15 @@ before their readiness flag is published. The same final contiguous cursor
 proof protects publication. `direct_range_init_bytes_avoided` reports the
 redundant fixed-capacity initialization bytes omitted by these paths.
 
+The sealed CPU-effects compiler resolves table identity, record flags, encoded
+code, byte class, face index, and baseline once per glyph in each of its count
+and fill passes. Layer/page/snapshot validation remains per enabled effect
+layer. The fill pass visits glyphs first but writes through the existing
+layer/page cursors, so each published range retains the original glyph order.
+It also resolves the live base color once per glyph. The final contiguous
+cursor proof remains the publication gate; `direct_common_resolves_saved`
+reports the former per-layer repetitions removed by this route.
+
 Generated distance fields and ARGB-fallback masks and their supporting CPU
 objects are cached in process memory. Equivalent masks are shared across font
 IDs when the resolved font file/face, glyph, effective raster size, emboldening, slant, stroke or SDF
