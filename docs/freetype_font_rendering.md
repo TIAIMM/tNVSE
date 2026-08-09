@@ -1057,6 +1057,20 @@ comparison sort. The complete repair output is validated before any pointer is
 committed, and source-count, lookup, occurrence, run-coverage, or 8192-item
 envelope failure leaves the predecessor's array unchanged.
 
+The same final-array scan also records a dense sorted-item-to-frame-entry index.
+Retail `RenderAlphaGeometry` writes its current reverse-traversal item to
+`NiBackToFrontAccumulator::m_iCurrItem` at offset `0x2C` before the
+`0xB64FD1 -> 0xB994F0` immediate call, so an exact stock traversal can select
+the already-built frame entry without hashing the facade pointer again. The
+direct route requires the captured retail predecessor, unchanged item count,
+the live `m_ppkItems[m_iCurrItem]` pointer, and the selected entry's facade to
+all agree. A mixed equal-depth run changed by tNVSE invalidates every direct
+slot in that run; a plugin predecessor, nested traversal, pointer mutation, or
+any mismatch uses the existing facade-hash lookup. Duplicate facade occurrences
+remain valid because each sorted occurrence points to the same unique frame
+entry. `frame_entry_index_hits` and `frame_entry_hash_lookups` in
+`tnvse_freetype_accumulator_prep` report the two routes.
+
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
 remains valid vanilla geometry, but every occurrence uses the complete packet-
@@ -1148,8 +1162,8 @@ the frame context and published only after preflight, rather than atomically
 updated per shape.
 The thin registration route performs no visibility work.
 The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
-returns, metadata acquisitions avoided by proven culls, and traversals with no
-prepared payload.
+returns, metadata acquisitions avoided by proven culls, direct-index versus
+facade-hash frame-entry lookups, and traversals with no prepared payload.
 
 ### Vanilla-layout distance-field target
 

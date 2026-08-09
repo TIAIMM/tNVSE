@@ -167,6 +167,8 @@ namespace fonthook::vectorfont
 		SortedFrameFacade,
 		SortedFramePayload,
 		SortedFrameLookupHit,
+		SortedFrameItemIndexLookupHit,
+		SortedFrameFacadeHashLookup,
 		PreflightFastHit,
 		PreflightFullValidation,
 		DirectStaticResidencyHit,

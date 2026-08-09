@@ -40,6 +40,9 @@ namespace fonthook::vectorfont
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumLinearTieRepairItems = 8192;
 		inline constexpr UInt32 kRegisterRouteSampleRate = 256;
+		ASSERT_OFFSET(NiBackToFrontAccumulator, m_iNumItems, 0x1C);
+		ASSERT_OFFSET(NiBackToFrontAccumulator, m_ppkItems, 0x24);
+		ASSERT_OFFSET(NiBackToFrontAccumulator, m_iCurrItem, 0x2C);
 
 		using TileRegisterObjectFn = bool(__cdecl*)(BSShaderAccumulator*,
 			NiGeometry*, const NiPropertyState*, BSShaderProperty*, BSShader*);
@@ -125,6 +128,10 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> metadataAcquireEntryIndices;
 			std::vector<UInt32> metadataLookup;
 			std::vector<UInt32> sortedOccurrenceCounts;
+			// Retail B64F90 publishes m_iCurrItem before each B994F0 call.  This
+			// dense final-Sort index maps that item directly to frameEntries; an
+			// invalid slot retains the facade-hash fallback.
+			std::vector<UInt32> sortedFrameEntryIndices;
 			std::vector<UInt32> tieSortedLookup;
 			std::vector<UInt32> tieSortedOccurrenceCursor;
 			std::vector<UInt32> tieSortedOccurrenceNext;
@@ -142,6 +149,7 @@ namespace fonthook::vectorfont
 			UInt64 nextValidationToken = 0;
 			UInt64 activeValidationToken = 0;
 			bool active = false;
+			bool stockRenderAlphaTraversal = false;
 		};
 
 		thread_local SortedPayloadScratch s_sortedPayloadScratch;
@@ -377,6 +385,7 @@ namespace fonthook::vectorfont
 					* sizeof(UInt32)
 				+ scratch.metadataLookup.capacity() * sizeof(UInt32)
 				+ scratch.sortedOccurrenceCounts.capacity() * sizeof(UInt32)
+				+ scratch.sortedFrameEntryIndices.capacity() * sizeof(UInt32)
 				+ scratch.tieSortedLookup.capacity() * sizeof(UInt32)
 				+ scratch.tieSortedOccurrenceCursor.capacity() * sizeof(UInt32)
 				+ scratch.tieSortedOccurrenceNext.capacity() * sizeof(UInt32)
@@ -402,10 +411,12 @@ namespace fonthook::vectorfont
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireEntryIndices.clear();
 			scratch.sortedOccurrenceCounts.clear();
+			scratch.sortedFrameEntryIndices.clear();
 			scratch.tieRuns.clear();
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
+			scratch.stockRenderAlphaTraversal = false;
 		}
 
 		void ClearSortedFrame(SortedPayloadScratch& scratch)
@@ -421,6 +432,7 @@ namespace fonthook::vectorfont
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireEntryIndices.clear();
 			scratch.sortedOccurrenceCounts.clear();
+			scratch.sortedFrameEntryIndices.clear();
 			scratch.tieSortedLookup.clear();
 			scratch.tieSortedOccurrenceCursor.clear();
 			scratch.tieSortedOccurrenceNext.clear();
@@ -430,6 +442,7 @@ namespace fonthook::vectorfont
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
+			scratch.stockRenderAlphaTraversal = false;
 
 			if (scratch.metadataShapes.capacity() > 8192)
 				std::vector<NiTriShape*>().swap(scratch.metadataShapes);
@@ -449,6 +462,8 @@ namespace fonthook::vectorfont
 				std::vector<UInt32>().swap(scratch.metadataLookup);
 			if (scratch.sortedOccurrenceCounts.capacity() > 8192)
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
+			if (scratch.sortedFrameEntryIndices.capacity() > 8192)
+				std::vector<UInt32>().swap(scratch.sortedFrameEntryIndices);
 			if (scratch.tieSortedLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.tieSortedLookup);
 			if (scratch.tieSortedOccurrenceCursor.capacity() > 16384)
@@ -489,6 +504,8 @@ namespace fonthook::vectorfont
 					scratch.metadataAcquireEntryIndices);
 				std::vector<UInt32>().swap(scratch.metadataLookup);
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
+				std::vector<UInt32>().swap(
+					scratch.sortedFrameEntryIndices);
 				std::vector<UInt32>().swap(scratch.tieSortedLookup);
 				std::vector<UInt32>().swap(
 					scratch.tieSortedOccurrenceCursor);
@@ -783,14 +800,25 @@ namespace fonthook::vectorfont
 					continue;
 				++result.changedRuns;
 				for (UInt32 item = run.begin; item < run.end; ++item)
+				{
 					accumulator.m_ppkItems[item] = scratch.tieOutput[item];
+					// This exact-depth run no longer has the item-to-entry order
+					// captured by the first final-array scan.  Invalidate the whole
+					// run so dispatch uses the facade hash instead of a stale index.
+					if (item < scratch.sortedFrameEntryIndices.size())
+					{
+						scratch.sortedFrameEntryIndices[item] =
+							kInvalidNativeFontCommandIndex;
+					}
+				}
 			}
 			result.valid = true;
 			return result;
 		}
 
 		bool CaptureSortedTrackedShapeTopology(SortedPayloadScratch& scratch,
-			BSShaderAccumulator* accumulator, SInt64* topologyTicks)
+			BSShaderAccumulator* accumulator, bool stockRenderAlphaTraversal,
+			SInt64* topologyTicks)
 		{
 			const SInt64 topologyStart = BeginFreeTypePerfSample();
 			auto finishTopology = [&](bool result)
@@ -814,6 +842,8 @@ namespace fonthook::vectorfont
 
 			const size_t itemCount =
 				static_cast<size_t>(accumulator->m_iNumItems);
+			scratch.sortedFrameEntryIndices.assign(
+				itemCount, kInvalidNativeFontCommandIndex);
 			PrepareLookup(scratch.metadataLookup, itemCount);
 			const size_t metadataMask = scratch.metadataLookup.size() - 1u;
 			const bool trackEqualDepthRuns = accumulator->m_pfDepths != nullptr;
@@ -862,6 +892,8 @@ namespace fonthook::vectorfont
 
 				NiTriShape* facade = static_cast<NiTriShape*>(geometry);
 				size_t slot = HashPointer(facade) & metadataMask;
+				size_t capturedMetadataIndex =
+					std::numeric_limits<size_t>::max();
 				bool accounted = false;
 				for (size_t probe = 0;
 					probe < scratch.metadataLookup.size(); ++probe)
@@ -875,6 +907,7 @@ namespace fonthook::vectorfont
 						scratch.sortedOccurrenceCounts.push_back(1);
 						scratch.metadataLookup[slot] =
 							static_cast<UInt32>(metadataIndex + 1u);
+						capturedMetadataIndex = metadataIndex;
 						accounted = true;
 						break;
 					}
@@ -884,18 +917,25 @@ namespace fonthook::vectorfont
 						&& scratch.metadataShapes[metadataIndex] == facade)
 					{
 						++scratch.sortedOccurrenceCounts[metadataIndex];
+						capturedMetadataIndex = metadataIndex;
 						accounted = true;
 						break;
 					}
 					slot = (slot + 1u) & metadataMask;
 				}
-				if (!accounted)
+				if (!accounted
+					|| capturedMetadataIndex
+						>= static_cast<size_t>(kInvalidNativeFontCommandIndex))
 				{
 					scratch.metadataShapes.clear();
 					scratch.sortedOccurrenceCounts.clear();
+					scratch.sortedFrameEntryIndices.clear();
 					++s_thinRegistrationDiagnostics.sortedScanFallback;
 					return finishTopology(false);
 				}
+				scratch.sortedFrameEntryIndices[
+					static_cast<size_t>(itemIndex)] =
+						static_cast<UInt32>(capturedMetadataIndex);
 			}
 			if (trackEqualDepthRuns
 				&& activeRunHasDirectFacade && activeRunHasForeignGeometry)
@@ -935,6 +975,7 @@ namespace fonthook::vectorfont
 			}
 
 			scratch.frameAccumulator = accumulator;
+			scratch.stockRenderAlphaTraversal = stockRenderAlphaTraversal;
 			return finishTopology(true);
 		}
 
@@ -1417,7 +1458,12 @@ namespace fonthook::vectorfont
 						&prepTailSample.resetTicks);
 					ResetSortedPrepScratch(scratch);
 				}
+				const bool stockRenderAlphaTraversal =
+					state.predecessorRenderAlphaGeometry
+						== reinterpret_cast<RenderAlphaGeometryFn>(
+							kBSShaderAccumulatorRenderAlphaGeometry);
 				CaptureSortedTrackedShapeTopology(scratch, accumulator,
+					stockRenderAlphaTraversal,
 					&prepTailSample.topologyTicks);
 				if (scratch.metadataShapes.empty())
 				{
@@ -2063,24 +2109,63 @@ namespace fonthook::vectorfont
 		const SortedPayloadScratch& scratch = s_sortedPayloadScratch;
 		if (!scratch.active || !facade)
 			return false;
-		const size_t index = LookupSortedFacade(scratch, facade);
-		if (index == std::numeric_limits<size_t>::max()
-			|| index >= scratch.frameEntries.size())
+
+		const auto publishEntry = [&](size_t index)
 		{
-			return false;
+			if (index == std::numeric_limits<size_t>::max()
+				|| index >= scratch.frameEntries.size())
+			{
+				return false;
+			}
+			const SortedFrameEntry& entry = scratch.frameEntries[index];
+			if (entry.facade != facade)
+				return false;
+			view.metadata = entry.metadata;
+			view.payload = entry.payload;
+			view.preflightResult = entry.preflightResult;
+			view.visibility = &entry.visibility;
+			view.generation = entry.generation;
+			view.validationToken = entry.validationToken;
+			view.commandSpanIndex = entry.commandSpanIndex;
+			view.singlePacketCommandIndex =
+				entry.singlePacketCommandIndex;
+			RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
+			return true;
+		};
+
+		// Retail B64F90 stores the reverse traversal index at this+0x2C before
+		// its B64FD1 -> B994F0 call.  Use it only for the exact stock predecessor
+		// and only while the live item count, array slot, and captured facade all
+		// agree.  A plugin traversal, tie repair, mutation, or nested route falls
+		// through to the identity-based hash table.
+		const BSShaderAccumulator* accumulator = scratch.frameAccumulator;
+		if (scratch.stockRenderAlphaTraversal && accumulator
+			&& accumulator->m_iNumItems > 0
+			&& static_cast<size_t>(accumulator->m_iNumItems)
+				== scratch.sortedFrameEntryIndices.size()
+			&& accumulator->m_ppkItems)
+		{
+			const SInt32 currentItem = accumulator->m_iCurrItem;
+			if (currentItem >= 0
+				&& static_cast<size_t>(currentItem)
+					< scratch.sortedFrameEntryIndices.size()
+				&& accumulator->m_ppkItems[currentItem] == facade)
+			{
+				const UInt32 entryIndex = scratch.sortedFrameEntryIndices[
+					static_cast<size_t>(currentItem)];
+				if (entryIndex != kInvalidNativeFontCommandIndex
+					&& publishEntry(static_cast<size_t>(entryIndex)))
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						SortedFrameItemIndexLookupHit);
+					return true;
+				}
+			}
 		}
-		const SortedFrameEntry& entry = scratch.frameEntries[index];
-		view.metadata = entry.metadata;
-		view.payload = entry.payload;
-		view.preflightResult = entry.preflightResult;
-		view.visibility = &entry.visibility;
-		view.generation = entry.generation;
-		view.validationToken = entry.validationToken;
-		view.commandSpanIndex = entry.commandSpanIndex;
-		view.singlePacketCommandIndex =
-			entry.singlePacketCommandIndex;
-		RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameLookupHit);
-		return true;
+
+		RecordFreeTypePerf(
+			FreeTypePerfCounter::SortedFrameFacadeHashLookup);
+		return publishEntry(LookupSortedFacade(scratch, facade));
 	}
 
 	UInt64 GetNativeFontSortedFrameValidationToken()
