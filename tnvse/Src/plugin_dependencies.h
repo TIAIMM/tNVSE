@@ -8,7 +8,7 @@ namespace fonthook::dependencies
 	inline constexpr UInt32 kJipBigGunsVersion = 5730;
 	inline constexpr UInt32 kJipKeyEventFilterVersion = 5730;
 	inline constexpr const char* kStewieTweaksPluginName = "lStewieAl's Tweaks";
-	inline constexpr UInt32 kStewieTweaksMinVersion = 990;
+	inline constexpr UInt32 kStewieTweaksMinVersion = 995;
 	inline constexpr const char* kShaderLoaderDllName = "Fallout Shader Loader.dll";
 	inline constexpr UInt32 kShaderLoaderMinVersion = 140;
 

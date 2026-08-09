@@ -14,8 +14,8 @@ namespace fonthook
 		constexpr UInt32 kStewMenu_SubsettingInputFieldText = 103;
 		constexpr UInt32 kStewieMaxShadowBytes = 1023;
 		constexpr UInt32 kMenuHandleKeyboardInputVTableOffset = 0x30;
-		// Stewie Tweaks 9.90-9.95 keeps the two editable InputField members at
-		// these offsets.  The 9.95 private symbols describe a 0x190-byte
+		// Stewie Tweaks 9.95 defines the two editable InputField members at these
+		// offsets. The 9.95 private symbols describe a 0x190-byte
 		// StewMenu with subSettingInput at 0xE8 and searchBar at 0x118.
 		// Accessing the two validated locations is both faster and safer than
 		// probing arbitrary pointer-aligned words beyond the live object.
@@ -152,7 +152,7 @@ namespace fonthook
 			if (!root)
 				return nullptr;
 
-			// The search field has a stable named path in Stewie Tweaks 9.90+.
+			// The search field has a stable named path in Stewie Tweaks 9.95+.
 			// Following four direct child links avoids recursively walking the
 			// live Tile tree while StewMenu is performing mouse hit-testing.
 			return root->GetTileByPath(

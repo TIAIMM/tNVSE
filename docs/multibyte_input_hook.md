@@ -34,7 +34,7 @@ tNVSE 已经具备的相关能力：
 - 原版 `TextEditMenu` 的 ASCII 插入、IME commit、退格、删除、左右移动、Home/End 均走 DBCS-aware 编辑层。
 - 玩家名输入保留 validator 特例；`0x7AB740` 只包装 `TextEditMenu::Open` 来替换玩家名 validator，不改变通用打开逻辑。
 - JIP LN `ShowTextInputMenu` 已按 JIP 自定义字段布局单独处理，使用 `JipTextInputAdapterEx` 临时链回 JIP 写入 `0x1070064` 的 input handler，不再把 JIP 的 `inputRect` / `minLength` / `maxLength` 误当成原版 `TextEditState` 字段。
-- Stewie Tweaks 9.90+ 已单独作为 `StewieTweaksInputTarget` 适配；不改 Stewie DLL，覆盖 StewMenu 搜索、StewMenu 字符串子设置输入，以及 Stewie MenuSearch 在常见菜单中的搜索框。
+- Stewie Tweaks 9.95+ 已单独作为 `StewieTweaksInputTarget` 适配；不改 Stewie DLL，覆盖 StewMenu 搜索、StewMenu 字符串子设置输入，以及 Stewie MenuSearch 在常见菜单中的搜索框。
 - 正式版静态 xref 显示 `0x7E6320` 当前由 `PlayerNameEntryMenu` 调用；存档名显示链路是下游保存名生成和 sidecar 映射，不应把它误写成已经确认的 `TextEditMenu` 保存名输入框。
 
 ## 参考项目结论
@@ -650,7 +650,7 @@ Stewie Tweaks 的搜索框不是原版 `TextEditMenu`，也不是 JIP 的 `ShowT
 
 - `[MultibyteInput] bMultibyteInput=1`。
 - `[MultibyteInput] bMultibyteInputStewieTweaks=1`。
-- NVSE 插件表中存在 `lStewieAl's Tweaks`，且版本大于等于 9.90 / `990`。低于该版本不主动启用，避免字段布局或 vtable patch 变化导致误写。
+- NVSE 插件表中存在 `lStewieAl's Tweaks`，且版本大于等于 9.95 / `995`。低于该版本不主动启用，避免字段布局或 vtable patch 变化导致误写。
 
 当前覆盖范围：
 
@@ -670,9 +670,9 @@ hook 策略：
 - 主循环以 50 ms 间隔观察 StewMenu 的真实 `InputField` 状态；菜单对象消失，或搜索/字符串子设置的 active 状态关闭时，会同时清除 shadow、composition/candidate 快照、输入会话和原生 Tile 候选层，而不是只丢弃观察指针。由键盘 handler 刚激活的目标也会立即写入观察状态，因此在下一次轮询前关闭菜单不会留下悬空 IME 会话。
 - `Ctrl` 组合键直接链回 Stewie original，并清掉 tNVSE shadow，保留 `Ctrl-F`、`Ctrl-R` 等 Stewie 原行为。
 - MenuSearch 的会话状态以已经链回 Stewie 且返回 handled 的 `Ctrl-F`/`Ctrl-R` 结果为准；精确链式 hook 已经知道这次切换结果，不再启动第二次延迟状态同步。Inventory、Stats、Map 的键盘 handler 实际按各自的 `IsSearchMode` 接受字符，而 `InputField::SetActive()` 写入 Tile 的 `_IsActive` 只是显示镜像：实测它会在空串光标闪烁和 IME composition 期间短暂读为 `0`，即使 `InputField` 仍显示光标且 `IsSearchMode` 仍接受输入。因此 `_IsActive == 1` 只用于丢失显式边沿后的恢复提示，`_IsActive == 0` 不再关闭输入会话；菜单关闭、菜单对象消失、搜索 Tile 被真正替换、对应页不可见或显式 `Ctrl-F`/`Ctrl-R` 才结束接管。
-- Save/Load 搜索属于仍常驻的 `StartMenu (1013)`，离开保存/读取子页后不能用 StartMenu 可见性判断。tNVSE 按 Stewie 9.90+ 的同一布局读取 `StartMenu::savesList`（`+0x174`）的 `ListBox::parentTile`（合计 `+0x180`），并使用 Stewie `savesList.IsEnabled()` 等价的 `_enabled` trait 结束会话。搜索 Tile 的 `visible`/`alpha` 仍只用于诊断，不参与存活判定；这样列表刷新时的瞬时渲染 trait 改写不会重新引入候选层高频闪烁。
+- Save/Load 搜索属于仍常驻的 `StartMenu (1013)`，离开保存/读取子页后不能用 StartMenu 可见性判断。tNVSE 按 Stewie 9.95+ 的同一布局读取 `StartMenu::savesList`（`+0x174`）的 `ListBox::parentTile`（合计 `+0x180`），并使用 Stewie `savesList.IsEnabled()` 等价的 `_enabled` trait 结束会话。搜索 Tile 的 `visible`/`alpha` 仍只用于诊断，不参与存活判定；这样列表刷新时的瞬时渲染 trait 改写不会重新引入候选层高频闪烁。
 
-`StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.90+ 源码布局只读判断：
+`StewMenu::subSettingInput` 使用 Stewie 自己的 `InputField`，当前按 Stewie 9.95+ 源码布局只读判断：
 
 ```cpp
 struct InputField
@@ -925,7 +925,7 @@ ASCII 输入可以继续走原版 `TextEditState::Input`，但只要当前 buffe
 
 ### Stewie Tweaks
 
-- Stewie Tweaks 版本大于等于 9.90 时，日志出现一次 `Stewie Tweaks version ... detected` 和对应 handler chain 日志。
+- Stewie Tweaks 版本大于等于 9.95 时，日志出现一次 `Stewie Tweaks version ... detected` 和对应 handler chain 日志。
 - StewMenu 中 `Ctrl-F` 打开搜索，输入中文后候选选择只提交汉字，拼音/假名预编辑串不残留。
 - StewMenu 搜索框中 Backspace/Delete/Left/Right/Home/End 不拆分多字节字符，`Ctrl-R` 清空仍走 Stewie 原逻辑。
 - StewMenu 字符串子设置输入只在 string 输入项启用；数字、浮点、十六进制、Hotkey 子设置仍由 Stewie 原逻辑处理。
@@ -994,7 +994,7 @@ ASCII 输入可以继续走原版 `TextEditState::Input`，但只要当前 buffe
 - 开启 `bMultibyteInputCompositionPreview=1` 时，能显示当前输入法名称、中文/英文或对应语言模式、全角/半角、composition 和 TSF/IMM32 candidate list；关闭时回到 commit-only 行为。
 - 编辑框打字期间能正确显示当前 `uiEncoding` 对应字符。
 - Backspace/delete/left/right 不拆 DBCS。
-- Stewie Tweaks 9.90+ 的 StewMenu 搜索、string 子设置输入和常见 MenuSearch 搜索框不残留预编辑串，编辑键不拆多字节字符。
+- Stewie Tweaks 9.95+ 的 StewMenu 搜索、string 子设置输入和常见 MenuSearch 搜索框不残留预编辑串，编辑键不拆多字节字符。
 - MCM Extender 搜索由纯 tNVSE target 接管编辑并复用原 UDF，且没有修改 mod 文件或 hook `Sv_Find`。
 - Dialogue History 搜索保留 500 ms 防抖并复用原 UDF，且没有修改 mod 文件或 hook `Sv_Find`。
 - 实际 `.fos` 文件名仍由原版 sanitizer 生成。

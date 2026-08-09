@@ -16,6 +16,11 @@ This avoids changing `SaveGameData::pName`, the actual load path, delete/rename 
   the same vanilla-equivalent sanitizer before `0x850030` constructs the
   physical path. The original name has already been copied into the save header
   at this point, so only the `.fos`/co-save filesystem identity is changed.
+- Hook installation and PostLoad reconciliation support Stewie Tweaks 9.95 and
+  newer by NVSE plugin
+  version plus live module ownership. It deliberately does not match a DLL
+  hash, fixed RVA, or compiled byte prefix, so compatible later builds are not
+  rejected merely because their compiler output changed.
 - ASCII-only custom save names pass through unchanged. The custom-save safety
   hook remains active when `bSaveDisplayNameMap=0`; that setting controls only
   sidecar capture and load-list recognition.

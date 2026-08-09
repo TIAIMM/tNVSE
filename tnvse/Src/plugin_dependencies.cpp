@@ -94,13 +94,13 @@ namespace fonthook::dependencies
 			if (!IsPluginInfoValid(info))
 			{
 				AddMissingIssue(issues, "bMultibyteInputStewieTweaks",
-					kStewieTweaksPluginName, "version 9.90 or newer");
+					kStewieTweaksPluginName, "version 9.95 or newer");
 			}
 			else if (info->version < kStewieTweaksMinVersion)
 			{
 				AddVersionIssue(issues, "bMultibyteInputStewieTweaks",
 					kStewieTweaksPluginName, info->version,
-					"version 9.90 or newer");
+					"version 9.95 or newer");
 			}
 		}
 

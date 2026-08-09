@@ -136,6 +136,12 @@ slot, and therefore is not counted above.
 The last two sites install as one transaction. A failed verification restores
 only a site still calling tNVSE and never overwrites a later owner.
 
+At initial installation and PostLoad, the `0x850545` chain accepts vanilla or
+a target owned by `nvse_stewie_tweaks.dll` whose NVSE plugin version is at
+least 9.95. It does not depend on a Stewie DLL hash, fixed RVA, or machine-code
+signature; the exact forwarding-edge guard prevents unbounded recursion if a
+later Stewie implementation creates a two-node predecessor cycle.
+
 ### Input hooks (`input/*.cpp`)
 
 | Site | Form | Typed target / ABI |

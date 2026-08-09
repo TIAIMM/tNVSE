@@ -9,7 +9,6 @@
 #include "tnvse.h"
 
 #include <algorithm>
-#include <array>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -39,21 +38,6 @@ namespace fonthook
 		constexpr SIZE_T kVanillaOpenSaveFile = 0x850030;
 		constexpr const char* kStewieTweaksModuleName =
 			"nvse_stewie_tweaks.dll";
-		constexpr UInt32 kStewieSaveHookVersion990 = 990;
-		constexpr UInt32 kStewieSaveHookVersion995 = 995;
-		// Release 9.90 and the audited 9.95 source both forward the same four
-		// stack arguments to vanilla 0x850030. The 9.90 binary emits this exact
-		// prefix; a different code generator/version fails closed at PostLoad.
-		constexpr std::array<UInt8, 24>
-			kStewieOpenSaveFileForwardPrefix = {
-				0x56,
-				0xFF, 0x74, 0x24, 0x14,
-				0xB8, 0x30, 0x00, 0x85, 0x00,
-				0xFF, 0x74, 0x24, 0x14,
-				0xFF, 0x74, 0x24, 0x14,
-				0xFF, 0x74, 0x24, 0x14,
-				0xFF, 0xD0,
-			};
 		constexpr SIZE_T kSaveLoadManagerSingleton = 0x11DE134;
 
 		constexpr UInt32 kStoreMagic = 'SVDN';
@@ -153,12 +137,11 @@ namespace fonthook
 			PostLoad,
 		};
 
-		struct StewieOpenSaveFileContract
+		struct StewieOpenSaveFileCompatibility
 		{
 			bool moduleOwned = false;
 			bool pluginInfoValid = false;
-			bool versionSupported = false;
-			bool forwardingPrefixMatches = false;
+			bool versionAtLeastMinimum = false;
 			UInt32 version = 0;
 		};
 
@@ -700,11 +683,11 @@ namespace fonthook
 				&& region.AllocationBase == module;
 		}
 
-		StewieOpenSaveFileContract InspectStewieOpenSaveFileContract(
+		StewieOpenSaveFileCompatibility InspectStewieOpenSaveFileCompatibility(
 			SIZE_T target)
 		{
-			StewieOpenSaveFileContract contract;
-			contract.moduleOwned = IsAddressOwnedByModule(target,
+			StewieOpenSaveFileCompatibility compatibility;
+			compatibility.moduleOwned = IsAddressOwnedByModule(target,
 				GetModuleHandleA(kStewieTweaksModuleName));
 
 			const PluginInfo* const info = g_cmdTableInterface
@@ -712,40 +695,14 @@ namespace fonthook
 				? g_cmdTableInterface->GetPluginInfoByName(
 					dependencies::kStewieTweaksPluginName)
 				: nullptr;
-			contract.pluginInfoValid = dependencies::IsPluginInfoValid(info);
-			contract.version = contract.pluginInfoValid ? info->version : 0;
-			contract.versionSupported = contract.pluginInfoValid
-				&& (contract.version == kStewieSaveHookVersion990
-					|| contract.version == kStewieSaveHookVersion995);
-			contract.forwardingPrefixMatches = contract.moduleOwned
-				&& hook_identity::IsAccessibleRegion(target,
-					kStewieOpenSaveFileForwardPrefix.size(), true)
-				&& std::memcmp(reinterpret_cast<const void*>(target),
-					kStewieOpenSaveFileForwardPrefix.data(),
-					kStewieOpenSaveFileForwardPrefix.size()) == 0;
-			return contract;
-		}
-
-		bool IsKnownPostLoadOpenSaveFilePredecessor(SIZE_T target,
-			StewieOpenSaveFileContract& stewieContract)
-		{
-			// Vanilla has no predecessor state and therefore cannot recurse
-			// through tNVSE. Pointer equality with a previously captured wrapper is
-			// not sufficient: that wrapper may have been reinstalled later and may
-			// now retain tNVSE as its own predecessor.
-			if (target == kVanillaOpenSaveFile)
-			{
-				return true;
-			}
-
-			// Stewie is accepted only when both its reported version and the live
-			// machine-code forwarding contract are recognized. Module ownership or
-			// equality with a saved address alone is insufficient: a wrapper which
-			// retained tNVSE would recurse if placed below it again.
-			stewieContract = InspectStewieOpenSaveFileContract(target);
-			return stewieContract.moduleOwned
-				&& stewieContract.versionSupported
-				&& stewieContract.forwardingPrefixMatches;
+			compatibility.pluginInfoValid = dependencies::IsPluginInfoValid(info);
+			compatibility.version = compatibility.pluginInfoValid
+				? info->version : 0;
+			compatibility.versionAtLeastMinimum =
+				compatibility.pluginInfoValid
+				&& compatibility.version
+					>= dependencies::kStewieTweaksMinVersion;
+			return compatibility;
 		}
 
 		const char* OpenSaveFileHookPhaseName(OpenSaveFileHookPhase phase)
@@ -777,12 +734,56 @@ namespace fonthook
 				return false;
 			}
 
+			// Stewie 9.95 and newer form the supported compatibility boundary.
+			// Identify the live owner by plugin metadata and module ownership instead
+			// of tying tNVSE to an RVA, byte prefix, compiler, or DLL hash.
+			const StewieOpenSaveFileCompatibility currentStewieCompatibility =
+				InspectStewieOpenSaveFileCompatibility(currentTarget);
+			if (currentStewieCompatibility.moduleOwned
+				&& !currentStewieCompatibility.versionAtLeastMinimum)
+			{
+				gLog.FormattedMessage(
+					"tnvse_save_display_name: %s save sanitizer left unsupported Stewie owner unchanged site=%08X instruction=CALL rel32 current=%08X abi=__thiscall-via-__fastcall stewieInfo=%u stewieVersion=%u stewieMinVersion=%u; fail-closed",
+					phaseName,
+					static_cast<UInt32>(site.callAddress),
+					static_cast<UInt32>(currentTarget),
+					currentStewieCompatibility.pluginInfoValid ? 1u : 0u,
+					currentStewieCompatibility.version,
+					dependencies::kStewieTweaksMinVersion);
+				return false;
+			}
+
 			if (currentTarget == site.replacementTarget)
 			{
 				const bool predecessorValid =
 					s_nextOpenSaveFile != site.replacementTarget
 					&& hook_identity::IsExecutableTarget(
 						s_nextOpenSaveFile);
+				const StewieOpenSaveFileCompatibility predecessorStewieCompatibility =
+					InspectStewieOpenSaveFileCompatibility(s_nextOpenSaveFile);
+				if (phase == OpenSaveFileHookPhase::PostLoad
+					&& predecessorValid
+					&& predecessorStewieCompatibility.moduleOwned
+					&& !predecessorStewieCompatibility.versionAtLeastMinimum)
+				{
+					// The predecessor was captured before the complete plugin table was
+					// available. Restore it only while this CALL still belongs to tNVSE.
+					// If a successor appeared, retain s_nextOpenSaveFile because that
+					// successor may still forward through the published adapter.
+					SIZE_T observedTarget = currentTarget;
+					const bool rolledBack = site.RollbackOwned(
+						s_nextOpenSaveFile, &observedTarget);
+					gLog.FormattedMessage(
+						"tnvse_save_display_name: post-load save sanitizer rejected captured Stewie predecessor site=%08X instruction=CALL rel32 next=%08X stewieInfo=%u stewieVersion=%u stewieMinVersion=%u rollbackOwned=%u observed=%08X; fail-closed",
+						static_cast<UInt32>(site.callAddress),
+						static_cast<UInt32>(s_nextOpenSaveFile),
+						predecessorStewieCompatibility.pluginInfoValid ? 1u : 0u,
+						predecessorStewieCompatibility.version,
+						dependencies::kStewieTweaksMinVersion,
+						rolledBack ? 1u : 0u,
+						static_cast<UInt32>(observedTarget));
+					return false;
+				}
 				gLog.FormattedMessage(
 					"tnvse_save_display_name: %s save sanitizer %s site=%08X instruction=CALL rel32 current=%08X next=%08X abi=__thiscall-via-__fastcall",
 					phaseName,
@@ -793,23 +794,23 @@ namespace fonthook
 				return predecessorValid;
 			}
 
-			StewieOpenSaveFileContract stewieContract;
 			if (phase == OpenSaveFileHookPhase::PostLoad
-				&& !IsKnownPostLoadOpenSaveFilePredecessor(
-					currentTarget, stewieContract))
+				&& currentTarget != kVanillaOpenSaveFile
+				&& !(currentStewieCompatibility.moduleOwned
+					&& currentStewieCompatibility.versionAtLeastMinimum))
 			{
 				// An unknown owner may already retain tNVSE as its predecessor.
 				// Re-publishing above it could create tNVSE -> owner -> tNVSE.
 				gLog.FormattedMessage(
-					"tnvse_save_display_name: post-load save sanitizer left unknown owner unchanged site=%08X instruction=CALL rel32 current=%08X savedNext=%08X abi=__thiscall-via-__fastcall stewieOwned=%u stewieInfo=%u stewieVersion=%u stewieVersionSupported=%u vanillaForwardPrefix=%u; fail-closed",
+					"tnvse_save_display_name: post-load save sanitizer left unsupported owner unchanged site=%08X instruction=CALL rel32 current=%08X savedNext=%08X abi=__thiscall-via-__fastcall stewieOwned=%u stewieInfo=%u stewieVersion=%u stewieMinVersion=%u stewieVersionCompatible=%u; fail-closed",
 					static_cast<UInt32>(site.callAddress),
 					static_cast<UInt32>(currentTarget),
 					static_cast<UInt32>(s_nextOpenSaveFile),
-					stewieContract.moduleOwned ? 1u : 0u,
-					stewieContract.pluginInfoValid ? 1u : 0u,
-					stewieContract.version,
-					stewieContract.versionSupported ? 1u : 0u,
-					stewieContract.forwardingPrefixMatches ? 1u : 0u);
+					currentStewieCompatibility.moduleOwned ? 1u : 0u,
+					currentStewieCompatibility.pluginInfoValid ? 1u : 0u,
+					currentStewieCompatibility.version,
+					dependencies::kStewieTweaksMinVersion,
+					currentStewieCompatibility.versionAtLeastMinimum ? 1u : 0u);
 				return false;
 			}
 
