@@ -1098,6 +1098,10 @@ AlphaProperty lookups so the saving is measured without a per-facade timer.
 A preflight cull is revalidated when the final sorted entry is dispatched. A
 matching result is consumed without packet preparation, upload, Tile callbacks,
 or driver submission; an identity or frame mismatch revokes it and fails open.
+The dispatch gate compares the live transform and model bound directly against
+the stored bitwise witness in field order. It does not first materialize second
+13-word and 4-word snapshots on the stack; signed zero, NaN payloads, and every
+other floating-point bit pattern retain the same exact-match behavior.
 Surviving direct commands do not repeat the same visibility calculation. This
 leaves one conservative proof per facade instead of pre-slot and post-slot
 copies of equivalent work.

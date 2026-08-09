@@ -1511,16 +1511,13 @@ namespace fonthook::vectorfont
 			return reject(FreeTypePerfCounter::
 				VisibilityPreflightClipRevokeGeometry);
 		}
-		const std::array<UInt32, 13> currentTransformBits =
-			CaptureTransformBits(facade->m_kWorld);
-		if (currentTransformBits != witness.transformBits)
+		if (!SameLiveTransformBits(
+				witness.transformBits, facade->m_kWorld))
 		{
 			return reject(FreeTypePerfCounter::
 				VisibilityPreflightClipRevokeTransform);
 		}
-		const std::array<UInt32, 4> currentBoundBits =
-			CaptureBoundBits(data->m_kBound);
-		if (currentBoundBits != witness.boundBits)
+		if (!SameLiveBoundBits(witness.boundBits, data->m_kBound))
 		{
 			return reject(FreeTypePerfCounter::
 				VisibilityPreflightClipRevokeBound);
