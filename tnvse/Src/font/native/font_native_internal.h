@@ -415,12 +415,26 @@ namespace fonthook::vectorfont
 			vanillaLayoutResolvedShaders;
 	};
 
+	struct NativeFontCompositeConstructionWitness
+	{
+		float uniformSdfSpread = 0.0f;
+		float uniformDistanceParameterScale = 0.0f;
+		UInt8 staticLayerMask = 0;
+		bool complete = false;
+		bool registrationVerticesValid = false;
+		bool vanillaLayoutVerticesValid = false;
+	};
+
 	struct NativeFontCompositeSpan
 	{
 		UInt32 firstVertex = 0;
 		UInt32 vertexCount = 0;
 		UInt16 atlasPage = 0;
 		bool fused = false;
+		// The sealed direct compiler can prove the common full-span profile while
+		// it writes every vertex. Other producers leave this empty and retain the
+		// ordinary post-construction validation scan.
+		NativeFontCompositeConstructionWitness constructionWitness;
 	};
 
 	struct NativeFontCompiledPacketCommand;

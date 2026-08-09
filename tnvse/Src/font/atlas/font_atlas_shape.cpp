@@ -1058,6 +1058,14 @@ namespace fonthook::vectorfont
 				SanitizeNativeUvBound(source.glyphPlacement.u1);
 			const float glyphV1 =
 				SanitizeNativeUvBound(source.glyphPlacement.v1);
+			if (usesSdf
+				&& (!std::isfinite(inverseSourceToLogicalScale)
+					|| inverseSourceToLogicalScale < 1.0f
+					|| !layerMask || layerMask > 15u
+					|| glyphU0 > glyphU1 || glyphV0 > glyphV1))
+			{
+				return false;
+			}
 			for (UInt32 ordinal = 0; ordinal < 4; ++ordinal)
 			{
 				const NiPoint3& position = positions[ordinal];
@@ -2750,8 +2758,13 @@ namespace fonthook::vectorfont
 			{
 				rangeInitializationBytesAvoided += sizeof(pageProfileReady);
 			}
+			const bool directFullSpanComposite = distanceField
+				&& atlases.size() == 1u && !shadowHasOffset
+				&& physicalQuads == result.glyphCount
+				&& counts[0][0] == 0u
+				&& counts[1][0] == result.glyphCount;
 			std::vector<CompositeGlyphQuadSource> compositeSources;
-			if (distanceField)
+			if (distanceField && !directFullSpanComposite)
 				compositeSources.reserve(result.glyphCount);
 
 			for (size_t glyphIndex = 0;
@@ -2854,7 +2867,7 @@ namespace fonthook::vectorfont
 					result.outcome = DirectAtlasShapeOutcome::Failed;
 					return result;
 				}
-				if (distanceField)
+				if (distanceField && !directFullSpanComposite)
 				{
 					compositeSources.push_back({
 						bodyQuadIndex * 4u, page,
@@ -2946,10 +2959,47 @@ namespace fonthook::vectorfont
 				return result;
 			}
 			std::vector<NativeFontCompositeSpan> compositeSpans;
-			if (distanceField
-				&& !AppendOneGlyphCompositeQuads(vertices,
+			bool compositeReady = false;
+			if (directFullSpanComposite
+				&& vertices.size() == static_cast<size_t>(physicalQuads) * 4u
+				&& pageProfileReady[0])
+			{
+				NativeFontCompositeSpan span;
+				span.firstVertex = 0;
+				span.vertexCount = static_cast<UInt32>(vertices.size());
+				span.atlasPage = 0;
+				span.fused = true;
+				const float uniformDistanceParameterScale =
+					1.0f / pageSourceScales[0];
+				if (bodyLayerMask >= 1u && bodyLayerMask <= 15u
+					&& pageSdfSpreads[0] > 0u
+					&& std::isfinite(uniformDistanceParameterScale)
+					&& uniformDistanceParameterScale >= 1.0f)
+				{
+					span.constructionWitness.uniformSdfSpread =
+						static_cast<float>(pageSdfSpreads[0]);
+					span.constructionWitness.uniformDistanceParameterScale =
+						uniformDistanceParameterScale;
+					span.constructionWitness.staticLayerMask = bodyLayerMask;
+					span.constructionWitness.complete = true;
+					span.constructionWitness.registrationVerticesValid = true;
+					span.constructionWitness.vanillaLayoutVerticesValid = true;
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						DirectCompositeConstructionWitness);
+				}
+				compositeSpans.push_back(span);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					DirectCompositeSourceProofElementScanSaved,
+					result.glyphCount);
+				compositeReady = true;
+			}
+			else if (distanceField)
+			{
+				compositeReady = AppendOneGlyphCompositeQuads(vertices,
 					compositeSources, static_cast<UInt32>(atlases.size()),
-					effects, boundMinimum, boundMaximum, compositeSpans))
+					effects, boundMinimum, boundMaximum, compositeSpans);
+			}
+			if (distanceField && !compositeReady)
 			{
 				// Keep the ordinary layer packets as a functional fallback for
 				// oversized or malformed batches. Normal composite-capable text

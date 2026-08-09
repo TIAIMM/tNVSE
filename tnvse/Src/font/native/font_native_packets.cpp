@@ -652,6 +652,44 @@ namespace fonthook::vectorfont
 			if (!span.vertexCount || end > vertices.size())
 				return {};
 
+			const NativeFontCompositeConstructionWitness& construction =
+				span.constructionWitness;
+			const bool constructionWitnessValid = collectValidationWitness
+				&& construction.complete
+				&& construction.registrationVerticesValid
+				&& construction.vanillaLayoutVerticesValid
+				&& construction.staticLayerMask >= 1u
+				&& construction.staticLayerMask <= 15u
+				&& std::isfinite(construction.uniformSdfSpread)
+				&& construction.uniformSdfSpread > 0.0f
+				&& std::isfinite(
+					construction.uniformDistanceParameterScale)
+				&& construction.uniformDistanceParameterScale >= 1.0f;
+			if (constructionWitnessValid)
+			{
+				PayloadVertexValidationWitness validationWitness;
+				validationWitness.firstVertex = span.firstVertex;
+				validationWitness.vertexCount = span.vertexCount;
+				validationWitness.complete = true;
+				validationWitness.registrationVerticesValid = true;
+				validationWitness.vanillaLayoutVerticesValid = true;
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					DirectCompositeProfileVertexScanSaved,
+					span.vertexCount);
+				// Retain the existing counter's meaning: the fused profile resolver
+				// avoids two additional uniformity scans. The direct witness also
+				// avoids the one resolver traversal, recorded separately above.
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					TextArtifactCompositeProfileVertexScanSaved,
+					static_cast<UInt64>(span.vertexCount) * 2u);
+				return {
+					construction.staticLayerMask,
+					construction.uniformSdfSpread,
+					construction.uniformDistanceParameterScale,
+					validationWitness
+				};
+			}
+
 			const NativeFontGpuVertex& first = vertices[span.firstVertex];
 			const UInt32 firstMask = std::isfinite(first.layerMask)
 				? static_cast<UInt32>(first.layerMask) : 0u;

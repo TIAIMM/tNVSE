@@ -2102,6 +2102,21 @@ malformed geometry retain the previous validation and compatibility fallback.
 `composite_source_compaction_scan_saved` and
 `composite_alias_proof_scan_saved` report the exact removed source visits.
 
+The sealed direct MTSDF compiler applies the same principle before the generic
+artifact fallback is involved. For its exact single-page, no-offset-shadow,
+full-span Composite case, page-prefix construction already proves that every
+drawable glyph owns one sequential body quad. The compiler therefore publishes
+the Composite span directly instead of allocating and rescanning a temporary
+glyph-source vector. Its checked vertex writer and page-prefix profile jointly
+seal the uniform layer mask, SDF spread, distance scale, registration validity,
+and per-quad glyph UV bounds while those values are hot. Packet construction
+consumes that witness
+only when it covers the complete immutable vertex array; otherwise it executes
+the original profile and payload-validation traversal. The periodic counters
+`direct_composite_witness`, `direct_composite_source_scan_saved`, and
+`direct_composite_profile_vertex_scan_saved` distinguish the exact fast path
+from all compatibility fallbacks.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
