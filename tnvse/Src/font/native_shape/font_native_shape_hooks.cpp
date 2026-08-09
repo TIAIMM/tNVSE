@@ -1249,6 +1249,7 @@ namespace fonthook::vectorfont
 		thread_local VanillaLayoutStandardLiteBindingRunTracker
 			s_vanillaLayoutStandardLiteBindingRun;
 		thread_local UInt32 s_vanillaLayoutStandardLiteCpuSampleCursor = 0;
+		thread_local UInt32 s_nativeFontDispatchRouteSampleCursor = 0;
 
 		void FinishVanillaLayoutStandardLiteBindingRun()
 		{
@@ -1388,6 +1389,14 @@ namespace fonthook::vectorfont
 			const UInt32 sample =
 				s_vanillaLayoutStandardLiteCpuSampleCursor++;
 			return sample % kVanillaLayoutStandardLiteCpuSampleRate == 0u;
+		}
+
+		bool ShouldSampleNativeFontDispatchRoute()
+		{
+			if (!g_bEnableFreeTypeFontRenderingLog)
+				return false;
+			const UInt32 sample = s_nativeFontDispatchRouteSampleCursor++;
+			return sample % kNativeFontDispatchRouteCpuSampleRate == 0u;
 		}
 
 		bool BuildSegmentDeviceStateStamp(
@@ -5663,7 +5672,8 @@ namespace fonthook::vectorfont
 			RecordFreeTypeGpuEnvelopeNativeFacadePass();
 
 		FreeTypePerfScope dispatchRoutePerf(
-			FreeTypePerfPhase::DispatchRoute);
+			FreeTypePerfPhase::DispatchRoute,
+			ShouldSampleNativeFontDispatchRoute());
 		NativeFontSortedFrameEntryView frameEntry;
 		const bool sortedFrameHit =
 			FindNativeFontSortedFrameEntry(shape, frameEntry);

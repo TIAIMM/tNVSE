@@ -1455,6 +1455,12 @@ namespace fonthook::vectorfont
 					ClearSortedFrame(scratch);
 					return;
 				}
+				// All per-item diagnostics inside a tracked traversal retain exact totals,
+				// but publish only once per touched counter when the stock alpha loop
+				// returns. Empty/foreign traversals keep the cheaper direct counter path.
+				// The route timer was declared outside, so the final flush remains part of
+				// the measured end-to-end CPU cost.
+				FreeTypePerfCounterBatchScope perfCounterBatch;
 
 				// Visibility is now the first post-Sort preflight. The tracked shape owns
 				// the final model bound and Tile/scissor state, so a proven cull does

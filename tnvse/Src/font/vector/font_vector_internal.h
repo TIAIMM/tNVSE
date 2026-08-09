@@ -538,6 +538,10 @@ namespace fonthook::vectorfont
 		VanillaLayoutStandardLiteBindingRunLength9To16,
 		VanillaLayoutStandardLiteBindingRunLength17To32,
 		VanillaLayoutStandardLiteBindingRunLength33Plus,
+		PerfCounterBatchScope,
+		PerfCounterBatchRecord,
+		PerfCounterBatchAtomicFlush,
+		PerfCounterBatchAtomicSaved,
 		Count,
 	};
 	static_assert(
@@ -546,6 +550,25 @@ namespace fonthook::vectorfont
 
 	void RecordFreeTypePerf(FreeTypePerfCounter aeCounter, UInt64 auiAmount = 1);
 	void ReportFreeTypePerf();
+
+	// A render traversal may report the same small set of counters thousands of
+	// times. On Win32, a 64-bit atomic add is substantially more expensive than a
+	// plain TLS increment. This scope retains exact totals while coalescing every
+	// touched counter into one atomic publication at the traversal boundary.
+	class FreeTypePerfCounterBatchScope
+	{
+	public:
+		explicit FreeTypePerfCounterBatchScope(bool abEnabled = true);
+		~FreeTypePerfCounterBatchScope();
+
+		FreeTypePerfCounterBatchScope(
+			const FreeTypePerfCounterBatchScope&) = delete;
+		FreeTypePerfCounterBatchScope& operator=(
+			const FreeTypePerfCounterBatchScope&) = delete;
+
+	private:
+		bool m_active = false;
+	};
 
 	enum class FreeTypePerfPhase : UInt8
 	{
@@ -606,6 +629,8 @@ namespace fonthook::vectorfont
 		Count,
 	};
 	inline constexpr UInt32 kVanillaLayoutStandardLiteCpuSampleRate = 256u;
+	inline constexpr UInt32 kNativeFontDispatchRouteCpuSampleRate = 256u;
+	inline constexpr UInt32 kNativeFontVisibilityHonorCpuSampleRate = 256u;
 	struct FreeTypeAccumulatorPrepTailSample
 	{
 		SInt64 totalTicks = 0;

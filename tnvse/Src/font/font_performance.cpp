@@ -29,6 +29,18 @@ namespace fonthook::vectorfont
 		constexpr UInt32 kVanillaLayoutGpuTimingSampleRate = 16u;
 		constexpr size_t kGpuVanillaLayoutDrawBucketCount = 5;
 
+		struct PerfCounterBatchState
+		{
+			std::array<UInt64, kCounterCount> values = {};
+			std::array<UInt16, kCounterCount> touched = {};
+			size_t touchedCount = 0;
+			UInt64 recordCount = 0;
+			UInt64 scopeCount = 0;
+			UInt32 depth = 0;
+		};
+
+		thread_local PerfCounterBatchState s_perfCounterBatch;
+
 		enum class GpuTimingCounter : size_t
 		{
 			Submitted = 0,
@@ -1117,12 +1129,83 @@ namespace fonthook::vectorfont
 
 	void RecordFreeTypePerf(FreeTypePerfCounter counter, UInt64 amount)
 	{
-		if (g_bEnableFreeTypeFontRenderingLog)
+		if (!g_bEnableFreeTypeFontRenderingLog || !amount)
+			return;
+		const size_t counterIndex = static_cast<size_t>(counter);
+		PerfCounterBatchState& batch = s_perfCounterBatch;
+		if (batch.depth)
 		{
-			GetPerformanceState().counters[
-				static_cast<size_t>(counter)].fetch_add(
-					amount, std::memory_order_relaxed);
+			if (!batch.values[counterIndex])
+			{
+				batch.touched[batch.touchedCount++] =
+					static_cast<UInt16>(counterIndex);
+			}
+			batch.values[counterIndex] += amount;
+			++batch.recordCount;
+			return;
 		}
+		GetPerformanceState().counters[counterIndex].fetch_add(
+			amount, std::memory_order_relaxed);
+	}
+
+	FreeTypePerfCounterBatchScope::FreeTypePerfCounterBatchScope(bool enabled)
+		: m_active(enabled && g_bEnableFreeTypeFontRenderingLog)
+	{
+		if (!m_active)
+			return;
+		PerfCounterBatchState& batch = s_perfCounterBatch;
+		if (!batch.depth)
+		{
+			batch.touchedCount = 0;
+			batch.recordCount = 0;
+			batch.scopeCount = 0;
+		}
+		++batch.depth;
+		++batch.scopeCount;
+	}
+
+	FreeTypePerfCounterBatchScope::~FreeTypePerfCounterBatchScope()
+	{
+		if (!m_active)
+			return;
+		PerfCounterBatchState& batch = s_perfCounterBatch;
+		if (!batch.depth || --batch.depth)
+			return;
+
+		PerformanceState& state = GetPerformanceState();
+		const UInt64 atomicFlushes = static_cast<UInt64>(batch.touchedCount);
+		for (size_t touchedIndex = 0;
+			touchedIndex < batch.touchedCount; ++touchedIndex)
+		{
+			const size_t counterIndex = batch.touched[touchedIndex];
+			const UInt64 amount = batch.values[counterIndex];
+			batch.values[counterIndex] = 0;
+			if (amount)
+			{
+				state.counters[counterIndex].fetch_add(
+					amount, std::memory_order_relaxed);
+			}
+		}
+		// Publishing the four batch diagnostics below also costs one atomic add
+		// each. Report the net reduction rather than only the payload coalescing.
+		const UInt64 atomicPublications = atomicFlushes + 4u;
+		const UInt64 atomicsSaved = batch.recordCount > atomicPublications
+			? batch.recordCount - atomicPublications : 0;
+		state.counters[static_cast<size_t>(
+			FreeTypePerfCounter::PerfCounterBatchScope)].fetch_add(
+			batch.scopeCount, std::memory_order_relaxed);
+		state.counters[static_cast<size_t>(
+			FreeTypePerfCounter::PerfCounterBatchRecord)].fetch_add(
+			batch.recordCount, std::memory_order_relaxed);
+		state.counters[static_cast<size_t>(
+			FreeTypePerfCounter::PerfCounterBatchAtomicFlush)].fetch_add(
+			atomicFlushes, std::memory_order_relaxed);
+		state.counters[static_cast<size_t>(
+			FreeTypePerfCounter::PerfCounterBatchAtomicSaved)].fetch_add(
+			atomicsSaved, std::memory_order_relaxed);
+		batch.touchedCount = 0;
+		batch.recordCount = 0;
+		batch.scopeCount = 0;
 	}
 
 	SInt64 BeginFreeTypePerfSample()
@@ -2811,16 +2894,28 @@ namespace fonthook::vectorfont
 			static_cast<double>(accumulatorPrepWorst.publishNanoseconds) / 1000.0,
 			static_cast<double>(accumulatorPrepWorstResidual) / 1000.0);
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_dispatch_timing: dispatch_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f register_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
+			"tnvse_freetype_dispatch_timing: dispatch_sample_rate=%u dispatch_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f register_route_n=%llu mean_us=%.3f median_us=%.3f p95_us=%.3f honor_sample_rate=%u honor_gate_n=%llu median_us=%.3f p95_us=%.3f",
+			kNativeFontDispatchRouteCpuSampleRate,
 			dispatchRoute.count, dispatchRoute.meanMicroseconds,
 			dispatchRoute.medianMicroseconds,
 			dispatchRoute.p95Microseconds,
 			registerRoute.count, registerRoute.meanMicroseconds,
 			registerRoute.medianMicroseconds,
 			registerRoute.p95Microseconds,
+			kNativeFontVisibilityHonorCpuSampleRate,
 			preflightClipHonorGate.count,
 			preflightClipHonorGate.medianMicroseconds,
 			preflightClipHonorGate.p95Microseconds);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf_counter_batch: scopes=%llu records=%llu atomic_flushes=%llu atomics_saved=%llu",
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::PerfCounterBatchScope)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::PerfCounterBatchRecord)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::PerfCounterBatchAtomicFlush)],
+			values[static_cast<size_t>(
+				FreeTypePerfCounter::PerfCounterBatchAtomicSaved)]);
 	}
 }
 
