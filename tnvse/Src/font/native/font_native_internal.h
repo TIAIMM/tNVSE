@@ -668,21 +668,78 @@ namespace fonthook::vectorfont
 
 	struct NativeFontVisibilityProofWitness
 	{
+		NativeFontVisibilityProofWitness() noexcept
+			: valid(false)
+		{
+		}
+
+		NativeFontVisibilityProofWitness(
+			const NativeFontVisibilityProofWitness& other) noexcept
+			: valid(false)
+		{
+			CopyPublishedFrom(other);
+		}
+
+		NativeFontVisibilityProofWitness(
+			NativeFontVisibilityProofWitness&& other) noexcept
+			: valid(false)
+		{
+			CopyPublishedFrom(other);
+		}
+
+		NativeFontVisibilityProofWitness& operator=(
+			const NativeFontVisibilityProofWitness& other) noexcept
+		{
+			if (this != &other)
+				CopyPublishedFrom(other);
+			return *this;
+		}
+
+		NativeFontVisibilityProofWitness& operator=(
+			NativeFontVisibilityProofWitness&& other) noexcept
+		{
+			if (this != &other)
+				CopyPublishedFrom(other);
+			return *this;
+		}
+
 		// Exact source values that authorized the frame-local clip/scissor proof.
 		// Dispatch compares these values directly instead of depending on the
 		// bounded cross-frame proof cache still retaining this facade's entry.
-		const NiDX9Renderer* renderer = nullptr;
-		std::array<UInt32, 13> transformBits = {};
-		std::array<UInt32, 4> boundBits = {};
-		RECT tileScissorRect = {};
-		UInt64 cameraEpoch = 0;
-		NativeFontVisibilityProofStatus status =
-			NativeFontVisibilityProofStatus::Unproven;
-		NativeFontVisibilityCull cullReason =
-			NativeFontVisibilityCull::None;
-		bool tileUsesScissor = false;
-		bool valid = false;
+		// Payload members intentionally remain indeterminate until valid becomes
+		// true. Constructors and assignments copy them only from a published source;
+		// this prevents container moves or return-value copies from reading an
+		// unpublished object while avoiding a full clear for every frame entry.
+		const NiDX9Renderer* renderer;
+		std::array<UInt32, 13> transformBits;
+		std::array<UInt32, 4> boundBits;
+		RECT tileScissorRect;
+		UInt64 cameraEpoch;
+		NativeFontVisibilityProofStatus status;
+		NativeFontVisibilityCull cullReason;
+		bool tileUsesScissor;
+		bool valid;
+
+	private:
+		void CopyPublishedFrom(
+			const NativeFontVisibilityProofWitness& other) noexcept
+		{
+			valid = false;
+			if (!other.valid)
+				return;
+			renderer = other.renderer;
+			transformBits = other.transformBits;
+			boundBits = other.boundBits;
+			tileScissorRect = other.tileScissorRect;
+			cameraEpoch = other.cameraEpoch;
+			status = other.status;
+			cullReason = other.cullReason;
+			tileUsesScissor = other.tileUsesScissor;
+			valid = true;
+		}
 	};
+	static_assert(sizeof(NativeFontVisibilityProofWitness) == 0x68);
+	static_assert(offsetof(NativeFontVisibilityProofWitness, valid) == 0x63);
 
 	struct NativeFontVisibilityPreflight
 	{

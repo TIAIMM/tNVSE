@@ -73,6 +73,13 @@ namespace fonthook::vectorfont
 
 		struct SortedFrameEntry
 		{
+			// vector::emplace_back() value-initializes an entry. Keep this
+			// constructor user-provided so that operation does not first zero the
+			// complete object, including the immediately replaced proof payload.
+			SortedFrameEntry() noexcept
+			{
+			}
+
 			NiTriShape* facade = nullptr;
 			// Dense metadataOwners holds each surviving batch-acquired shared owner
 			// until the vanilla traversal completes; entries use stable non-owning

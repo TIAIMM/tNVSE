@@ -1110,6 +1110,15 @@ clears that byte before evaluation; every successful route then overwrites all
 witness fields before publishing `valid=true`, while every reader tests the byte
 before touching the payload. This avoids zero-initializing and copying the full
 witness for every sorted facade that is about to replace it or fail open.
+The witness type follows the same rule when it is default-constructed, returned,
+or moved by a frame-entry container: an unpublished instance initializes only
+`valid=false`, and copy/move operations inspect no payload unless the source is
+published. A published copy transfers every semantic field and publishes its
+own `valid` byte last. The containing sorted-frame entry has a user-provided
+default constructor as well, preventing `vector::emplace_back()` value
+initialization from zeroing the complete entry before those member constructors
+run. Consequently frame-entry construction does not clear the transform, bound,
+and scissor blocks that the immediately following proof will replace.
 Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
 `RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
 only decrements that index and loads the next sorted pointer. Therefore adjacent
