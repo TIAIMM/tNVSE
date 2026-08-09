@@ -569,15 +569,11 @@ namespace fonthook::vectorfont
 		{
 			if (!expected || !IsTileRegisterObjectSlotWritable())
 				return false;
-			const UInt32 expectedBits = reinterpret_cast<UInt32>(expected);
-			const UInt32 hookBits = reinterpret_cast<UInt32>(
+			const SIZE_T expectedBits = reinterpret_cast<SIZE_T>(expected);
+			const SIZE_T hookBits = reinterpret_cast<SIZE_T>(
 				&NativeFontRegisterObject);
-			const LONG observed = InterlockedCompareExchange(
-				reinterpret_cast<volatile LONG*>(
-					kTileRegisterObjectFunctionEntry),
-				static_cast<LONG>(hookBits),
-				static_cast<LONG>(expectedBits));
-			return static_cast<UInt32>(observed) == expectedBits;
+			return SafeWrite32IfEqual(kTileRegisterObjectFunctionEntry,
+				hookBits, expectedBits);
 		}
 
 		__forceinline bool ForwardTileRegisterObject(

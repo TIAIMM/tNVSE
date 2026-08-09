@@ -712,22 +712,36 @@ namespace fonthook
 				return false;
 			}
 
-			// Initialize the complete executable image before publishing or flushing
-			// it; this also makes the length+5 boundary explicit to static analysis.
-			std::memset(code, 0, trampolineSize);
-			std::memcpy(code, reinterpret_cast<const void*>(trampoline.source),
+			// Build the complete image privately, then publish it through the same
+			// checked SafeWrite backend used for every process-level hook site.
+			std::array<UInt8, 32> image = {};
+			if (trampolineSize > image.size())
+			{
+				VirtualFree(code, 0, MEM_RELEASE);
+				gLog.FormattedMessage(
+					"tnvse_font_hook: trampoline image exceeds backend buffer address=%08X size=%u",
+					static_cast<UInt32>(trampoline.source),
+					static_cast<UInt32>(trampolineSize));
+				return false;
+			}
+			std::memcpy(image.data(),
+				reinterpret_cast<const void*>(trampoline.source),
 				trampoline.length);
-			code[trampoline.length] = 0xE9;
+			image[trampoline.length] = 0xE9;
 			const UInt32 returnDisplacement =
 				static_cast<UInt32>(trampoline.source + trampoline.length
 					- reinterpret_cast<SIZE_T>(code + trampolineSize));
-			std::memcpy(code + trampoline.length + 1,
+			std::memcpy(image.data() + trampoline.length + 1,
 				&returnDisplacement, sizeof(returnDisplacement));
-			// VirtualAlloc committed trampolineSize bytes and the memset above
-			// initialized that entire range. MSVC analysis otherwise retains only
-			// the subsequent source-copy length when checking this Win32 API call.
-#pragma warning(suppress : 6385)
-			FlushInstructionCache(GetCurrentProcess(), code, trampolineSize);
+			if (!SafeWriteBuf(reinterpret_cast<SIZE_T>(code), image.data(),
+				trampolineSize))
+			{
+				VirtualFree(code, 0, MEM_RELEASE);
+				gLog.FormattedMessage(
+					"tnvse_font_hook: trampoline publication failed address=%08X",
+					static_cast<UInt32>(trampoline.source));
+				return false;
+			}
 			trampoline.code = code;
 			return true;
 		}

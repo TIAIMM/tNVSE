@@ -1,5 +1,6 @@
 #include "BSMemory.hpp"
 #include "MemoryManager.hpp"
+#include "SafeWrite.h"
 
 void	CreateHeapIfNotExisting(UInt32 auiHeapAddress, UInt32 auiCallAddress);
 int		(__cdecl* CreateHeap)(UInt32 aeSerialize);
@@ -62,8 +63,5 @@ void CreateHeapIfNotExisting(UInt32 auiHeapAddress, UInt32 auiCallAddress) {
 
 	CreateHeap(true);
 
-	UInt32 oldProtect;
-	VirtualProtect((void*)auiCallAddress, 4, PAGE_EXECUTE_READWRITE, &oldProtect);
-	*(UInt32*)(auiCallAddress + 1) = UInt32(CreateHeapStub) - auiCallAddress - 5;
-	VirtualProtect((void*)auiCallAddress, 4, oldProtect, &oldProtect);
+	ReplaceCall(auiCallAddress, &CreateHeapStub);
 }

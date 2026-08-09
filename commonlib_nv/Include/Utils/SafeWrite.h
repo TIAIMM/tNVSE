@@ -1,49 +1,72 @@
 #pragma once
 #include <Windows.h>
 
+#include <cstdint>
+
 #include "IDebugLog.h"
 #include "ITypes.h"
 
 #define __HOOK __declspec(naked) void
 
-// From Better Transitions
-#pragma once
+// From Better Transitions.  These functions are the common low-level backend
+// for process code, function-pointer and window-procedure hook publication.
+// Hook identity, ABI, predecessor chaining and rollback policy stay with the
+// typed hook that owns each site.
 
-DECLSPEC_NOINLINE void __fastcall SafeWrite8(SIZE_T addr, SIZE_T data);
-DECLSPEC_NOINLINE void __fastcall SafeWrite16(SIZE_T addr, SIZE_T data);
-DECLSPEC_NOINLINE void __fastcall SafeWrite32(SIZE_T addr, SIZE_T data);
-DECLSPEC_NOINLINE void __fastcall SafeWriteBuf(SIZE_T addr, const void* data, SIZE_T len);
+DECLSPEC_NOINLINE bool __fastcall SafeWrite8(SIZE_T addr, SIZE_T data);
+DECLSPEC_NOINLINE bool __fastcall SafeWrite16(SIZE_T addr, SIZE_T data);
+DECLSPEC_NOINLINE bool __fastcall SafeWrite32(SIZE_T addr, SIZE_T data);
+DECLSPEC_NOINLINE bool __fastcall SafeWriteBuf(
+	SIZE_T addr, const void* data, SIZE_T len);
+
+// Atomically publishes a 32-bit hook target only while the slot still contains
+// the expected predecessor. observed receives the value present at the CAS.
+DECLSPEC_NOINLINE bool __fastcall SafeWrite32IfEqual(
+	SIZE_T addr, SIZE_T data, SIZE_T expected, SIZE_T* observed = nullptr);
+
+// SetWindowLongPtrA has special zero-return/error semantics. Keep them in the
+// same backend so WndProc hook installation and restoration have one checked
+// publication primitive without disguising the operation as a code patch.
+DECLSPEC_NOINLINE bool __fastcall SafeSetWindowLongPtrA(
+	HWND window, int index, LONG_PTR data, LONG_PTR* previous);
 
 // 5 bytes
-DECLSPEC_NOINLINE void __fastcall WriteRelJump(SIZE_T jumpSrc, SIZE_T jumpTgt);
-DECLSPEC_NOINLINE void __fastcall WriteRelCall(SIZE_T jumpSrc, SIZE_T jumpTgt);
+DECLSPEC_NOINLINE bool __fastcall WriteRelJump(
+	SIZE_T jumpSrc, SIZE_T jumpTgt);
+DECLSPEC_NOINLINE bool __fastcall WriteRelCall(
+	SIZE_T jumpSrc, SIZE_T jumpTgt);
 
 
 // 6 bytes
-DECLSPEC_NOINLINE void __fastcall WriteRelJnz(SIZE_T jumpSrc, SIZE_T jumpTgt);
-DECLSPEC_NOINLINE void __fastcall WriteRelJle(SIZE_T jumpSrc, SIZE_T jumpTgt);
+DECLSPEC_NOINLINE bool __fastcall WriteRelJnz(
+	SIZE_T jumpSrc, SIZE_T jumpTgt);
+DECLSPEC_NOINLINE bool __fastcall WriteRelJle(
+	SIZE_T jumpSrc, SIZE_T jumpTgt);
 
-DECLSPEC_NOINLINE void __fastcall PatchMemoryNop(ULONG_PTR Address, SIZE_T Size);
-void __fastcall PatchMemoryNopRange(ULONG_PTR StartAddress, ULONG_PTR EndAddress);
+DECLSPEC_NOINLINE bool __fastcall PatchMemoryNop(
+	ULONG_PTR address, SIZE_T size);
+bool __fastcall PatchMemoryNopRange(
+	ULONG_PTR startAddress, ULONG_PTR endAddress);
 
 template <typename T>
-void __fastcall WriteRelCall(SIZE_T jumpSrc, T jumpTgt) {
-	WriteRelCall(jumpSrc, (SIZE_T)jumpTgt);
+bool __fastcall WriteRelCall(SIZE_T jumpSrc, T jumpTgt) {
+	return WriteRelCall(jumpSrc, (SIZE_T)jumpTgt);
 }
 
 template <typename T>
-void __fastcall WriteRelJump(SIZE_T jumpSrc, T jumpTgt) {
-	WriteRelJump(jumpSrc, (SIZE_T)jumpTgt);
+bool __fastcall WriteRelJump(SIZE_T jumpSrc, T jumpTgt) {
+	return WriteRelJump(jumpSrc, (SIZE_T)jumpTgt);
 }
 
-DECLSPEC_NOINLINE void __fastcall ReplaceCall(SIZE_T jumpSrc, SIZE_T jumpTgt);
+DECLSPEC_NOINLINE bool __fastcall ReplaceCall(
+	SIZE_T jumpSrc, SIZE_T jumpTgt);
 
 template <typename T>
-void __fastcall ReplaceCall(SIZE_T jumpSrc, T jumpTgt) {
-	ReplaceCall(jumpSrc, (SIZE_T)jumpTgt);
+bool __fastcall ReplaceCall(SIZE_T jumpSrc, T jumpTgt) {
+	return ReplaceCall(jumpSrc, (SIZE_T)jumpTgt);
 }
 
-void __fastcall ReplaceVirtualFunc(SIZE_T jumpSrc, void* jumpTgt);
+bool __fastcall ReplaceVirtualFunc(SIZE_T jumpSrc, void* jumpTgt);
 
 // Stores the function-to-call before overwriting it, to allow calling the overwritten function after our hook is over.
 // Thanks Demorome and lStewieAl
@@ -60,7 +83,7 @@ static inline SIZE_T GetWriteAddr(SIZE_T writeAddr) {
 
 // Specialization for member function pointers
 template <typename C, typename Ret, typename... Args>
-void __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
+bool __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
 	union
 	{
 		Ret(C::* tgt)(Args...) const;
@@ -68,11 +91,11 @@ void __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...) co
 	} conversion;
 	conversion.tgt = target;
 
-	WriteRelJump(source, conversion.funcPtr);
+	return WriteRelJump(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+bool __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	union
 	{
 		Ret(C::* tgt)(Args...);
@@ -80,11 +103,11 @@ void __fastcall WriteRelJumpEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	} conversion;
 	conversion.tgt = target;
 
-	WriteRelJump(source, conversion.funcPtr);
+	return WriteRelJump(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
+bool __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
 	union
 	{
 		Ret(C::* tgt)(Args...) const;
@@ -92,11 +115,11 @@ void __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...) co
 	} conversion;
 	conversion.tgt = target;
 
-	WriteRelCall(source, conversion.funcPtr);
+	return WriteRelCall(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+bool __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	union
 	{
 		Ret(C::* tgt)(Args...);
@@ -104,11 +127,11 @@ void __fastcall WriteRelCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	} conversion;
 	conversion.tgt = target;
 
-	WriteRelCall(source, conversion.funcPtr);
+	return WriteRelCall(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
+bool __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
 	union
 	{
 		Ret(C::* tgt)(Args...) const;
@@ -116,11 +139,11 @@ void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...) con
 	} conversion;
 	conversion.tgt = target;
 
-	ReplaceCall(source, conversion.funcPtr);
+	return ReplaceCall(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+bool __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	union
 	{
 		Ret(C::* tgt)(Args...);
@@ -128,11 +151,11 @@ void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	} conversion;
 	conversion.tgt = target;
 
-	ReplaceCall(source, conversion.funcPtr);
+	return ReplaceCall(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
+bool __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
 	union
 	{
 		Ret(C::* tgt)(Args...) const;
@@ -140,11 +163,11 @@ void __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args.
 	} conversion;
 	conversion.tgt = target;
 
-	SafeWrite32(source, conversion.funcPtr);
+	return SafeWrite32(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+bool __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 	union
 	{
 		Ret(C::* tgt)(Args...);
@@ -152,35 +175,37 @@ void __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args.
 	} conversion;
 	conversion.tgt = target;
 
-	SafeWrite32(source, conversion.funcPtr);
+	return SafeWrite32(source, conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceVTableEntry(void** apVTable, uint32_t auiPosition, Ret(C::* const target)(Args...) const) {
+bool __fastcall ReplaceVTableEntry(void** apVTable, uint32_t auiPosition, Ret(C::* const target)(Args...) const) {
 	union {
 		Ret(C::* tgt)(Args...) const;
 		SIZE_T funcPtr;
 	} conversion;
 	conversion.tgt = target;
 
-	apVTable[auiPosition] = (void*)conversion.funcPtr;
+	return SafeWrite32(
+		reinterpret_cast<SIZE_T>(&apVTable[auiPosition]), conversion.funcPtr);
 }
 
 template <typename C, typename Ret, typename... Args>
-void __fastcall ReplaceVTableEntry(void** apVTable, uint32_t auiPosition, Ret(C::* const target)(Args...)) {
+bool __fastcall ReplaceVTableEntry(void** apVTable, uint32_t auiPosition, Ret(C::* const target)(Args...)) {
 	union {
 		Ret(C::* tgt)(Args...);
 		SIZE_T funcPtr;
 	} conversion;
 	conversion.tgt = target;
 
-	apVTable[auiPosition] = (void*)conversion.funcPtr;
+	return SafeWrite32(
+		reinterpret_cast<SIZE_T>(&apVTable[auiPosition]), conversion.funcPtr);
 }
 
 class CallDetour {
 	SIZE_T overwritten_addr = 0;
 public:
-	DECLSPEC_NOINLINE void __fastcall WriteRelCall(SIZE_T jumpSrc, void* jumpTgt)
+	DECLSPEC_NOINLINE bool __fastcall WriteRelCall(SIZE_T jumpSrc, void* jumpTgt)
 	{
 		__assume(jumpSrc != 0);
 		__assume(jumpTgt != nullptr);
@@ -188,27 +213,33 @@ public:
 			char cTextBuffer[72];
 			sprintf_s(cTextBuffer, "Cannot write detour; jumpSrc is not a function call. (0x%08X)", jumpSrc);
 			MessageBoxA(nullptr, cTextBuffer, "WriteRelCall", MB_OK | MB_ICONERROR);
-			return;
+			return false;
 		}
-		overwritten_addr = GetRelJumpAddr(jumpSrc);
-		::WriteRelCall(jumpSrc, jumpTgt);
+		const SIZE_T predecessor = GetRelJumpAddr(jumpSrc);
+		if (!::WriteRelCall(jumpSrc, jumpTgt))
+			return false;
+		overwritten_addr = predecessor;
+		return true;
 	}
 
 	template <typename T>
-	DECLSPEC_NOINLINE void __fastcall ReplaceCall(SIZE_T jumpSrc, T jumpTgt) {
+	DECLSPEC_NOINLINE bool __fastcall ReplaceCall(SIZE_T jumpSrc, T jumpTgt) {
 		__assume(jumpSrc != 0);
 		if (*reinterpret_cast<uint8_t*>(jumpSrc) != 0xE8) {
 			char cTextBuffer[72];
 			sprintf_s(cTextBuffer, "Cannot write detour; jumpSrc is not a function call. (0x%08X)", jumpSrc);
 			MessageBoxA(nullptr, cTextBuffer, "WriteRelCall", MB_OK | MB_ICONERROR);
-			return;
+			return false;
 		}
-		overwritten_addr = GetRelJumpAddr(jumpSrc);
-		::ReplaceCall(jumpSrc, (SIZE_T)jumpTgt);
+		const SIZE_T predecessor = GetRelJumpAddr(jumpSrc);
+		if (!::ReplaceCall(jumpSrc, (SIZE_T)jumpTgt))
+			return false;
+		overwritten_addr = predecessor;
+		return true;
 	}
 
 	template <typename C, typename Ret, typename... Args>
-	void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
+	bool __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...) const) {
 		union
 		{
 			Ret(C::* tgt)(Args...) const;
@@ -216,11 +247,11 @@ public:
 		} conversion;
 		conversion.tgt = target;
 
-		ReplaceCall(source, conversion.funcPtr);
+		return ReplaceCall(source, conversion.funcPtr);
 	}
 
 	template <typename C, typename Ret, typename... Args>
-	void __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+	bool __fastcall ReplaceCallEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 		union
 		{
 			Ret(C::* tgt)(Args...);
@@ -228,14 +259,17 @@ public:
 		} conversion;
 		conversion.tgt = target;
 
-		ReplaceCall(source, conversion.funcPtr);
+		return ReplaceCall(source, conversion.funcPtr);
 	}
 
 	template <typename T>
-	void SafeWrite32(SIZE_T jumpSrc, T jumpTgt) {
+	bool SafeWrite32(SIZE_T jumpSrc, T jumpTgt) {
 		__assume(jumpSrc != 0);
-		overwritten_addr = GetWriteAddr(jumpSrc);
-		::SafeWrite32(jumpSrc, (SIZE_T)jumpTgt);
+		const SIZE_T predecessor = GetWriteAddr(jumpSrc);
+		if (!::SafeWrite32(jumpSrc, (SIZE_T)jumpTgt))
+			return false;
+		overwritten_addr = predecessor;
+		return true;
 	}
 
 	[[nodiscard]] SIZE_T GetOverwrittenAddr() const { return overwritten_addr; }
@@ -247,7 +281,7 @@ protected:
 
 public:
 	template <typename C, typename Ret, typename... Args>
-	void __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...)) {
+	bool __fastcall ReplaceVirtualFuncEx(SIZE_T source, Ret(C::* const target)(Args...)) {
 		union
 		{
 			Ret(C::* tgt)(Args...);
@@ -255,9 +289,11 @@ public:
 		} conversion;
 		conversion.tgt = target;
 
-		overwritten_addr = *(uint32_t*)source;
-
-		SafeWrite32(source, conversion.funcPtr);
+		const SIZE_T predecessor = *(uint32_t*)source;
+		if (!::SafeWrite32(source, conversion.funcPtr))
+			return false;
+		overwritten_addr = predecessor;
+		return true;
 	}
 
 	[[nodiscard]] SIZE_T GetOverwrittenAddr() const { return overwritten_addr; }

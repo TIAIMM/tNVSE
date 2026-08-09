@@ -1,4 +1,5 @@
 #include "multibyte_input_ime_internal.h"
+#include "SafeWrite.h"
 
 namespace fonthook
 {
@@ -1306,11 +1307,11 @@ namespace fonthook
 			if (!hwnd)
 				return false;
 
-			LONG_PTR original = SetWindowLongPtrA(
-				hwnd,
-				GWLP_WNDPROC,
-				reinterpret_cast<LONG_PTR>(&MultibyteInputWndProc));
-			if (!original)
+			LONG_PTR original = 0;
+			if (!SafeSetWindowLongPtrA(hwnd, GWLP_WNDPROC,
+				reinterpret_cast<LONG_PTR>(&MultibyteInputWndProc),
+				&original)
+				|| !original)
 				return false;
 
 			s_window = hwnd;
@@ -1372,10 +1373,11 @@ namespace fonthook
 					GetWindowLongPtrA(s_window, GWLP_WNDPROC));
 				if (current == &MultibyteInputWndProc)
 				{
-					detached = SetWindowLongPtrA(
-						s_window,
+					LONG_PTR displaced = 0;
+					detached = SafeSetWindowLongPtrA(s_window,
 						GWLP_WNDPROC,
-						reinterpret_cast<LONG_PTR>(s_originalWndProc)) != 0;
+						reinterpret_cast<LONG_PTR>(s_originalWndProc),
+						&displaced);
 				}
 				else if (current != s_originalWndProc)
 				{
