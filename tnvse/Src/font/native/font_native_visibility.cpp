@@ -1171,12 +1171,11 @@ namespace fonthook::vectorfont
 		s_clipFrameContext.preflightOpen = false;
 	}
 
-	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
-		const NiTriShape* facade)
+	void EvaluateNativeFontPreflightClipVisibilityInPlace(
+		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility)
 	{
-		NativeFontVisibilityPreflight visibility;
 		if (!g_bEnableFreeTypeFontPreflightClipCull)
-			return visibility;
+			return;
 		if (s_clipFrameContext.active)
 			visibility.frameToken = s_clipFrameContext.frameToken;
 		RecordFreeTypePerf(
@@ -1188,7 +1187,6 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(FreeTypePerfCounter::
 				VisibilityPreflightClipFailOpen);
 			RecordClipTransformBuildResult(transformBuildResult);
-			return visibility;
 		};
 
 		// Facades call this after every RegisterObject for the flush, once the
@@ -1199,10 +1197,16 @@ namespace fonthook::vectorfont
 		// honored; a vanilla-layout proof already consumes the live dispatch state.
 		const NiTriShapeData* data = facade ? facade->GetModelData() : nullptr;
 		if (!facade || !data)
-			return failOpen();
+		{
+			failOpen();
+			return;
+		}
 		const TileVisibilityPropertyView* tile = GetTileProperty(facade);
 		if (!tile)
-			return failOpen();
+		{
+			failOpen();
+			return;
+		}
 		ClipFrameContext localContext;
 		ClipFrameContext* context = &s_clipFrameContext;
 		if (!context->active
@@ -1210,7 +1214,10 @@ namespace fonthook::vectorfont
 				&& !IsClipFrameCameraCurrent(*context)))
 		{
 			if (!CaptureClipFrameContext(localContext, false))
-				return failOpen();
+			{
+				failOpen();
+				return;
+			}
 			context = &localContext;
 		}
 		NativeFontVisibilityCull reason = NativeFontVisibilityCull::None;
@@ -1222,19 +1229,29 @@ namespace fonthook::vectorfont
 			facade, facade->m_kWorld, *tile, *context, true,
 			reason, &transformBuildResult, &visibility.proofWitness);
 		if (proof == ClipProofResult::Unproven)
-			return failOpen();
+		{
+			failOpen();
+			return;
+		}
 		RecordClipTransformBuildResult(transformBuildResult);
 		visibility.status = proof == ClipProofResult::Outside
 			? NativeFontVisibilityProofStatus::Outside
 			: NativeFontVisibilityProofStatus::Overlap;
 		if (proof != ClipProofResult::Outside)
-			return visibility;
+			return;
 		RecordFreeTypePerf(
 			FreeTypePerfCounter::VisibilityPreflightClipCulled);
 		RecordFreeTypePerf(reason == NativeFontVisibilityCull::Scissor
 			? FreeTypePerfCounter::VisibilityPreflightClipScissor
 			: FreeTypePerfCounter::VisibilityPreflightClipViewport);
 		visibility.cull = reason;
+	}
+
+	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
+		const NiTriShape* facade)
+	{
+		NativeFontVisibilityPreflight visibility;
+		EvaluateNativeFontPreflightClipVisibilityInPlace(facade, visibility);
 		return visibility;
 	}
 

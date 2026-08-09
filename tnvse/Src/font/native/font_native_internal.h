@@ -1199,6 +1199,11 @@ namespace fonthook::vectorfont
 	void EndNativeFontVisibilityFrame();
 	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
 		const NiTriShape* facade);
+	// The destination must be freshly value-initialized. This form writes the
+	// proof witness directly into its owning frame entry without constructing a
+	// second NativeFontVisibilityPreflight and copying the complete witness.
+	void EvaluateNativeFontPreflightClipVisibilityInPlace(
+		const NiTriShape* facade, NativeFontVisibilityPreflight& visibility);
 	NativeFontVisibilityPreflight EvaluateNativeFontPreflightClipVisibility(
 		const NiTriShape* facade, const NativeFontShapePayload& payload);
 	bool HonorNativeFontPreflightClipCull(const NiTriShape* facade,

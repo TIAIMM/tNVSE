@@ -120,7 +120,6 @@ namespace fonthook::vectorfont
 			std::vector<NativeFontShapeMetadataPtr> metadataOwners;
 			std::vector<NiTriShape*> metadataAcquireShapes;
 			std::vector<NativeFontShapeMetadataPtr> metadataAcquireOwners;
-			std::vector<NativeFontVisibilityPreflight> visibilityPreflights;
 			std::vector<UInt32> metadataLookup;
 			std::vector<UInt32> sortedOccurrenceCounts;
 			std::vector<UInt32> tieSortedLookup;
@@ -129,7 +128,6 @@ namespace fonthook::vectorfont
 			std::vector<UInt32> tieRunIds;
 			std::vector<EqualDepthTieRepairRun> tieRuns;
 			std::vector<NiGeometry*> tieOutput;
-			std::vector<NiTriShape*> frameCandidates;
 			std::vector<SortedFrameEntry> frameEntries;
 			std::vector<UInt32> facadeLookup;
 			std::vector<NativeFontPayloadTemplatePtr> payloadTemplates;
@@ -374,8 +372,6 @@ namespace fonthook::vectorfont
 					* sizeof(NiTriShape*)
 				+ scratch.metadataAcquireOwners.capacity()
 					* sizeof(NativeFontShapeMetadataPtr)
-				+ scratch.visibilityPreflights.capacity()
-					* sizeof(NativeFontVisibilityPreflight)
 				+ scratch.metadataLookup.capacity() * sizeof(UInt32)
 				+ scratch.sortedOccurrenceCounts.capacity() * sizeof(UInt32)
 				+ scratch.tieSortedLookup.capacity() * sizeof(UInt32)
@@ -384,7 +380,6 @@ namespace fonthook::vectorfont
 				+ scratch.tieRunIds.capacity() * sizeof(UInt32)
 				+ scratch.tieRuns.capacity() * sizeof(EqualDepthTieRepairRun)
 				+ scratch.tieOutput.capacity() * sizeof(NiGeometry*)
-				+ scratch.frameCandidates.capacity() * sizeof(NiTriShape*)
 				+ scratch.frameEntries.capacity() * sizeof(SortedFrameEntry)
 				+ scratch.facadeLookup.capacity() * sizeof(UInt32)
 				+ scratch.payloadTemplates.capacity()
@@ -403,7 +398,6 @@ namespace fonthook::vectorfont
 			scratch.metadataOwners.clear();
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireOwners.clear();
-			scratch.visibilityPreflights.clear();
 			scratch.sortedOccurrenceCounts.clear();
 			scratch.tieRuns.clear();
 			scratch.frameEntries.clear();
@@ -423,7 +417,6 @@ namespace fonthook::vectorfont
 			scratch.metadataOwners.clear();
 			scratch.metadataAcquireShapes.clear();
 			scratch.metadataAcquireOwners.clear();
-			scratch.visibilityPreflights.clear();
 			scratch.sortedOccurrenceCounts.clear();
 			scratch.tieSortedLookup.clear();
 			scratch.tieSortedOccurrenceCursor.clear();
@@ -431,7 +424,6 @@ namespace fonthook::vectorfont
 			scratch.tieRunIds.clear();
 			scratch.tieRuns.clear();
 			scratch.tieOutput.clear();
-			scratch.frameCandidates.clear();
 			scratch.frameEntries.clear();
 			scratch.payloadTemplates.clear();
 			scratch.singletonFacades.clear();
@@ -449,11 +441,6 @@ namespace fonthook::vectorfont
 			{
 				std::vector<NativeFontShapeMetadataPtr>().swap(
 					scratch.metadataAcquireOwners);
-			}
-			if (scratch.visibilityPreflights.capacity() > 8192)
-			{
-				std::vector<NativeFontVisibilityPreflight>().swap(
-					scratch.visibilityPreflights);
 			}
 			if (scratch.metadataLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.metadataLookup);
@@ -473,8 +460,6 @@ namespace fonthook::vectorfont
 				std::vector<NiGeometry*>().swap(scratch.tieOutput);
 			if (scratch.frameEntries.capacity() > 8192)
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
-			if (scratch.frameCandidates.capacity() > 8192)
-				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
 			if (scratch.facadeLookup.capacity() > 16384)
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 			if (scratch.payloadTemplates.capacity() > 8192)
@@ -499,8 +484,6 @@ namespace fonthook::vectorfont
 					scratch.metadataAcquireShapes);
 				std::vector<NativeFontShapeMetadataPtr>().swap(
 					scratch.metadataAcquireOwners);
-				std::vector<NativeFontVisibilityPreflight>().swap(
-					scratch.visibilityPreflights);
 				std::vector<UInt32>().swap(scratch.metadataLookup);
 				std::vector<UInt32>().swap(scratch.sortedOccurrenceCounts);
 				std::vector<UInt32>().swap(scratch.tieSortedLookup);
@@ -511,7 +494,6 @@ namespace fonthook::vectorfont
 				std::vector<EqualDepthTieRepairRun>().swap(scratch.tieRuns);
 				std::vector<NiGeometry*>().swap(scratch.tieOutput);
 				std::vector<SortedFrameEntry>().swap(scratch.frameEntries);
-				std::vector<NiTriShape*>().swap(scratch.frameCandidates);
 				std::vector<UInt32>().swap(scratch.facadeLookup);
 				std::vector<NativeFontPayloadTemplatePtr>().swap(
 					scratch.payloadTemplates);
@@ -632,14 +614,6 @@ namespace fonthook::vectorfont
 				slot = (slot + 1u) & mask;
 			}
 			return std::numeric_limits<size_t>::max();
-		}
-
-		const NativeFontShapeMetadata* FindBatchedMetadata(
-			const SortedPayloadScratch& scratch, const NiTriShape* shape)
-		{
-			const size_t index = LookupMetadataShapeIndex(scratch, shape);
-			return index < scratch.metadataOwners.size()
-				? scratch.metadataOwners[index].get() : nullptr;
 		}
 
 		EqualDepthTieRepairResult RepairMixedEqualDepthRunsLinear(
@@ -1490,8 +1464,11 @@ namespace fonthook::vectorfont
 						FreeTypePerfPhase::FramePrepVisibility, true,
 						&prepTailSample.visibilityTicks);
 					BeginNativeFontVisibilityFrame();
-					scratch.visibilityPreflights.assign(
-						scratch.metadataShapes.size(), {});
+					// Every tracked facade is unique at this point. Allocate its final
+					// frame entry before visibility evaluation and populate the witness
+					// there directly; no parallel preflight vector or full-witness copy
+					// is needed later in the facade loop.
+					scratch.frameEntries.reserve(scratch.metadataShapes.size());
 					scratch.metadataAcquireShapes.clear();
 					scratch.metadataAcquireShapes.reserve(
 						scratch.metadataShapes.size());
@@ -1499,16 +1476,19 @@ namespace fonthook::vectorfont
 						index < scratch.metadataShapes.size(); ++index)
 					{
 						NiTriShape* facade = scratch.metadataShapes[index];
-						NativeFontVisibilityPreflight visibility;
-						visibility.cull =
+						scratch.frameEntries.emplace_back();
+						SortedFrameEntry& entry = scratch.frameEntries.back();
+						entry.facade = facade;
+						entry.visibility.cull =
 							EvaluateNativeFontSubmissionVisibility(facade);
-						if (visibility.cull == NativeFontVisibilityCull::None)
+						if (entry.visibility.cull
+							== NativeFontVisibilityCull::None)
 						{
-							visibility =
-								EvaluateNativeFontPreflightClipVisibility(facade);
+							EvaluateNativeFontPreflightClipVisibilityInPlace(
+								facade, entry.visibility);
 						}
-						scratch.visibilityPreflights[index] = visibility;
-						if (visibility.cull == NativeFontVisibilityCull::None)
+						if (entry.visibility.cull
+							== NativeFontVisibilityCull::None)
 							scratch.metadataAcquireShapes.push_back(facade);
 						else
 						{
@@ -1590,10 +1570,7 @@ namespace fonthook::vectorfont
 					FreeTypePerfScope lookupPrepPerf(
 						FreeTypePerfPhase::FramePrepLookup, true,
 						&prepTailSample.lookupTicks);
-					scratch.frameCandidates = scratch.metadataShapes;
-
-					const size_t trackedCount = scratch.frameCandidates.size();
-					scratch.frameEntries.reserve(trackedCount);
+					const size_t trackedCount = scratch.frameEntries.size();
 					scratch.payloadTemplates.reserve(trackedCount);
 					scratch.singletonFacades.reserve(
 						std::min<size_t>(trackedCount, 1024));
@@ -1612,25 +1589,19 @@ namespace fonthook::vectorfont
 						FreeTypePerfPhase::FramePrepFacadeLoop, true,
 						&prepTailSample.facadeLoopTicks);
 					for (size_t candidateIndex = 0;
-						candidateIndex < scratch.frameCandidates.size();
+						candidateIndex < scratch.frameEntries.size();
 						++candidateIndex)
 					{
-					NiTriShape* facade =
-						scratch.frameCandidates[candidateIndex];
-					if (LookupSortedFacade(scratch, facade)
-						!= std::numeric_limits<size_t>::max())
-					{
-						continue;
-					}
-
-					SortedFrameEntry entry;
-					entry.facade = facade;
-					entry.visibility = candidateIndex
-						< scratch.visibilityPreflights.size()
-						? scratch.visibilityPreflights[candidateIndex]
-						: NativeFontVisibilityPreflight{};
+					SortedFrameEntry& entry =
+						scratch.frameEntries[candidateIndex];
+					NiTriShape* facade = entry.facade;
 					if (entry.visibility.cull == NativeFontVisibilityCull::None)
-						entry.metadata = FindBatchedMetadata(scratch, facade);
+					{
+						entry.metadata = candidateIndex
+							< scratch.metadataOwners.size()
+							? scratch.metadataOwners[candidateIndex].get()
+							: nullptr;
+					}
 					entry.generation = generation;
 					SingletonFacadeState* singletonFacade =
 						nullptr;
@@ -1724,24 +1695,17 @@ namespace fonthook::vectorfont
 							NativeFontFallbackReason::PacketBuild;
 					}
 
-					const size_t metadataIndex = entry.metadata
-						? LookupMetadataShapeIndex(scratch, facade)
-						: std::numeric_limits<size_t>::max();
-					entry.uniqueOccurrence = metadataIndex
+					entry.uniqueOccurrence = entry.metadata && candidateIndex
 						< scratch.sortedOccurrenceCounts.size()
-						&& scratch.sortedOccurrenceCounts[metadataIndex] == 1;
-					const size_t entryIndex = scratch.frameEntries.size();
-					scratch.frameEntries.push_back(std::move(entry));
-					InsertSortedFacade(scratch, facade, entryIndex);
+						&& scratch.sortedOccurrenceCounts[candidateIndex] == 1;
+					InsertSortedFacade(scratch, facade, candidateIndex);
 					RecordFreeTypePerf(FreeTypePerfCounter::SortedFrameFacade);
-					const SortedFrameEntry& stored =
-						scratch.frameEntries.back();
-					if (stored.preflightResult == NativeFontFallbackReason::None
-						&& stored.payload && stored.payload->payloadTemplate
-						&& stored.generation == generation)
+					if (entry.preflightResult == NativeFontFallbackReason::None
+						&& entry.payload && entry.payload->payloadTemplate
+						&& entry.generation == generation)
 					{
 						if (InsertUniquePayload(scratch,
-							stored.payload->payloadTemplate))
+							entry.payload->payloadTemplate))
 						{
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::SortedFramePayload);
