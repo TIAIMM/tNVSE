@@ -1201,8 +1201,13 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			for (const CompositeGlyphQuadSource& source : sources)
+			bool canAliasSource = pageCount == 1 && !shiftedShadow
+				&& sources.size() * 4u == vertices.size();
+			UInt64 fusedAliasProofVisits = 0;
+			for (size_t sourceIndex = 0; sourceIndex < sources.size();
+				++sourceIndex)
 			{
+				const CompositeGlyphQuadSource& source = sources[sourceIndex];
 				const UInt64 bodyEnd =
 					static_cast<UInt64>(source.firstVertex) + 4u;
 				if (!source.layerMask || source.atlasPage >= pageCount
@@ -1221,20 +1226,20 @@ namespace fonthook::vectorfont
 				{
 					return false;
 				}
+				if (canAliasSource)
+				{
+					++fusedAliasProofVisits;
+					canAliasSource = source.atlasPage == 0
+						&& source.firstVertex == sourceIndex * 4u
+						&& source.layerMask != 0;
+				}
 			}
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				TextArtifactCompositeAliasProofScanSaved,
+				fusedAliasProofVisits);
 
 			// The common single-page/no-offset case already has exactly one body
 			// quad per glyph. Reuse it without growing the 32-bit text artifact.
-			bool canAliasSource = pageCount == 1 && !shiftedShadow
-				&& sources.size() * 4u == vertices.size();
-			for (size_t index = 0; canAliasSource && index < sources.size();
-				++index)
-			{
-				const CompositeGlyphQuadSource& source = sources[index];
-				canAliasSource = source.atlasPage == 0
-					&& source.firstVertex == index * 4u
-					&& source.layerMask != 0;
-			}
 			if (canAliasSource)
 			{
 				spans.push_back({
@@ -3678,6 +3683,9 @@ namespace fonthook::vectorfont
 			std::vector<CompositeGlyphQuadSource> compositeGlyphs;
 			if (compositeCandidate)
 				compositeGlyphs.resize(quads.size());
+			UInt32 compositeGlyphCount = 0;
+			UInt32 compositeGlyphsWithoutFill = 0;
+			bool compositeGlyphsDense = true;
 			NiPoint3 boundMinimum(std::numeric_limits<float>::max(),
 				std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
 			NiPoint3 boundMaximum(std::numeric_limits<float>::lowest(),
@@ -3739,6 +3747,13 @@ namespace fonthook::vectorfont
 					{
 						CompositeGlyphQuadSource& glyph =
 							compositeGlyphs[quad.glyphOrdinal];
+						if (!glyph.layerMask)
+						{
+							compositeGlyphsDense = compositeGlyphsDense
+								&& quad.glyphOrdinal == compositeGlyphCount;
+							++compositeGlyphCount;
+							++compositeGlyphsWithoutFill;
+						}
 						if (glyph.atlasPage
 								!= std::numeric_limits<UInt16>::max()
 							&& glyph.atlasPage != quad.atlasPage)
@@ -3750,7 +3765,14 @@ namespace fonthook::vectorfont
 						if (quad.layerMask
 							& (1u << static_cast<UInt8>(AtlasLayer::Fill)))
 						{
-						glyph.firstVertex = static_cast<UInt32>(vertices.size());
+							if (glyph.firstVertex
+								== std::numeric_limits<UInt32>::max()
+								&& compositeGlyphsWithoutFill)
+							{
+								--compositeGlyphsWithoutFill;
+							}
+							glyph.firstVertex =
+								static_cast<UInt32>(vertices.size());
 						}
 					}
 				}
@@ -3829,7 +3851,20 @@ namespace fonthook::vectorfont
 				return nullptr;
 			std::vector<NativeFontCompositeSpan> compositeSpans;
 			std::vector<CompositeGlyphQuadSource> compositeSources;
-			if (compositeCandidate)
+			if (compositeCandidate && compositeGlyphsDense
+				&& compositeGlyphCount && !compositeGlyphsWithoutFill)
+			{
+				// The shader compiler emits one dense glyph ordinal for the common
+				// single-page MTSDF artifact. The mandatory quad loop above has
+				// already proved every occupied entry and its Fill vertex, so transfer
+				// the backing allocation instead of rescanning and copying it.
+				compositeGlyphs.resize(compositeGlyphCount);
+				compositeSources = std::move(compositeGlyphs);
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					TextArtifactCompositeSourceCompactionScanSaved,
+					quads.size());
+			}
+			else if (compositeCandidate)
 			{
 				compositeSources.reserve(compositeGlyphs.size());
 				for (const CompositeGlyphQuadSource& glyph : compositeGlyphs)

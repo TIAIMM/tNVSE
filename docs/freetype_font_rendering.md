@@ -2083,6 +2083,17 @@ retains the original full validation pass. Invalid vertices still reject the
 payload. `payload_validation_vertex_scan_saved` reports the exact number of
 second-pass vertex visits removed from successful artifact construction.
 
+The same common single-page Composite compiler now proves dense glyph-source
+ordinals and Fill-vertex coverage while it emits the mandatory source quads.
+When that proof is complete, the source vector transfers its allocation into
+the packet builder instead of being rescanned and copied. The packet builder's
+existing validity walk also performs the alias-layout proof, so the common
+one-quad path no longer traverses the sources again immediately afterward.
+Sparse ordinals, missing Fill vertices, cross-page glyphs, shifted shadows, and
+malformed geometry retain the previous validation and compatibility fallback.
+`composite_source_compaction_scan_saved` and
+`composite_alias_proof_scan_saved` report the exact removed source visits.
+
 Runtime cache-key work is amortized at the point where the corresponding
 identity becomes immutable:
 
