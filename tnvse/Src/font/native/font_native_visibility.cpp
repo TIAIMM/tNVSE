@@ -1045,7 +1045,13 @@ namespace fonthook::vectorfont
 		{
 			reason = NativeFontVisibilityCull::None;
 			if (proofWitness)
-				*proofWitness = {};
+			{
+				// valid is the publication discriminator and every consumer checks it
+				// before reading the payload. A successful proof overwrites every field
+				// before setting valid again, so invalidating one byte avoids clearing
+				// and copying the complete witness for every sorted facade.
+				proofWitness->valid = false;
+			}
 			if (transformBuildResult)
 			{
 				*transformBuildResult =

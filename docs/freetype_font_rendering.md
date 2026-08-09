@@ -1105,6 +1105,11 @@ and comparison use fixed-size object-representation copies/comparisons instead
 of per-float conversion loops. It does not materialize a second witness on the
 dispatch stack; signed zero, NaN payloads, and every other floating-point bit
 pattern retain the same exact-match behavior.
+The proof writer also uses `valid` as the sole publication discriminator. It
+clears that byte before evaluation; every successful route then overwrites all
+witness fields before publishing `valid=true`, while every reader tests the byte
+before touching the payload. This avoids zero-initializing and copying the full
+witness for every sorted facade that is about to replace it or fail open.
 Retail `RenderAlphaGeometry` at `0xB64F90` publishes `m_iCurrItem`, calls
 `RenderPassImmediately` at `0xB64FD1`, and from `0xB64FD6` through `0xB64FEC`
 only decrements that index and loads the next sorted pointer. Therefore adjacent
