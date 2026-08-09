@@ -581,14 +581,21 @@ namespace fonthook::vectorfont
 		const void* modelDataIdentity = nullptr;
 		const void* bufferIdentity = nullptr;
 		const void* bufferDeclarationIdentity = nullptr;
+		const void* geometryGroupIdentity = nullptr;
 		const void* strideArrayIdentity = nullptr;
 		const void* vertexChipIdentity = nullptr;
 		const void* vertexBufferIdentity = nullptr;
+		const void* indexBufferIdentity = nullptr;
+		const void* arrayLengthsIdentity = nullptr;
+		const void* indexArrayIdentity = nullptr;
 		const void* payloadIdentity = nullptr;
 		const void* artifactIdentity = nullptr;
 		const void* packetIdentity = nullptr;
+		const NativeFontCompiledPacketCommand* standardLiteProgramIdentity =
+			nullptr;
 		UInt32 generation = 0;
 		UInt32 deviceEpoch = 0;
+		UInt32 bufferFlags = 0;
 		UInt32 streamCount = 0;
 		UInt32 stride = 0;
 		UInt32 bufferVertexCount = 0;
@@ -596,6 +603,9 @@ namespace fonthook::vectorfont
 		UInt32 baseVertexIndex = 0;
 		UInt32 vertexChipOffset = 0;
 		UInt32 vertexChipSize = 0;
+		UInt32 indexCount = 0;
+		UInt32 indexBufferSize = 0;
+		UInt32 arrayCount = 0;
 		UInt32 uploadedByteOffset = 0;
 		UInt32 uploadedByteCount = 0;
 		UInt16 nativePackDataFlags = 0;
@@ -1217,7 +1227,7 @@ namespace fonthook::vectorfont
 		TileShader* shader);
 	bool EnsureNativeFontVanillaLayoutShapeReady(const NiTriShape* shape,
 		TileShader* shader, const NativeFontShapePayload& payload,
-		NativeFontVanillaLayoutDrawToken& drawToken);
+		NativeFontVanillaLayoutDrawToken& drawToken, bool& drawTokenHit);
 	bool ResolveNativeFontRetainedPacketProgram(
 		const NativeFontPacketTemplate& packet,
 		TileShader* shader, UInt32 generation,

@@ -2790,11 +2790,16 @@ namespace fonthook::vectorfont
 			const NiTriShapeData* modelData = nullptr;
 			const NiGeometryBufferData* buffer = nullptr;
 			const void* bufferDeclaration = nullptr;
+			const void* geometryGroup = nullptr;
 			const UInt32* strideArray = nullptr;
 			const NiVBChip* vertexChip = nullptr;
 			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+			const UInt16* arrayLengths = nullptr;
+			const UInt16* indexArray = nullptr;
 			UInt32 generationId = 0;
 			UInt32 deviceEpoch = 0;
+			UInt32 bufferFlags = 0;
 			UInt32 streamCount = 0;
 			UInt32 stride = 0;
 			UInt32 bufferVertexCount = 0;
@@ -2802,6 +2807,9 @@ namespace fonthook::vectorfont
 			UInt32 baseVertexIndex = 0;
 			UInt32 vertexChipOffset = 0;
 			UInt32 vertexChipSize = 0;
+			UInt32 indexCount = 0;
+			UInt32 indexBufferSize = 0;
+			UInt32 arrayCount = 0;
 			UInt16 nativePackDataFlags = 0;
 			UInt16 nativePackDirtyFlags = 0;
 			UInt8 nativePackKeepFlags = 0;
@@ -2925,7 +2933,9 @@ namespace fonthook::vectorfont
 			if (!token.payloadUploaded || !payload.buildComplete
 				|| token.payloadIdentity != &payload || !artifact || !packet
 				|| token.artifactIdentity != artifact
-				|| token.packetIdentity != packet)
+				|| token.packetIdentity != packet
+				|| token.standardLiteProgramIdentity
+					!= &profile->retainedProgram)
 			{
 				return VanillaLayoutDrawTokenMismatch::Geometry;
 			}
@@ -2992,6 +3002,8 @@ namespace fonthook::vectorfont
 					* expectedStride;
 			if (!token.bufferDeclarationIdentity
 				|| buffer->m_hDeclaration != token.bufferDeclarationIdentity
+				|| buffer->m_uiFlags != token.bufferFlags
+				|| buffer->m_pkGeometryGroup != token.geometryGroupIdentity
 				|| token.streamCount != 1u
 				|| buffer->m_uiStreamCount != token.streamCount
 				|| !token.strideArrayIdentity
@@ -3005,6 +3017,13 @@ namespace fonthook::vectorfont
 				|| token.baseVertexIndex != buffer->m_uiBaseVertexIndex
 				|| token.vertexChipOffset != chip->m_uiOffset
 				|| token.vertexChipSize != chip->m_uiSize
+				|| !token.indexBufferIdentity
+				|| buffer->m_pkIB != token.indexBufferIdentity
+				|| buffer->m_uiIndexCount != token.indexCount
+				|| buffer->m_uiIBSize != token.indexBufferSize
+				|| buffer->m_uiNumArrays != token.arrayCount
+				|| buffer->m_pusArrayLengths != token.arrayLengthsIdentity
+				|| buffer->m_pusIndexArray != token.indexArrayIdentity
 				|| expectedByteOffset > std::numeric_limits<UInt32>::max()
 				|| expectedByteCount > std::numeric_limits<UInt32>::max()
 				|| token.uploadedByteOffset
@@ -3074,14 +3093,21 @@ namespace fonthook::vectorfont
 			token.modelDataIdentity = snapshot.modelData;
 			token.bufferIdentity = snapshot.buffer;
 			token.bufferDeclarationIdentity = snapshot.bufferDeclaration;
+			token.geometryGroupIdentity = snapshot.geometryGroup;
 			token.strideArrayIdentity = snapshot.strideArray;
 			token.vertexChipIdentity = snapshot.vertexChip;
 			token.vertexBufferIdentity = snapshot.vertexBuffer;
+			token.indexBufferIdentity = snapshot.indexBuffer;
+			token.arrayLengthsIdentity = snapshot.arrayLengths;
+			token.indexArrayIdentity = snapshot.indexArray;
 			token.payloadIdentity = &payload;
 			token.artifactIdentity = &artifact;
 			token.packetIdentity = &packet;
+			token.standardLiteProgramIdentity =
+				&snapshot.profile->retainedProgram;
 			token.generation = snapshot.generationId;
 			token.deviceEpoch = snapshot.deviceEpoch;
+			token.bufferFlags = snapshot.bufferFlags;
 			token.streamCount = snapshot.streamCount;
 			token.stride = snapshot.stride;
 			token.bufferVertexCount = snapshot.bufferVertexCount;
@@ -3089,6 +3115,9 @@ namespace fonthook::vectorfont
 			token.baseVertexIndex = snapshot.baseVertexIndex;
 			token.vertexChipOffset = snapshot.vertexChipOffset;
 			token.vertexChipSize = snapshot.vertexChipSize;
+			token.indexCount = snapshot.indexCount;
+			token.indexBufferSize = snapshot.indexBufferSize;
+			token.arrayCount = snapshot.arrayCount;
 			token.uploadedByteOffset = uploadedByteOffset;
 			token.uploadedByteCount = uploadedByteCount;
 			token.nativePackDataFlags = snapshot.nativePackDataFlags;
@@ -3190,11 +3219,16 @@ namespace fonthook::vectorfont
 					readySnapshot->modelData = data;
 					readySnapshot->buffer = buffer;
 					readySnapshot->bufferDeclaration = buffer->m_hDeclaration;
+					readySnapshot->geometryGroup = buffer->m_pkGeometryGroup;
 					readySnapshot->strideArray = buffer->m_puiVertexStride;
 					readySnapshot->vertexChip = vertexChip;
 					readySnapshot->vertexBuffer = vertexBuffer;
+					readySnapshot->indexBuffer = buffer->m_pkIB;
+					readySnapshot->arrayLengths = buffer->m_pusArrayLengths;
+					readySnapshot->indexArray = buffer->m_pusIndexArray;
 					readySnapshot->generationId = generation->id;
 					readySnapshot->deviceEpoch = generation->deviceEpoch;
+					readySnapshot->bufferFlags = buffer->m_uiFlags;
 					readySnapshot->streamCount = streamCount;
 					readySnapshot->stride = stride;
 					readySnapshot->bufferVertexCount = buffer->m_uiVertCount;
@@ -3203,6 +3237,9 @@ namespace fonthook::vectorfont
 						buffer->m_uiBaseVertexIndex;
 					readySnapshot->vertexChipOffset = vertexChip->m_uiOffset;
 					readySnapshot->vertexChipSize = vertexChip->m_uiSize;
+					readySnapshot->indexCount = buffer->m_uiIndexCount;
+					readySnapshot->indexBufferSize = buffer->m_uiIBSize;
+					readySnapshot->arrayCount = buffer->m_uiNumArrays;
 					readySnapshot->nativePackDataFlags = data->m_usDataFlags;
 					readySnapshot->nativePackDirtyFlags = data->m_usDirtyFlags;
 					readySnapshot->nativePackKeepFlags = data->m_ucKeepFlags;
@@ -3641,8 +3678,9 @@ namespace fonthook::vectorfont
 
 	bool EnsureNativeFontVanillaLayoutShapeReady(const NiTriShape* shape,
 		TileShader* shader, const NativeFontShapePayload& payload,
-		NativeFontVanillaLayoutDrawToken& drawToken)
+		NativeFontVanillaLayoutDrawToken& drawToken, bool& drawTokenHit)
 	{
+		drawTokenHit = false;
 		const VanillaLayoutDrawTokenMismatch mismatch =
 			MatchVanillaLayoutDrawToken(shape, shader, payload, drawToken);
 		if (mismatch == VanillaLayoutDrawTokenMismatch::None)
@@ -3651,6 +3689,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::VanillaLayoutDrawTokenHit);
 			RecordPriorGenerationDeclarationUse(
 				drawToken.priorGenerationDeclaration);
+			drawTokenHit = true;
 			return true;
 		}
 

@@ -1232,6 +1232,102 @@ namespace fonthook::vectorfont
 			counterValue(FreeTypePerfCounter::
 				VanillaLayoutDrawTokenRejected));
 		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite: candidates=%llu replays=%llu fallbacks=%llu envelope=%llu program=%llu renderer=%llu geometry=%llu binding=%llu declaration=%llu prelude=%llu",
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteCandidate),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteReplay),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallback),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackEnvelope),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackProgram),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackRenderer),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackGeometry),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackBinding),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackDeclaration),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallbackPrelude));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_binding_token: token_state=%llu packet_vertices=%llu packet_identity=%llu data_vertices=%llu token_stream=%llu declaration_identity=%llu",
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingTokenState),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingPacketVertexCount),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingPacketIdentity),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingDataVertexCount),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingTokenStream),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingDeclarationIdentity));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_binding_buffer: flags=%llu geometry_group=%llu fvf=%llu software_vp=%llu vertex_snapshot=%llu vertex_packet=%llu max_vertices=%llu stream_count=%llu stride_array=%llu stride_identity=%llu stride_value=%llu",
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBufferFlags),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingGeometryGroup),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingFvf),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingSoftwareVertexProcessing),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBufferVertexSnapshot),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBufferVertexPacket),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBufferMaxVertices),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBufferStreamCount),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingStrideArray),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingStrideIdentity),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingStrideValue));
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_vanilla_standard_lite_binding_resources: chip=%llu chip_identity=%llu chip_index=%llu vertex_buffer=%llu vertex_buffer_identity=%llu chip_offset=%llu chip_size=%llu chip_lock=%llu vertex_range=%llu index_buffer=%llu index_count=%llu index_size=%llu base_vertex=%llu primitive=%llu arrays=%llu submit_witness=%llu unclassified=%llu",
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChip),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChipIdentity),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChipIndex),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexBuffer),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexBufferIdentity),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChipOffset),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChipSize),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexChipLock),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingVertexRange),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingIndexBuffer),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingIndexCount),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingIndexSize),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingBaseVertex),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingPrimitiveTopology),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingArrayTopology),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingSubmissionWitness),
+			counterValue(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteBindingUnclassified));
+		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf: command_recorded=%llu single_packet_commands=%llu single_packet_build_fallbacks=%llu single_packet_hits=%llu single_packet_misses=%llu single_packet_replays=%llu single_packet_fallbacks=%llu spans=%llu packets=%llu span_hits=%llu span_misses=%llu retained_bridge_draws=%llu native_replays=%llu vanilla_bootstraps_saved=%llu direct_single_replays=%llu light_validations=%llu packet_epoch_guards=%llu packet_state_elisions=%llu render_target_validations=%llu execution_segments=%llu segment_full_validations=%llu segment_validation_reuses=%llu segment_invalidations=%llu retained_program_hits=%llu retained_program_misses=%llu fallback_token=%llu generation=%llu atlas=%llu resource=%llu topology=%llu hook=%llu nested=%llu render_target=%llu state=%llu",
 			values[static_cast<size_t>(
 				FreeTypePerfCounter::CommandRecorded)],

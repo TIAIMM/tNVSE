@@ -685,6 +685,7 @@ namespace fonthook::vectorfont
 			IDirect3DVertexDeclaration9* declaration = nullptr;
 			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
 			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+			UInt32 streamOffset = 0;
 			UInt32 stride = 0;
 		};
 
@@ -837,12 +838,13 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildSegmentPassStateKey(NiTriShape* geometry,
-			const NativeFontDrawCommand& command,
+			const NativeFontCompiledPacketCommand* program,
+			const void* atlasTexture,
 			NativeSegmentPassStateKey& key)
 		{
 			DirectTileShaderPropertyView* tile =
 				GetDirectTileProperty(geometry);
-			if (!tile || !command.program || !command.atlasTexture
+			if (!tile || !program || !atlasTexture
 				|| !tile->sourceTexture.m_pObject
 				|| tile->alphaTexture.m_pObject
 				|| tile->noTexture)
@@ -850,10 +852,10 @@ namespace fonthook::vectorfont
 				return false;
 			}
 			key = {};
-			key.program = command.program;
+			key.program = program;
 			key.sourceTexture = tile->sourceTexture.m_pObject;
 			key.alphaTexture = tile->alphaTexture.m_pObject;
-			key.atlasTexture = command.atlasTexture;
+			key.atlasTexture = atlasTexture;
 			// Official TileShader::SetupGeometryTextures (BCA760) reads
 			// rotates, hasVertexColors, noTexture, both texture pointers and
 			// clampMode. byte90 and every RenderPass flag are irrelevant.
@@ -868,7 +870,7 @@ namespace fonthook::vectorfont
 
 		bool BuildSegmentConstantsStateKey(NiTriShape* geometry,
 			NiDX9Renderer* renderer,
-			const NativeFontDrawCommand& command,
+			const NativeFontCompiledPacketCommand* program,
 			NativeSegmentConstantsStateKey& key,
 			bool& cleanupRequired)
 		{
@@ -876,7 +878,7 @@ namespace fonthook::vectorfont
 			cleanupRequired = true;
 			DirectTileShaderPropertyView* tile =
 				GetDirectTileProperty(geometry);
-			if (!geometry || !renderer || !tile || !command.program)
+			if (!geometry || !renderer || !tile || !program)
 				return false;
 
 			const NiStencilProperty* stencil =
@@ -885,7 +887,7 @@ namespace fonthook::vectorfont
 				|| (stencil && stencil->IsEnabled());
 			const NiMaterialProperty* material =
 				geometry->GetMaterialProperty();
-			key.program = command.program;
+			key.program = program;
 			key.world = geometry->m_kWorld;
 			key.view = renderer->m_kD3DView;
 			key.projection = renderer->m_kD3DProj;
@@ -1207,6 +1209,7 @@ namespace fonthook::vectorfont
 			return left.declaration == right.declaration
 				&& left.vertexBuffer == right.vertexBuffer
 				&& left.indexBuffer == right.indexBuffer
+				&& left.streamOffset == right.streamOffset
 				&& left.stride == right.stride;
 		}
 
@@ -1834,6 +1837,139 @@ namespace fonthook::vectorfont
 			Declaration,
 		};
 
+		enum class VanillaLayoutBindingFailure : UInt64
+		{
+			None = 0,
+			TokenState = 1ull << 0,
+			PacketVertexCount = 1ull << 1,
+			PacketIdentity = 1ull << 2,
+			DataVertexCount = 1ull << 3,
+			TokenStream = 1ull << 4,
+			DeclarationIdentity = 1ull << 5,
+			BufferFlags = 1ull << 6,
+			GeometryGroup = 1ull << 7,
+			Fvf = 1ull << 8,
+			SoftwareVertexProcessing = 1ull << 9,
+			BufferVertexSnapshot = 1ull << 10,
+			BufferVertexPacket = 1ull << 11,
+			BufferMaxVertices = 1ull << 12,
+			BufferStreamCount = 1ull << 13,
+			StrideArray = 1ull << 14,
+			StrideIdentity = 1ull << 15,
+			StrideValue = 1ull << 16,
+			VertexChip = 1ull << 17,
+			VertexChipIdentity = 1ull << 18,
+			VertexChipIndex = 1ull << 19,
+			VertexBuffer = 1ull << 20,
+			VertexBufferIdentity = 1ull << 21,
+			VertexChipOffset = 1ull << 22,
+			VertexChipSize = 1ull << 23,
+			VertexChipLock = 1ull << 24,
+			VertexRange = 1ull << 25,
+			IndexBuffer = 1ull << 26,
+			IndexCount = 1ull << 27,
+			IndexSize = 1ull << 28,
+			BaseVertex = 1ull << 29,
+			PrimitiveTopology = 1ull << 30,
+			ArrayTopology = 1ull << 31,
+			SubmissionWitness = 1ull << 32,
+			Unclassified = 1ull << 33,
+		};
+
+		struct VanillaLayoutBindingCounter
+		{
+			VanillaLayoutBindingFailure failure;
+			FreeTypePerfCounter counter;
+		};
+
+		constexpr VanillaLayoutBindingCounter
+			kVanillaLayoutBindingCounters[] = {
+				{VanillaLayoutBindingFailure::TokenState,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingTokenState},
+				{VanillaLayoutBindingFailure::PacketVertexCount,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPacketVertexCount},
+				{VanillaLayoutBindingFailure::PacketIdentity,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPacketIdentity},
+				{VanillaLayoutBindingFailure::DataVertexCount,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingDataVertexCount},
+				{VanillaLayoutBindingFailure::TokenStream,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingTokenStream},
+				{VanillaLayoutBindingFailure::DeclarationIdentity,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingDeclarationIdentity},
+				{VanillaLayoutBindingFailure::BufferFlags,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferFlags},
+				{VanillaLayoutBindingFailure::GeometryGroup,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingGeometryGroup},
+				{VanillaLayoutBindingFailure::Fvf,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingFvf},
+				{VanillaLayoutBindingFailure::SoftwareVertexProcessing,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingSoftwareVertexProcessing},
+				{VanillaLayoutBindingFailure::BufferVertexSnapshot,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferVertexSnapshot},
+				{VanillaLayoutBindingFailure::BufferVertexPacket,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferVertexPacket},
+				{VanillaLayoutBindingFailure::BufferMaxVertices,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferMaxVertices},
+				{VanillaLayoutBindingFailure::BufferStreamCount,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferStreamCount},
+				{VanillaLayoutBindingFailure::StrideArray,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideArray},
+				{VanillaLayoutBindingFailure::StrideIdentity,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideIdentity},
+				{VanillaLayoutBindingFailure::StrideValue,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideValue},
+				{VanillaLayoutBindingFailure::VertexChip,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChip},
+				{VanillaLayoutBindingFailure::VertexChipIdentity,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipIdentity},
+				{VanillaLayoutBindingFailure::VertexChipIndex,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipIndex},
+				{VanillaLayoutBindingFailure::VertexBuffer,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexBuffer},
+				{VanillaLayoutBindingFailure::VertexBufferIdentity,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexBufferIdentity},
+				{VanillaLayoutBindingFailure::VertexChipOffset,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipOffset},
+				{VanillaLayoutBindingFailure::VertexChipSize,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipSize},
+				{VanillaLayoutBindingFailure::VertexChipLock,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipLock},
+				{VanillaLayoutBindingFailure::VertexRange,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexRange},
+				{VanillaLayoutBindingFailure::IndexBuffer,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexBuffer},
+				{VanillaLayoutBindingFailure::IndexCount,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexCount},
+				{VanillaLayoutBindingFailure::IndexSize,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexSize},
+				{VanillaLayoutBindingFailure::BaseVertex,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBaseVertex},
+				{VanillaLayoutBindingFailure::PrimitiveTopology,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPrimitiveTopology},
+				{VanillaLayoutBindingFailure::ArrayTopology,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingArrayTopology},
+				{VanillaLayoutBindingFailure::SubmissionWitness,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingSubmissionWitness},
+				{VanillaLayoutBindingFailure::Unclassified,
+					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingUnclassified},
+			};
+
+		void AddVanillaLayoutBindingFailure(UInt64& failures,
+			VanillaLayoutBindingFailure failure)
+		{
+			failures |= static_cast<UInt64>(failure);
+		}
+
+		void RecordVanillaLayoutBindingFailures(UInt64 failures)
+		{
+			for (const VanillaLayoutBindingCounter& bindingCounter :
+				kVanillaLayoutBindingCounters)
+			{
+				if (failures & static_cast<UInt64>(bindingCounter.failure))
+					RecordFreeTypePerf(bindingCounter.counter);
+			}
+		}
+
 		struct NativeDirectDrawLiteSubmission
 		{
 			NiTriShapeData* data = nullptr;
@@ -1844,6 +1980,10 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 triangleCount = 0;
+			// Optional synchronous witness used by the metadata-only Vanilla route.
+			// Existing frame-command submissions leave it null and retain their
+			// established device-failure handling.
+			bool* successfulDrawWitness = nullptr;
 		};
 
 		void RecordNativeDirectDrawLiteFallback(
@@ -2002,8 +2142,236 @@ namespace fonthook::vectorfont
 			submission.binding.declaration = expected.declaration;
 			submission.binding.vertexBuffer = expected.vertexBuffer;
 			submission.binding.indexBuffer = expected.indexBuffer;
+			submission.binding.streamOffset = 0;
 			submission.binding.stride = sizeof(NativeFontGpuVertex);
 			submission.baseVertex = expected.baseVertex;
+			submission.vertexCount = vertexCount;
+			submission.triangleCount = triangleCount;
+			return NativeDirectDrawLiteFallback::None;
+		}
+
+		NativeDirectDrawLiteFallback
+		BuildVanillaLayoutDirectDrawLiteSubmission(
+			NiTriShape* geometry, NiDX9Renderer* renderer,
+			const NativeFontCompiledPacketCommand& program,
+			const NativeFontPacketTemplate& packet,
+			const NativeFontVanillaLayoutDrawToken& drawToken,
+			NativeDirectDrawLiteSubmission& submission,
+			UInt64& bindingFailures)
+		{
+			// A draw-token hit already certifies the post-Precache 40/48-byte
+			// vertex stream. Direct replay additionally needs the stock indexed
+			// triangle-list envelope; prove every live VB/IB/declaration/range
+			// field here before the Standard-lite prelude mutates renderer state.
+			submission = {};
+			bindingFailures = 0;
+			TileShader* shader = program.shader;
+			void** geometryVtable = geometry
+				? *reinterpret_cast<void***>(geometry) : nullptr;
+			void** shaderVtable = shader
+				? *reinterpret_cast<void***>(shader) : nullptr;
+			if (!program.directDrawLiteReady || !program.active
+				|| !program.profile || !geometry || !shader
+				|| !shaderVtable || shaderVtable != program.shaderVtable
+				|| program.standardV2SlotProofs
+					!= NativeFontCompiledPacketCommand::
+						kStandardV2RequiredProofs
+				|| drawToken.standardLiteProgramIdentity != &program
+				|| drawToken.shaderIdentity != shader
+				|| drawToken.generation != program.generation
+				|| State().originalRenderImmediateAlt
+					!= reinterpret_cast<RenderImmediateFn>(
+						kNiTriShapeOnlyRenderImmediate))
+			{
+				return NativeDirectDrawLiteFallback::Program;
+			}
+
+			if (!renderer || !program.device
+				|| program.device != renderer->GetD3DDevice()
+				|| shader->m_pkD3DDevice != program.device
+				|| shader->m_pkD3DRenderer != renderer
+				|| !shader->m_pkD3DRenderState
+				|| shader->m_pkD3DRenderState != renderer->m_pkRenderState
+				|| !renderer->GetInsideFrameState()
+				|| !renderer->m_bRenderTargetGroupActive
+				|| renderer->m_bDeviceLost)
+			{
+				return NativeDirectDrawLiteFallback::Renderer;
+			}
+
+			NiTriShapeData* data = geometry->GetModelData();
+			NiGeometryBufferData* buffer = data
+				? data->m_pkBuffData : nullptr;
+			if (!geometryVtable || !IsVanillaLayoutShape(geometry)
+				|| geometryVtable[kGeometrySegmentedPredicateSlot]
+					!= reinterpret_cast<void*>(
+						kNiObjectNullGeometryCastPredicate)
+				|| geometryVtable[kGeometryResizablePredicateSlot]
+					!= reinterpret_cast<void*>(
+						kNiObjectNullGeometryCastPredicate)
+				|| geometry->GetSkinInstance() || geometry->GetControllers()
+				|| geometry->GetShader() != shader || !data || !buffer
+				|| data != drawToken.modelDataIdentity
+				|| buffer != drawToken.bufferIdentity
+				|| data->m_spAdditionalGeomData.m_pObject
+				|| (data->m_usDirtyFlags
+					& NiGeometryData::CONSISTENCY_MASK)
+					!= NiGeometryData::STATIC
+				|| !data->GetActiveVertexCount()
+				|| data->GetActiveVertexCount() != packet.vertexCount)
+			{
+				return NativeDirectDrawLiteFallback::Geometry;
+			}
+
+			NiVBChip* chip = buffer->m_uiStreamCount == 1u
+				&& buffer->m_ppkVBChip
+				? buffer->m_ppkVBChip[0] : nullptr;
+			const UInt32 vertexCount = packet.vertexCount;
+			const UInt32 quadCount = vertexCount / 4u;
+			const UInt32 triangleCount = quadCount * 2u;
+			const UInt32 indexCount = quadCount * 6u;
+			const UInt64 requiredVertexBytes =
+				static_cast<UInt64>(vertexCount) * drawToken.stride;
+			const UInt64 relativeVertexEnd =
+				static_cast<UInt64>(drawToken.baseVertexIndex)
+					* drawToken.stride + requiredVertexBytes;
+			const UInt64 requiredIndexBytes =
+				static_cast<UInt64>(indexCount) * sizeof(UInt16);
+			auto markBindingFailure = [&bindingFailures](bool failed,
+				VanillaLayoutBindingFailure failure) {
+				if (failed)
+					AddVanillaLayoutBindingFailure(bindingFailures, failure);
+			};
+			markBindingFailure(!drawToken.valid || !drawToken.payloadUploaded,
+				VanillaLayoutBindingFailure::TokenState);
+			markBindingFailure(!vertexCount || (vertexCount & 3u),
+				VanillaLayoutBindingFailure::PacketVertexCount);
+			markBindingFailure(drawToken.packetIdentity != &packet,
+				VanillaLayoutBindingFailure::PacketIdentity);
+			markBindingFailure(drawToken.dataVertexCount != vertexCount,
+				VanillaLayoutBindingFailure::DataVertexCount);
+			markBindingFailure(drawToken.streamCount != 1u || !drawToken.stride,
+				VanillaLayoutBindingFailure::TokenStream);
+			markBindingFailure(!buffer->m_hDeclaration
+					|| buffer->m_hDeclaration
+						!= drawToken.bufferDeclarationIdentity,
+				VanillaLayoutBindingFailure::DeclarationIdentity);
+			// Retail E71FE0 records packed color/UV/NBT state in m_uiFlags and
+			// retains the owning NiGeometryGroup.  Those fields are deliberately
+			// nonzero/non-null for a stock PrecacheGeometry buffer; require the
+			// post-pack identities certified by the draw token instead of imposing
+			// the zeroed synthetic-facade contract.
+			markBindingFailure(buffer->m_uiFlags != drawToken.bufferFlags,
+				VanillaLayoutBindingFailure::BufferFlags);
+			markBindingFailure(buffer->m_pkGeometryGroup
+					!= drawToken.geometryGroupIdentity,
+				VanillaLayoutBindingFailure::GeometryGroup);
+			markBindingFailure(buffer->m_uiFVF != 0u,
+				VanillaLayoutBindingFailure::Fvf);
+			markBindingFailure(buffer->m_bSoftwareVP,
+				VanillaLayoutBindingFailure::SoftwareVertexProcessing);
+			markBindingFailure(
+				buffer->m_uiVertCount != drawToken.bufferVertexCount,
+				VanillaLayoutBindingFailure::BufferVertexSnapshot);
+			markBindingFailure(buffer->m_uiVertCount != vertexCount,
+				VanillaLayoutBindingFailure::BufferVertexPacket);
+			markBindingFailure(buffer->m_uiMaxVertCount < vertexCount,
+				VanillaLayoutBindingFailure::BufferMaxVertices);
+			markBindingFailure(
+				buffer->m_uiStreamCount != drawToken.streamCount,
+				VanillaLayoutBindingFailure::BufferStreamCount);
+			markBindingFailure(!buffer->m_puiVertexStride,
+				VanillaLayoutBindingFailure::StrideArray);
+			if (buffer->m_puiVertexStride)
+			{
+				markBindingFailure(buffer->m_puiVertexStride
+						!= drawToken.strideArrayIdentity,
+					VanillaLayoutBindingFailure::StrideIdentity);
+				markBindingFailure(buffer->m_puiVertexStride[0]
+						!= drawToken.stride,
+					VanillaLayoutBindingFailure::StrideValue);
+			}
+			markBindingFailure(!chip,
+				VanillaLayoutBindingFailure::VertexChip);
+			if (chip)
+			{
+				markBindingFailure(chip != drawToken.vertexChipIdentity,
+					VanillaLayoutBindingFailure::VertexChipIdentity);
+				markBindingFailure(chip->m_uiIndex != 0u,
+					VanillaLayoutBindingFailure::VertexChipIndex);
+				markBindingFailure(!chip->m_pkVB,
+					VanillaLayoutBindingFailure::VertexBuffer);
+				markBindingFailure(chip->m_pkVB
+						&& chip->m_pkVB != drawToken.vertexBufferIdentity,
+					VanillaLayoutBindingFailure::VertexBufferIdentity);
+				markBindingFailure(
+					chip->m_uiOffset != drawToken.vertexChipOffset,
+					VanillaLayoutBindingFailure::VertexChipOffset);
+				markBindingFailure(
+					chip->m_uiSize != drawToken.vertexChipSize,
+					VanillaLayoutBindingFailure::VertexChipSize);
+				markBindingFailure(chip->m_uiLockFlags != 0u,
+					VanillaLayoutBindingFailure::VertexChipLock);
+				markBindingFailure(relativeVertexEnd > chip->m_uiSize,
+					VanillaLayoutBindingFailure::VertexRange);
+			}
+			markBindingFailure(!buffer->m_pkIB
+					|| buffer->m_pkIB != drawToken.indexBufferIdentity,
+				VanillaLayoutBindingFailure::IndexBuffer);
+			markBindingFailure(buffer->m_uiIndexCount != drawToken.indexCount
+					|| buffer->m_uiIndexCount != indexCount,
+				VanillaLayoutBindingFailure::IndexCount);
+			markBindingFailure(buffer->m_uiIBSize
+					!= drawToken.indexBufferSize
+					|| requiredIndexBytes > buffer->m_uiIBSize,
+				VanillaLayoutBindingFailure::IndexSize);
+			markBindingFailure(buffer->m_uiBaseVertexIndex
+					!= drawToken.baseVertexIndex,
+				VanillaLayoutBindingFailure::BaseVertex);
+			markBindingFailure(buffer->m_eType != D3DPT_TRIANGLELIST
+					|| buffer->m_uiTriCount != triangleCount
+					|| buffer->m_uiMaxTriCount < triangleCount,
+				VanillaLayoutBindingFailure::PrimitiveTopology);
+			// Formal E71FE0 stores the NiTriShape CPU triangle-list pointer in
+			// m_pusIndexArray even after the D3D index buffer is ready.  E745A0
+			// does not dereference it during the one-array indexed draw.  Preserve
+			// that stock pointer as an identity witness; never null or own it.
+			markBindingFailure(buffer->m_uiNumArrays != 1u
+					|| buffer->m_uiNumArrays != drawToken.arrayCount
+					|| buffer->m_pusArrayLengths
+					|| buffer->m_pusArrayLengths
+						!= drawToken.arrayLengthsIdentity
+					|| buffer->m_pusIndexArray
+						!= drawToken.indexArrayIdentity,
+				VanillaLayoutBindingFailure::ArrayTopology);
+			if (bindingFailures)
+			{
+				return NativeDirectDrawLiteFallback::Binding;
+			}
+
+			NiD3DShaderDeclaration* shaderDeclaration =
+				shader->m_spShaderDecl.m_pObject;
+			if (!shaderDeclaration
+				|| shaderDeclaration->GetD3DDeclaration()
+					!= buffer->m_hDeclaration)
+			{
+				return NativeDirectDrawLiteFallback::Declaration;
+			}
+
+			submission.data = data;
+			submission.renderState = shader->m_pkD3DRenderState;
+			submission.device = program.device;
+			submission.binding.declaration =
+				static_cast<IDirect3DVertexDeclaration9*>(
+					buffer->m_hDeclaration);
+			submission.binding.vertexBuffer = chip->m_pkVB;
+			submission.binding.indexBuffer = buffer->m_pkIB;
+			// Formal E812F0 binds every NiGeometryBufferData stream with byte
+			// offset zero; the stock geometry-group location is already represented
+			// by m_uiBaseVertexIndex in the indexed draw.
+			submission.binding.streamOffset = 0;
+			submission.binding.stride = drawToken.stride;
+			submission.baseVertex = drawToken.baseVertexIndex;
 			submission.vertexCount = vertexCount;
 			submission.triangleCount = triangleCount;
 			return NativeDirectDrawLiteFallback::None;
@@ -2043,6 +2411,8 @@ namespace fonthook::vectorfont
 		void ExecuteNativeDirectDrawLite(
 			const NativeDirectDrawLiteSubmission& submission)
 		{
+			if (submission.successfulDrawWitness)
+				*submission.successfulDrawWitness = false;
 			NativeSegmentDeviceStateCache* deviceState =
 				submission.deviceState;
 			const bool bindingReady = deviceState
@@ -2063,7 +2433,8 @@ namespace fonthook::vectorfont
 				submission.renderState->vSetDeclaration(
 					submission.binding.declaration, false);
 				streamResult = submission.device->SetStreamSource(
-					0, submission.binding.vertexBuffer, 0,
+					0, submission.binding.vertexBuffer,
+					submission.binding.streamOffset,
 					submission.binding.stride);
 				indexResult = submission.device->SetIndices(
 					submission.binding.indexBuffer);
@@ -2073,6 +2444,8 @@ namespace fonthook::vectorfont
 				{
 					RecordFreeTypePerf(FreeTypePerfCounter::
 						NativeDirectDrawLiteBindingDeviceFailure);
+					if (submission.successfulDrawWitness)
+						return;
 				}
 				else if (deviceState)
 				{
@@ -2092,7 +2465,11 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					NativeDirectDrawLiteDrawDeviceFailure);
+				if (submission.successfulDrawWitness)
+					return;
 			}
+			if (submission.successfulDrawWitness)
+				*submission.successfulDrawWitness = true;
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteReplay);
 		}
@@ -2504,10 +2881,13 @@ namespace fonthook::vectorfont
 			bool testAlpha, bool blendAlpha, bool setupRenderStates,
 			NiTriShape* geometry,
 			const NativeFontStandardPassLiteDispatch& dispatch,
-			const NativeFontDrawCommand& command,
+			const NativeFontDrawCommand* command,
+			const void* atlasTexture,
 			NiGeometryBufferData* preparedBuffer,
 			const NativeFontSegmentDeviceStateStamp*
-				deviceStateStamp)
+				deviceStateStamp,
+			const NativeDirectDrawLiteSubmission*
+				certifiedDirectDraw = nullptr)
 		{
 			NiDX9Renderer* renderer = dispatch.renderer;
 			TileShader* shader = dispatch.shader;
@@ -2567,7 +2947,8 @@ namespace fonthook::vectorfont
 			NativeSegmentAlphaTestStateKey alphaState;
 			NativeSegmentRenderStatesKey renderStatesKey;
 			const bool passKeyReady =
-				BuildSegmentPassStateKey(geometry, command, passState);
+				BuildSegmentPassStateKey(
+					geometry, &program, atlasTexture, passState);
 			const bool passStateReady = deviceState && passKeyReady
 				&& deviceState->passReady
 				&& SameSegmentPassState(
@@ -2601,7 +2982,7 @@ namespace fonthook::vectorfont
 			const bool constantsKeyReady =
 				dispatch.standardV2Ready
 				&& BuildSegmentConstantsStateKey(
-					geometry, renderer, command,
+					geometry, renderer, &program,
 					constantsState, cleanupRequired);
 			const NativeSegmentConstantsStateRelation constantsRelation =
 				deviceState && constantsKeyReady
@@ -2849,16 +3230,24 @@ namespace fonthook::vectorfont
 
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteCandidate);
-			NativeDirectDrawLiteSubmission directDrawLite;
-			const NativeDirectDrawLiteFallback directDrawFailure =
-				BuildNativeDirectDrawLiteSubmission(
-					geometry, renderer, properties, program, command,
-					preparedBuffer, deviceState, directDrawLite);
+			NativeDirectDrawLiteSubmission builtDirectDraw;
+			const NativeDirectDrawLiteSubmission* directDrawLite =
+				certifiedDirectDraw;
+			NativeDirectDrawLiteFallback directDrawFailure =
+				NativeDirectDrawLiteFallback::None;
+			if (!directDrawLite && command)
+			{
+				directDrawFailure = BuildNativeDirectDrawLiteSubmission(
+					geometry, renderer, properties, program, *command,
+					preparedBuffer, deviceState, builtDirectDraw);
+				if (directDrawFailure == NativeDirectDrawLiteFallback::None)
+					directDrawLite = &builtDirectDraw;
+			}
 			bool directDrawArmed = false;
-			if (directDrawFailure == NativeDirectDrawLiteFallback::None)
+			if (directDrawLite)
 			{
 				NativeDirectDrawLiteArmScope directDrawScope(
-					geometry, directDrawLite);
+					geometry, *directDrawLite);
 				directDrawArmed = directDrawScope.Active();
 				if (directDrawArmed)
 					NativeFontRenderImmediateAlt(geometry, nullptr, renderer);
@@ -2894,6 +3283,248 @@ namespace fonthook::vectorfont
 					FreeTypePerfCounter::
 						SegmentDevicePostElision);
 			}
+		}
+
+		enum class VanillaLayoutStandardLiteFallback : UInt8
+		{
+			None = 0,
+			Envelope,
+			Program,
+			Renderer,
+			Geometry,
+			Binding,
+			Declaration,
+			Prelude,
+		};
+
+		void RecordVanillaLayoutStandardLiteFallback(
+			VanillaLayoutStandardLiteFallback fallback)
+		{
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteFallback);
+			switch (fallback)
+			{
+			case VanillaLayoutStandardLiteFallback::Envelope:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackEnvelope);
+				break;
+			case VanillaLayoutStandardLiteFallback::Program:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackProgram);
+				break;
+			case VanillaLayoutStandardLiteFallback::Renderer:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackRenderer);
+				break;
+			case VanillaLayoutStandardLiteFallback::Geometry:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackGeometry);
+				break;
+			case VanillaLayoutStandardLiteFallback::Binding:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackBinding);
+				break;
+			case VanillaLayoutStandardLiteFallback::Declaration:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackDeclaration);
+				break;
+			case VanillaLayoutStandardLiteFallback::Prelude:
+				RecordFreeTypePerf(FreeTypePerfCounter::
+					VanillaLayoutStandardLiteFallbackPrelude);
+				break;
+			default:
+				break;
+			}
+		}
+
+		bool TryDrawVanillaLayoutStandardPassLite(
+			BSShaderProperty::RenderPass* pass, UInt32 currentPass,
+			bool testAlpha, bool blendAlpha, bool setupRenderStates,
+			NiTriShape* geometry, TileShader* shader,
+			const NativeFontShapePayload& payload,
+			const NativeFontPayloadTemplate& artifact,
+			const NativeFontPacketTemplate& packet,
+			const NativeFontVanillaLayoutDrawToken& drawToken)
+		{
+			// This route owns no ring residency, frame command, command index, or
+			// execution segment. It consumes only the metadata-owned token and the
+			// generation-owned callback program, then falls back to the complete
+			// predecessor before drawing whenever either proof is incomplete.
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteCandidate);
+			NativeFontShapeState& state = State();
+			if (!state.standardPassLitePredicatesValidated
+				|| state.predecessorRenderPassImmediately
+					!= reinterpret_cast<RenderPassImmediatelyFn>(
+						kBSBatchRendererRenderPassImmediately)
+				|| !pass || !geometry || !shader
+				|| !IsVanillaLayoutShape(geometry)
+				|| pass->pGeometry != geometry
+				|| pass->usPassEnum != currentPass
+				|| currentPass == kForcedShaderSelectionPass
+				|| !IsDefaultNativeReplayPass(currentPass)
+				|| pass->ucNumLights || pass->ppSceneLights
+				|| geometry->GetSkinInstance()
+				|| geometry->GetShader() != shader
+				|| !shader->IsTileShader()
+				|| RendererUsesSpecialPass(geometry)
+				|| CallGeometryPredicate(
+					geometry, kGeometrySpecialPredicateSlot)
+				|| CallGeometryPredicate(
+					geometry, kGeometryAlternatePredicateSlot))
+			{
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Envelope);
+				return false;
+			}
+
+			const NativeFontCompiledPacketCommand* program =
+				drawToken.standardLiteProgramIdentity;
+			void** shaderVtable = *reinterpret_cast<void***>(shader);
+			if (!program || !program->active || !program->profile
+				|| program->profile != drawToken.profileIdentity
+				|| program->shader != shader
+				|| program->shaderVtable != shaderVtable
+				|| program->generation != drawToken.generation
+				|| !program->directDrawLiteReady
+				|| program->standardV2SlotProofs
+					!= NativeFontCompiledPacketCommand::
+						kStandardV2RequiredProofs
+				|| !program->prepareGeometryForRendering
+				|| !program->setupGeometryTextures
+				|| !program->setupGeometryConstants
+				|| !program->setupGeometryAlphaBlending
+				|| !program->setupGeometryAlphaTesting
+				|| !program->setupGeometryRenderStates
+				|| !program->postGeometry
+				|| !program->setupNonFirstPass)
+			{
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Program);
+				return false;
+			}
+
+			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+			if (!renderer || !program->device
+				|| program->device != renderer->GetD3DDevice()
+				|| shader->m_pkD3DDevice != program->device
+				|| shader->m_pkD3DRenderer != renderer
+				|| !shader->m_pkD3DRenderState
+				|| shader->m_pkD3DRenderState != renderer->m_pkRenderState
+				|| !renderer->GetInsideFrameState()
+				|| !renderer->m_bRenderTargetGroupActive
+				|| renderer->m_bDeviceLost)
+			{
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Renderer);
+				return false;
+			}
+
+			DirectTileShaderPropertyView* tile =
+				GetDirectTileProperty(geometry);
+			NiTexture* expectedTexture = packet.atlasPage
+					< artifact.atlasTextures.size()
+				? artifact.atlasTextures[packet.atlasPage].m_pObject
+				: nullptr;
+			NiDX9TextureData* textureData = expectedTexture
+				? expectedTexture->GetDX9RendererData() : nullptr;
+			const void* atlasTexture = textureData
+				? textureData->GetD3DTexture() : nullptr;
+			if (!payload.buildComplete
+				|| payload.payloadTemplate.get() != &artifact
+				|| drawToken.payloadIdentity != &payload
+				|| drawToken.artifactIdentity != &artifact
+				|| drawToken.packetIdentity != &packet
+				|| !HasNativeFontPayloadValidationSeal(artifact)
+				|| artifact.compositePackets.size() != 1u
+				|| &artifact.compositePackets.front() != &packet
+				|| !tile || !expectedTexture || !atlasTexture
+				|| tile->sourceTexture.m_pObject != expectedTexture
+				|| tile->alphaTexture.m_pObject || tile->noTexture)
+			{
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Geometry);
+				return false;
+			}
+
+			NativeDirectDrawLiteSubmission directDraw;
+			bool directDrawSucceeded = false;
+			UInt64 bindingFailures = 0;
+			const NativeDirectDrawLiteFallback directDrawFailure =
+				BuildVanillaLayoutDirectDrawLiteSubmission(
+					geometry, renderer, *program, packet,
+					drawToken, directDraw, bindingFailures);
+			if (directDrawFailure != NativeDirectDrawLiteFallback::None)
+			{
+				if (directDrawFailure == NativeDirectDrawLiteFallback::Binding)
+				{
+					if (!bindingFailures)
+					{
+						AddVanillaLayoutBindingFailure(bindingFailures,
+							VanillaLayoutBindingFailure::Unclassified);
+					}
+					RecordVanillaLayoutBindingFailures(bindingFailures);
+				}
+				VanillaLayoutStandardLiteFallback failure =
+					VanillaLayoutStandardLiteFallback::Binding;
+				switch (directDrawFailure)
+				{
+				case NativeDirectDrawLiteFallback::Program:
+					failure = VanillaLayoutStandardLiteFallback::Program;
+					break;
+				case NativeDirectDrawLiteFallback::Renderer:
+					failure = VanillaLayoutStandardLiteFallback::Renderer;
+					break;
+				case NativeDirectDrawLiteFallback::Geometry:
+					failure = VanillaLayoutStandardLiteFallback::Geometry;
+					break;
+				case NativeDirectDrawLiteFallback::Declaration:
+					failure = VanillaLayoutStandardLiteFallback::Declaration;
+					break;
+				default:
+					break;
+				}
+				RecordVanillaLayoutStandardLiteFallback(failure);
+				return false;
+			}
+			directDraw.successfulDrawWitness = &directDrawSucceeded;
+
+			NativeFontStandardPassLiteDispatch dispatch;
+			dispatch.geometry = geometry;
+			dispatch.properties = &geometry->m_kProperties;
+			dispatch.renderer = renderer;
+			dispatch.shader = shader;
+			dispatch.program = program;
+			dispatch.generation = program->generation;
+			dispatch.standardV2Ready = true;
+			dispatch.ready = true;
+
+			if (!PrepareGuardedNativeReplay(
+					pass, currentPass, geometry, shader)
+				|| shader->m_uiCurrentPass != 0u)
+			{
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Prelude);
+				return false;
+			}
+
+			NativeDirectImmediateScope immediateScope(geometry);
+			ExecuteStandardPassLite(pass, currentPass,
+				testAlpha, blendAlpha, setupRenderStates,
+				geometry, dispatch, nullptr, atlasTexture,
+				directDraw.data->m_pkBuffData, nullptr,
+				&directDraw);
+			if (!immediateScope.Drew() || !directDrawSucceeded)
+			{
+				RecordVanillaLayoutBindingFailures(static_cast<UInt64>(
+					VanillaLayoutBindingFailure::SubmissionWitness));
+				RecordVanillaLayoutStandardLiteFallback(
+					VanillaLayoutStandardLiteFallback::Binding);
+				return false;
+			}
+			RecordFreeTypePerf(FreeTypePerfCounter::
+				VanillaLayoutStandardLiteReplay);
+			return true;
 		}
 
 		bool InvokeGuardedNativeReplay(
@@ -2997,7 +3628,8 @@ namespace fonthook::vectorfont
 			{
 				ExecuteStandardPassLite(pass, currentPass,
 					testAlpha, blendAlpha, setupRenderStates,
-					geometry, *liteDispatch, *command,
+					geometry, *liteDispatch, command,
+					command->atlasTexture,
 					preparedBuffer, deviceStateStamp);
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::StandardPassLiteStage3Replay);
@@ -4872,6 +5504,7 @@ namespace fonthook::vectorfont
 		NativeFontShapeMetadataPtr metadataOwner;
 		const NativeFontShapeMetadata* metadata = nullptr;
 		NativeFontShapePayload* payload = nullptr;
+		bool metadataPayloadCompatibilityFallback = false;
 		if (sortedFrameHit && frameEntry.metadata)
 		{
 			metadata = frameEntry.metadata;
@@ -4909,8 +5542,10 @@ namespace fonthook::vectorfont
 					shape->SetShader(shader);
 				NativeFontVanillaLayoutDrawToken* drawToken =
 					GetVanillaLayoutDrawToken(*metadata);
+				bool drawTokenHit = false;
 				if (shader && drawToken && EnsureNativeFontVanillaLayoutShapeReady(
-					shape, shader, metadata->nativePayload, *drawToken))
+					shape, shader, metadata->nativePayload, *drawToken,
+					drawTokenHit))
 				{
 					if (s_constantOwnershipBatch.FrameActive())
 					{
@@ -4919,19 +5554,50 @@ namespace fonthook::vectorfont
 					}
 					s_segmentDeviceStateCache.Reset();
 					UInt64 vanillaLayoutTransition = 0;
+					bool vanillaLayoutTransitionActive = false;
 					bool vanillaLayoutDrawn = false;
 					{
 						NativeFacadeShaderBatchScope shaderBatch;
-						VanillaLayoutOriginalVtableScope vanillaVtable(shape);
-						if (vanillaVtable.Active())
+						if (drawTokenHit)
 						{
 							vanillaLayoutTransition =
 								BeginNativeFontVanillaLayoutShaderTransition(
 									shader, currentPass);
-							state.predecessorRenderPassImmediately(pass,
-								currentPass, testAlpha, blendAlpha,
-								setupRenderStates);
-							vanillaLayoutDrawn = true;
+							vanillaLayoutTransitionActive = true;
+							vanillaLayoutDrawn =
+								TryDrawVanillaLayoutStandardPassLite(
+									pass, currentPass, testAlpha,
+									blendAlpha, setupRenderStates,
+									shape, shader,
+									metadata->nativePayload,
+									*metadata->nativePayload.payloadTemplate,
+									packet, *drawToken);
+						}
+						if (!vanillaLayoutDrawn)
+						{
+							VanillaLayoutOriginalVtableScope vanillaVtable(shape);
+							if (vanillaVtable.Active())
+							{
+								if (!vanillaLayoutTransitionActive)
+								{
+									vanillaLayoutTransition =
+										BeginNativeFontVanillaLayoutShaderTransition(
+											shader, currentPass);
+									vanillaLayoutTransitionActive = true;
+								}
+								state.predecessorRenderPassImmediately(pass,
+									currentPass, testAlpha, blendAlpha,
+									setupRenderStates);
+								vanillaLayoutDrawn = true;
+							}
+						}
+						if (vanillaLayoutTransitionActive)
+						{
+							EndNativeFontVanillaLayoutShaderTransition(
+								vanillaLayoutTransition, shader);
+						}
+						if (vanillaLayoutDrawn)
+						{
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::VanillaLayoutDraw);
 							if (shiftedVanillaLayout)
@@ -4943,8 +5609,6 @@ namespace fonthook::vectorfont
 					}
 					if (vanillaLayoutDrawn)
 					{
-						EndNativeFontVanillaLayoutShaderTransition(
-							vanillaLayoutTransition, shader);
 						return;
 					}
 					InvalidateNativeFontSortedShaderState();
@@ -4957,7 +5621,19 @@ namespace fonthook::vectorfont
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					VanillaLayoutShiftedRuntimeFallback);
 			}
+
+			// The sorted-frame entry deliberately keeps payload null so a
+			// Vanilla-layout shape cannot enter the 52-byte ring or command
+			// builders.  If its engine-layout draw cannot be made ready, restore
+			// only this local payload view for the established compatibility
+			// fallback below.
+			if (!payload && metadata->nativePayload.buildComplete)
+			{
+				payload = &metadata->nativePayload;
+				metadataPayloadCompatibilityFallback = true;
+			}
 		}
+
 		if (metadata->backend
 			== FreeTypeShapeBackend::SingletonFacade)
 		{
@@ -5089,6 +5765,8 @@ namespace fonthook::vectorfont
 				failure = NativeFontFallbackReason::RuntimeFault;
 		}
 		else if (sortedFrameHit
+			&& !metadataPayloadCompatibilityFallback
+			&& frameEntry.payload == payload
 			&& frameEntry.preflightResult == NativeFontFallbackReason::None
 			&& frameEntry.validationToken
 			&& frameEntry.generation == payload->preparedGeneration
@@ -5096,8 +5774,10 @@ namespace fonthook::vectorfont
 				== GetNativeFontAtlasTextureEpoch()
 			)
 		{
-			// NativeFontRenderAlphaGeometry retained the metadata owner and validated this
-			// exact payload immediately before the vanilla sorted Tile traversal.
+			// NativeFontRenderAlphaGeometry retained the metadata owner and validated
+			// this exact published payload immediately before the vanilla sorted Tile
+			// traversal. A Vanilla-layout compatibility payload is intentionally not
+			// published, so it must use the ordinary preparation path below.
 			failure = NativeFontFallbackReason::None;
 		}
 		else
@@ -5108,8 +5788,12 @@ namespace fonthook::vectorfont
 			NativeFontShapePayload* const sourcePayload = payload;
 			NativePacketDrawResult draw;
 			const UInt32 commandSpanIndex =
-				sortedFrameHit
+				sortedFrameHit && !metadataPayloadCompatibilityFallback
 					? frameEntry.commandSpanIndex
+					: kInvalidNativeFontCommandIndex;
+			const UInt32 singlePacketCommandIndex =
+				sortedFrameHit && !metadataPayloadCompatibilityFallback
+					? frameEntry.singlePacketCommandIndex
 					: kInvalidNativeFontCommandIndex;
 			bool commandHandled = false;
 			if (g_bEnableFreeTypeFontCommandBuffer
@@ -5138,11 +5822,12 @@ namespace fonthook::vectorfont
 			{
 				draw = {};
 				const bool directShapeHandled = sortedFrameHit
+					&& !metadataPayloadCompatibilityFallback
 					&& TryDrawNativeSinglePacketDirect(
 						pass, currentPass, setupRenderStates,
 						shape, *sourcePayload, draw,
 						commandSpanIndex,
-						frameEntry.singlePacketCommandIndex);
+						singlePacketCommandIndex);
 				if (!directShapeHandled)
 				{
 					if (metadata->backend
