@@ -697,11 +697,17 @@ namespace fonthook::vectorfont
 					std::numeric_limits<UInt64>::max())
 					/ 1000.0;
 			};
-			result.medianMicroseconds = quantile(50, 100);
-			result.p95Microseconds = quantile(95, 100);
-			result.p99Microseconds = quantile(99, 100);
 			result.maximumMicroseconds =
 				static_cast<double>(maximumNanoseconds) / 1000.0;
+			// Histogram quantiles use the selected bucket's upper bound. Clamp that
+			// estimate to the exact observed maximum so the published summary keeps
+			// the usual quantile <= maximum invariant.
+			result.medianMicroseconds = std::min(
+				quantile(50, 100), result.maximumMicroseconds);
+			result.p95Microseconds = std::min(
+				quantile(95, 100), result.maximumMicroseconds);
+			result.p99Microseconds = std::min(
+				quantile(99, 100), result.maximumMicroseconds);
 			return result;
 		}
 
@@ -756,11 +762,14 @@ namespace fonthook::vectorfont
 				return static_cast<double>(
 					std::numeric_limits<UInt64>::max()) / 1000.0;
 			};
-			result.medianMicroseconds = quantile(50, 100);
-			result.p95Microseconds = quantile(95, 100);
-			result.p99Microseconds = quantile(99, 100);
 			result.maximumMicroseconds =
 				static_cast<double>(maximumNanoseconds) / 1000.0;
+			result.medianMicroseconds = std::min(
+				quantile(50, 100), result.maximumMicroseconds);
+			result.p95Microseconds = std::min(
+				quantile(95, 100), result.maximumMicroseconds);
+			result.p99Microseconds = std::min(
+				quantile(99, 100), result.maximumMicroseconds);
 			return result;
 		}
 
@@ -1052,14 +1061,15 @@ namespace fonthook::vectorfont
 			+ gpuCounterValue(GpuTimingCounter::ResetDiscarded);
 
 		FreeTypeFontDebugLog(
-			"tnvse_freetype_perf_summary: text_artifacts=%llu rasterized=%llu atlas_uploads=%llu visibility_checks=%llu visibility_culled=%llu vanilla_draws=%llu vanilla_culls=%llu standard_lite_replays=%llu native_direct_replays=%llu command_replays=%llu",
+			"tnvse_freetype_perf_summary: text_artifacts=%llu rasterized=%llu atlas_uploads=%llu visibility_checks=%llu visibility_culled=%llu vanilla_draws=%llu dispatch_local_vanilla_culls=%llu standard_lite_replays=%llu direct_draw_lite_replays=%llu command_replays=%llu",
 			counterValue(FreeTypePerfCounter::TextArtifactCompile),
 			counterValue(FreeTypePerfCounter::BitmapRasterized),
 			counterValue(FreeTypePerfCounter::AtlasUpload),
 			counterValue(FreeTypePerfCounter::VisibilityCheck),
 			counterValue(FreeTypePerfCounter::VisibilityCulled),
 			counterValue(FreeTypePerfCounter::VanillaLayoutDraw),
-			counterValue(FreeTypePerfCounter::VanillaLayoutCull),
+			counterValue(
+				FreeTypePerfCounter::VanillaLayoutDispatchLocalCull),
 			counterValue(FreeTypePerfCounter::VanillaLayoutStandardLiteReplay),
 			counterValue(FreeTypePerfCounter::NativeDirectDrawLiteReplay),
 			counterValue(FreeTypePerfCounter::CommandNativeReplay));

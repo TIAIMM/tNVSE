@@ -45,7 +45,7 @@ namespace fonthook::vectorfont
 		UInt16 deduplicatedPages = 0;
 		UInt16 physicalAliasPages = 0;
 		UInt64 deduplicatedGpuBytes = 0;
-		UInt64 directStreamedPixelBytes = 0;
+		UInt64 snapshotPayloadBytesRead = 0;
 		for (UInt16 pageIndex = 0; pageIndex == 0 || pageIndex < pageCount; ++pageIndex)
 		{
 			AtlasCacheKey pageKey = key;
@@ -219,8 +219,10 @@ namespace fonthook::vectorfont
 								resource->height, resource->pixelMode, resource->mipLevels);
 						}
 						else
+						{
 							RegisterDefaultPoolAtlasPage(resource, header.pageContentHash);
-						directStreamedPixelBytes += header.pixelBytes;
+							snapshotPayloadBytesRead += header.pixelBytes;
+						}
 					}
 				}
 				if (!restoredToDefaultPool)
@@ -250,7 +252,7 @@ namespace fonthook::vectorfont
 						return false;
 					}
 					resource->property = property;
-					directStreamedPixelBytes += storedPixelVector.size();
+					snapshotPayloadBytesRead += storedPixelVector.size();
 				}
 			}
 			compactSnapshot->cpuMemory.Reset(CpuMemoryCategory::AtlasMetadata,
@@ -369,7 +371,7 @@ namespace fonthook::vectorfont
 		else
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas snapshot restored font=%u role=%s pages=%u physicalAliasPages=%u replacedPages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu directStreamedPixelBytes=%llu",
+				"tnvse_freetype_font: atlas snapshot restored font=%u role=%s pages=%u physicalAliasPages=%u replacedPages=%u defaultPoolPages=%u deduplicatedPages=%u deduplicatedGpuBytes=%llu placements=%llu bytes=%llu snapshotPayloadBytesRead=%llu",
 				key.fontId, key.byteClass == VectorFontByteClass::DoubleByte
 					? "doubleByte" : "singleByte", pageCount,
 				physicalAliasPages, replacedPages,
@@ -377,7 +379,7 @@ namespace fonthook::vectorfont
 				static_cast<unsigned long long>(deduplicatedGpuBytes),
 				static_cast<unsigned long long>(totalPlacements),
 				static_cast<unsigned long long>(totalBytes),
-				static_cast<unsigned long long>(directStreamedPixelBytes));
+				static_cast<unsigned long long>(snapshotPayloadBytesRead));
 		}
 		return true;
 	}

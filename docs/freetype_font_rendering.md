@@ -1443,7 +1443,7 @@ post-Sort preflight, where final transform and scissor state are available.
 Direct descriptors are still restored before resource replacement, device
 reset, shader reload, atlas-epoch change, or shape destruction.
 
-The current build identity is `compact-perf-telemetry-v120`. With
+The current build identity is `compact-perf-telemetry-v121`. With
 `bEnableFreeTypeFontRenderingLog=1`, periodic performance telemetry is now
 bounded to four records every ten seconds:
 

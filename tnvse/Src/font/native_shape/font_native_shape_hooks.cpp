@@ -184,7 +184,7 @@ namespace fonthook::vectorfont
 				RecordNativeFontVisibilityCull(visibilityCull);
 				RecordGpuEnvelopeVanillaCull(visibilityCull);
 				RecordFreeTypePerf(
-					FreeTypePerfCounter::VanillaLayoutCull);
+					FreeTypePerfCounter::VanillaLayoutDispatchLocalCull);
 				return;
 			}
 		}

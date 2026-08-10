@@ -458,7 +458,7 @@ namespace fonthook::vectorfont
 		VanillaLayoutCreated,
 		VanillaLayoutFallback,
 		VanillaLayoutDraw,
-		VanillaLayoutCull,
+		VanillaLayoutDispatchLocalCull,
 		VanillaLayoutRuntimeFallback,
 		VanillaLayoutVertex,
 		VanillaLayoutCertifiedVertexScanAvoided,
