@@ -1068,8 +1068,10 @@ all agree. A mixed equal-depth run changed by tNVSE invalidates every direct
 slot in that run; a plugin predecessor, nested traversal, pointer mutation, or
 any mismatch uses the existing facade-hash lookup. Duplicate facade occurrences
 remain valid because each sorted occurrence points to the same unique frame
-entry. `frame_entry_index_hits` and `frame_entry_hash_lookups` in
-`tnvse_freetype_accumulator_prep` report the two routes.
+
+Both lookup routes remain part of the runtime proof, but production
+telemetry no longer emits separate per-route lookup counters.
+
 
 A singleton facade is direct-command eligible only when its metadata identity
 is current and it occurs exactly once in the final array. A duplicate facade
@@ -1191,18 +1193,12 @@ already covers the renderer, view/projection, viewport, position adjustment,
 primitive clipping, and scaled-scissor mode. Combined with the complete live
 key, this also lets an exact hit reuse its certified route before repeating
 scissor-within-viewport and finite-bound derivation;
-`cache_route_validations_elided` reports the same exact-hit population. There
-is no late-visibility phase line. Exact-cache misses that use a Tile scissor
-retain a separate 16-entry exact-`RECT` to NDC cache. Its last successful slot
-is checked first because adjacent sorted UI text commonly shares one scissor;
-`rect_hot_hits`, `rect_set_hits`, and `rect_builds` distinguish the one-probe
-path, a later set hit, and a conversion respectively. These are accumulated in
-the frame context and published only after preflight, rather than atomically
-updated per shape.
-The thin registration route performs no visibility work.
-The `tnvse_freetype_accumulator_prep` line separately reports empty-facade fast
-returns, metadata acquisitions avoided by proven culls, direct-index versus
-facade-hash frame-entry lookups, and traversals with no prepared payload.
+
+The exact-cache, scissor conversion, and thin-registration rules are
+unchanged. Their former per-cache and per-preparation periodic lines have been
+retired; compact telemetry reports only aggregate visibility and frame-prep
+health.
+
 
 ### Vanilla-layout distance-field target
 
@@ -1441,59 +1437,31 @@ prevents duplicate layers.
 Direct descriptors borrow generation- and upload-epoch-bound buffers and are
 restored before resource replacement, device reset, shader reload, atlas epoch
 change, or shape destruction. Multi-packet facade mode owns no per-packet
-geometry descriptor. The periodic tnvse_freetype_singleton_facade line reports
-facades, total payload packets, single- and multi-packet artifacts, direct/span/
-packet-loop frames, topology switches, fallbacks, partial faults, and the
-invariant sibling_shapes=0. The current build identity is
-`createtext-abi-entry-v43`; its rendering baseline remains
-`diagnostic-prune-v41`. It retains the v23 shell-shader restoration fix, v24 logging cleanup, the
-no-Sort-hook single-facade architecture, the v30 linear equal-depth repair, and
-the v31 direct-Sort-array/preflight-only cleanup.
-The prepared-text result cache, vanilla-Tile execution bridge, and early
-TileRect/TileImage/NiNode viewport-subtree hooks are removed. Visibility
-decisions now remain exclusively in the final post-Sort preflight, where the
-final transform and scissor state are available. With rendering logging enabled,
-the first applied repair emits one compact process-thread diagnostic containing
-item, mixed-run, changed-run, and changed-item counts; a proof failure emits one
-fail-open line. It changes no NVSE export, INI key, font-cache format, or save
-format. The vanilla-layout target adds an isolated optional vertex/pixel shader
-ABI; the existing facade shaders and fallback ABI remain unchanged.
 
-With rendering logging enabled, accumulator preparation is now measured only
-from sorted-topology capture through sorted-state publication; it no longer
-overlaps the separately reported vanilla `RenderAlphaGeometry` interval. The
-`tnvse_freetype_accumulator_prep_phases` splits that preparation into
-topology, metadata acquisition, facade visibility/preflight, sorted-ring
-preparation, singleton preparation, command construction, and final state
-publication. Each subphase uses one coarse scope per accumulator traversal,
-not per-item sampling.
+geometry descriptor. Visibility decisions remain exclusively in the final
+post-Sort preflight, where final transform and scissor state are available.
+Direct descriptors are still restored before resource replacement, device
+reset, shader reload, atlas-epoch change, or shape destruction.
 
-The v40 tail diagnostics add boundary-oriented lines.
-`tnvse_freetype_accumulator_prep_tail` reports the
-whole prep plus scratch reset and the previously unmeasured final-transform /
-scissor visibility stage. `tnvse_freetype_accumulator_prep_tail_detail` splits
-the former facade aggregate into runtime readiness, lookup/topology preparation,
-and the per-facade preflight loop. Both include mean, median, P95, P99, and an
-exact interval maximum; histogram percentiles remain conservative bucket upper
-bounds. In v41 the former prep timing and tail-existing lines are consolidated
-as `tnvse_freetype_accumulator_prep_phases`, which reports count, mean, P95,
-P99, and exact maximum without duplicating the same phases. Finally,
-`tnvse_freetype_accumulator_prep_tail_workload` counts prep traversals at or
-above 250, 500, 1000, and 2000 microseconds and snapshots the worst traversal's
-item, facade, visible-survivor, culled, payload, singleton, and command-frame
-counts. The tail snapshot locks only after the 250-microsecond threshold and
-`tnvse_freetype_accumulator_prep_tail_worst` reports the matching per-stage
-durations from that same worst traversal, plus the residual time not attributed
-to a named coarse scope. All of these diagnostics remain disabled with FreeType
-rendering logging.
+The current build identity is `compact-perf-telemetry-v120`. With
+`bEnableFreeTypeFontRenderingLog=1`, periodic performance telemetry is now
+bounded to four records every ten seconds:
 
-The v41 diagnostic cleanup also retires the initial native draw-path D3D state
-snapshots and per-upload sorted-dynamic-batch messages after their binding,
-shader, constant, and residency invariants were established. Their aggregate
-failure, upload, byte, discard, replay, and fallback counters remain. The
-per-facade clip total/world/proof QPC scopes are removed because the enclosing
-accumulator visibility scope now supplies the actionable cost; transform
-hit/miss and cull counters remain on `tnvse_freetype_preflight_clip_cull`.
+- `tnvse_freetype_perf_summary` reports the principal compile, raster, upload,
+  visibility, Vanilla-layout, Standard-lite, direct, and command totals.
+- `tnvse_freetype_perf_cpu` reports the aggregate layout, artifact, frame,
+  preparation, vanilla-render, and dispatch timings.
+- `tnvse_freetype_perf_gpu` retains the asynchronous Tile-alpha and
+  Vanilla-layout envelope summaries plus coarse workload and query health.
+- `tnvse_freetype_perf_health` reports fallbacks, rejected draw tokens,
+  sidecar failures, structural mismatches, and GPU-query failures.
+
+The former subsystem-by-subsystem report matrix, binding-failure breakdown,
+adjacent binding/run-length histograms, Standard-lite four-stage QPC sampler,
+accumulator-tail snapshots, GPU draw buckets, and worst-envelope records are
+removed. Compatibility failures and fail-open events still log at the point
+where they occur. No NVSE export, INI key, cache format, render ordering, or
+fallback decision changed as part of this telemetry cleanup.
 
 ### Retained text command buffer
 
@@ -1895,111 +1863,13 @@ re-enters the unchanged current path; after any packet reaches the driver, the
 span is marked faulted and the facade is not replayed, preventing duplicate
 layers.
 
-The periodic command line reports recorded spans/packets, span hits/misses,
-retained bridge draws, guarded native replays, saved vanilla bootstraps, fused
-direct-single replays, light/render-target validation counts, packet epoch
-guards, full packet-state validation elisions, successful execution segments,
-segment full validations/reuses/invalidations, retained-program hits/misses, and fallbacks by token,
-generation, atlas, resource, topology, hook, nesting, render target, and state.
-The main performance line reports `constant_ownership_segments`, segment
-reuses/releases, and the snapshot Get and restore Set calls elided by pass
-ownership. It also reports `private_reuses`,
-`vanilla_c0_republish_elided`, `compat_republishes`,
-`private_registers_uploaded`, `full_tail_elided`, and
-`vanilla_tile_private_preserves`. With an unmodified retail
-slot 31, `vanilla_c0_republish_elided` should track
-`vanilla_constant_updates` exactly and `compat_republishes` should remain zero;
-any compatibility republish means another component supplied a non-retail
-slot-31 implementation. `full_tail_elided` measures the 8-register-block tail
-not sent by first/full Body and Effect publications. The command-state line
-reports the corresponding `registers_uploaded` and `full_tail_elided` values
-for retained binding. The `state_shadow_` line retains the old mirror/driver
-constant-capture and `state_shadow_driver_gets` fields so a runtime log proves
-that the former path stayed inactive, followed by program/texture/packet and
-vertex-AA reuse counters. Program reuse is counted as two avoided
-publications, one VS plus one PS. A `vertex_aa_vanilla_preserved` count records
-vanilla updates that leave the already published native c208 outside their
-c0-c4 range. A healthy interval has nonzero, balanced ownership
-segments/releases, `snapshot_gets_elided == 2 * constant_ownership_segments`,
-`restore_sets_elided == 2 * releases`, and zero
-`state_shadow_driver_gets`, driver captures, and `isolation_bypass`.
-The timing line adds `command_build` and `command_submit` while preserving
-`submit`. Runtime validation should confirm nonzero `native_replays` and
-`direct_single_replays`,
-`render_target_validations` tracking `segment_full_validations` rather than
-logical spans or packets, substantial `segment_validation_reuses`,
-`packet_epoch_guards` tracking submitted command packets,
-`packet_state_elisions` covering all proven direct/ring packets, and
-`light_validations` remaining only for unproven compatibility paths.
-Unexpected fallbacks must remain zero, and
-`vanilla_constant_updates` should not exceed the logical-span count; Standard v2
-may reduce it further by exactly `constants_reuses`, without visual or runtime
-faults. `constants_lite_replays` is the subset of those reuses that still had
-to install scissor or stencil state; it should remain paired with
-`post_calls`. `constants_lite_fallbacks` should be zero unless the retained
-proof becomes inapplicable, while `constants_lite_scaled_fallbacks` identifies
-the intentionally vanilla-only resolution-scaled scissor case. Build success
-alone does not establish runtime correctness or the CPU-performance thresholds.
-The following `tnvse_freetype_constants_mismatch` line classifies exactly the
-first differing field in the existing short-circuit order for every non-exact
-constant-key comparison. Fields after the first mismatch are normally not
-evaluated or counted, which keeps the diagnostic to at most one relaxed counter
-increment per failed hot-path check. Translation-only world changes are the
-deliberate exception: later fields are compared to prove the light path, but
-world remains the sole first-mismatch counter.
-When `world` is that first mismatch, the adjacent
-`tnvse_freetype_constants_world_mismatch` line decomposes it into rotation,
-translation, and scale. Seven mutually exclusive bit-mask buckets preserve
-which components changed together; their sum is `total`, while the three
-component totals may overlap. Classification still performs only one relaxed
-counter increment per failed world comparison. `unclassified` is a conservative
-representation-change guard and should remain zero.
-`tnvse_freetype_constants_translation_lite` reports successful direct c0-c3
-replays, the subset that also installed transient state, and categorized
-fallbacks. `replays + fallbacks` is the number of fully proved translation-only
-relations; every fallback must execute the complete vanilla/native slot before
-the draw. In a healthy finite run, fallback causes should remain zero and the
-replay count should account for most `translation_only` mismatches that were
-not separated by another later-key change.
 
-The command-build diagnostic additionally reports `tile_retained_builds`,
-`refreshes`, `hits`, `misses`, and `packet_reuses`. After a menu reaches steady
-state, builds should track newly created or program-changed Tile text,
-atlas/resource-only preflight changes may increment refreshes without rebuilding
-the skeleton, hits should track commandized Tile traversals, misses should
-remain zero, and packet reuse should closely track recorded command packets.
-
-The adjacent `standard_pass_lite_` line exposes stage invariants for the dedicated
-single-packet subset. A healthy fully eligible retail run has
-`candidates = stage1_eligible = stage2_resident = stage3_replays`,
-`standard_v2_replays = stage3_replays`, `standard_v2_compat=0`,
-`retained_hits = candidates`, `retained_misses=0`, `vanilla_fallbacks=0`, and
-every categorized fallback at zero. Standard v2 accepts the six retail slot
-implementations with tNVSE's private slot 32 replacing only the cloned native
-TileShader vtable. Its exact key uses `ulFlags[1].No_Fade`; no plugin name,
-version, module RVA, PE identity, or external instruction signature participates
-in native readiness. A nonzero `standard_v2_compat` means at least one retained
-shader generation did not match the fully owned/classified six-slot table; it
-increments `fallback_program` and returns to vanilla `B994F0` before any lite
-prelude or draw, rather than executing an unknown callback inside the delta
-cache. `retained_builds` counts new Tile/program
-dispatches, while `retained_reuses` counts full preflights that retained the
-same Tile/program dispatch instead of rebuilding it; neither should scale with
-steady-state packet submissions. When fallbacks are present,
-`vanilla_fallbacks` equals the sum of `fallback_envelope`, `program`, `renderer`,
-`geometry`, `binding`, and `prelude`; the retained hit/miss pair distinguishes
-a missing or invalidated Tile dispatch from a dynamic pass-envelope rejection.
-The following `segment_device_state_` line reports cache starts/reuses and
-set/reuse pairs for texture/program, constants, blend, alpha-test, and render state
-callbacks, followed by actual slot-35 calls and verified no-op elisions. Every
-vanilla Tile now resets the device-state head
-and invalidates the command execution segment, while the separately proved
-private shader-register shadow remains eligible for post-draw validation.
-`constants_reuses` proves slot 31 was skipped only for identical
-non-transient state; `post_elisions` normally covers every verified packet
-without scissor/stencil, including packets whose constants changed. Alpha-test
-sets/reuses may remain zero because the native-font direct route normally
-disables vanilla alpha testing.
+The retained command, Standard-lite, constant-state, and segment-cache
+contracts described above are unchanged. Their former periodic command/state,
+constant-mismatch, binding-reason, and stage-invariant report lines have been
+retired in favor of the four compact records described earlier. Runtime
+fallback and device-error paths still emit dedicated diagnostics when they
+occur; build success alone remains insufficient proof of gameplay correctness.
 
 ## Atlas allocation, mipmaps, and memory
 

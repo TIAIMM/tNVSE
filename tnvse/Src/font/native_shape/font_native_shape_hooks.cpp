@@ -1238,16 +1238,6 @@ namespace fonthook::vectorfont
 				&& left.stride == right.stride;
 		}
 
-		struct VanillaLayoutStandardLiteBindingRunTracker
-		{
-			NativeSegmentGeometryBindingKey previous;
-			UInt64 frameToken = 0;
-			UInt32 runLength = 0;
-			bool ready = false;
-		};
-
-		thread_local VanillaLayoutStandardLiteBindingRunTracker
-			s_vanillaLayoutStandardLiteBindingRun;
 		struct VisibilityCameraRunTracker
 		{
 			UInt64 frameToken = 0;
@@ -1256,7 +1246,6 @@ namespace fonthook::vectorfont
 			bool ready = false;
 		};
 		thread_local VisibilityCameraRunTracker s_visibilityCameraRun;
-		thread_local UInt32 s_vanillaLayoutStandardLiteCpuSampleCursor = 0;
 		thread_local UInt32 s_nativeFontDispatchRouteSampleCursor = 0;
 
 		void BreakVisibilityCameraRun()
@@ -1301,146 +1290,6 @@ namespace fonthook::vectorfont
 				tracker.ready = true;
 			}
 			tracker.previousSortedItem = frameEntry.retailSortedItemIndex;
-		}
-
-		void FinishVanillaLayoutStandardLiteBindingRun()
-		{
-			VanillaLayoutStandardLiteBindingRunTracker& tracker =
-				s_vanillaLayoutStandardLiteBindingRun;
-			if (!tracker.ready || !tracker.runLength)
-				return;
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				VanillaLayoutStandardLiteBindingRun);
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				VanillaLayoutStandardLiteBindingRunDraw,
-				tracker.runLength);
-			FreeTypePerfCounter bucket = FreeTypePerfCounter::
-				VanillaLayoutStandardLiteBindingRunLength33Plus;
-			if (tracker.runLength == 1u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength1;
-			}
-			else if (tracker.runLength == 2u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength2;
-			}
-			else if (tracker.runLength <= 4u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength3To4;
-			}
-			else if (tracker.runLength <= 8u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength5To8;
-			}
-			else if (tracker.runLength <= 16u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength9To16;
-			}
-			else if (tracker.runLength <= 32u)
-			{
-				bucket = FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingRunLength17To32;
-			}
-			RecordFreeTypePerf(bucket);
-			tracker.runLength = 0;
-			tracker.ready = false;
-		}
-
-		void BreakVanillaLayoutStandardLiteBindingRun()
-		{
-			FinishVanillaLayoutStandardLiteBindingRun();
-			s_vanillaLayoutStandardLiteBindingRun = {};
-		}
-
-		void ObserveVanillaLayoutStandardLiteBinding(
-			const NativeSegmentGeometryBindingKey& binding,
-			UInt64 frameToken)
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog || !frameToken)
-			{
-				BreakVanillaLayoutStandardLiteBindingRun();
-				return;
-			}
-
-			VanillaLayoutStandardLiteBindingRunTracker& tracker =
-				s_vanillaLayoutStandardLiteBindingRun;
-			if (!tracker.ready || tracker.frameToken != frameToken)
-			{
-				FinishVanillaLayoutStandardLiteBindingRun();
-				tracker.previous = binding;
-				tracker.frameToken = frameToken;
-				tracker.runLength = 1u;
-				tracker.ready = true;
-				return;
-			}
-
-			RecordFreeTypePerf(FreeTypePerfCounter::
-				VanillaLayoutStandardLiteBindingAdjacentPair);
-			const bool sameDeclaration =
-				tracker.previous.declaration == binding.declaration;
-			const bool sameVertexBuffer =
-				tracker.previous.vertexBuffer == binding.vertexBuffer;
-			const bool sameIndexBuffer =
-				tracker.previous.indexBuffer == binding.indexBuffer;
-			const bool sameStreamOffset =
-				tracker.previous.streamOffset == binding.streamOffset;
-			const bool sameStride = tracker.previous.stride == binding.stride;
-			if (sameDeclaration)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentSameDeclaration);
-			}
-			if (sameVertexBuffer)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentSameVertexBuffer);
-			}
-			if (sameIndexBuffer)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentSameIndexBuffer);
-			}
-			if (sameStreamOffset)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentSameStreamOffset);
-			}
-			if (sameStride)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentSameStride);
-			}
-
-			if (sameDeclaration && sameVertexBuffer && sameIndexBuffer
-				&& sameStreamOffset && sameStride)
-			{
-				RecordFreeTypePerf(FreeTypePerfCounter::
-					VanillaLayoutStandardLiteBindingAdjacentExact);
-				if (tracker.runLength != std::numeric_limits<UInt32>::max())
-					++tracker.runLength;
-			}
-			else
-			{
-				FinishVanillaLayoutStandardLiteBindingRun();
-				tracker.runLength = 1u;
-			}
-			tracker.previous = binding;
-			tracker.frameToken = frameToken;
-			tracker.ready = true;
-		}
-
-		bool ShouldSampleVanillaLayoutStandardLiteCpuStages()
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog)
-				return false;
-			const UInt32 sample =
-				s_vanillaLayoutStandardLiteCpuSampleCursor++;
-			return sample % kVanillaLayoutStandardLiteCpuSampleRate == 0u;
 		}
 
 		bool ShouldSampleNativeFontDispatchRoute()
@@ -2114,98 +1963,10 @@ namespace fonthook::vectorfont
 			Unclassified = 1ull << 33,
 		};
 
-		struct VanillaLayoutBindingCounter
-		{
-			VanillaLayoutBindingFailure failure;
-			FreeTypePerfCounter counter;
-		};
-
-		constexpr VanillaLayoutBindingCounter
-			kVanillaLayoutBindingCounters[] = {
-				{VanillaLayoutBindingFailure::TokenState,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingTokenState},
-				{VanillaLayoutBindingFailure::PacketVertexCount,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPacketVertexCount},
-				{VanillaLayoutBindingFailure::PacketIdentity,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPacketIdentity},
-				{VanillaLayoutBindingFailure::DataVertexCount,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingDataVertexCount},
-				{VanillaLayoutBindingFailure::TokenStream,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingTokenStream},
-				{VanillaLayoutBindingFailure::DeclarationIdentity,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingDeclarationIdentity},
-				{VanillaLayoutBindingFailure::BufferFlags,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferFlags},
-				{VanillaLayoutBindingFailure::GeometryGroup,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingGeometryGroup},
-				{VanillaLayoutBindingFailure::Fvf,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingFvf},
-				{VanillaLayoutBindingFailure::SoftwareVertexProcessing,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingSoftwareVertexProcessing},
-				{VanillaLayoutBindingFailure::BufferVertexSnapshot,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferVertexSnapshot},
-				{VanillaLayoutBindingFailure::BufferVertexPacket,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferVertexPacket},
-				{VanillaLayoutBindingFailure::BufferMaxVertices,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferMaxVertices},
-				{VanillaLayoutBindingFailure::BufferStreamCount,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBufferStreamCount},
-				{VanillaLayoutBindingFailure::StrideArray,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideArray},
-				{VanillaLayoutBindingFailure::StrideIdentity,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideIdentity},
-				{VanillaLayoutBindingFailure::StrideValue,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingStrideValue},
-				{VanillaLayoutBindingFailure::VertexChip,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChip},
-				{VanillaLayoutBindingFailure::VertexChipIdentity,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipIdentity},
-				{VanillaLayoutBindingFailure::VertexChipIndex,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipIndex},
-				{VanillaLayoutBindingFailure::VertexBuffer,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexBuffer},
-				{VanillaLayoutBindingFailure::VertexBufferIdentity,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexBufferIdentity},
-				{VanillaLayoutBindingFailure::VertexChipOffset,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipOffset},
-				{VanillaLayoutBindingFailure::VertexChipSize,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipSize},
-				{VanillaLayoutBindingFailure::VertexChipLock,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexChipLock},
-				{VanillaLayoutBindingFailure::VertexRange,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingVertexRange},
-				{VanillaLayoutBindingFailure::IndexBuffer,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexBuffer},
-				{VanillaLayoutBindingFailure::IndexCount,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexCount},
-				{VanillaLayoutBindingFailure::IndexSize,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingIndexSize},
-				{VanillaLayoutBindingFailure::BaseVertex,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingBaseVertex},
-				{VanillaLayoutBindingFailure::PrimitiveTopology,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingPrimitiveTopology},
-				{VanillaLayoutBindingFailure::ArrayTopology,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingArrayTopology},
-				{VanillaLayoutBindingFailure::SubmissionWitness,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingSubmissionWitness},
-				{VanillaLayoutBindingFailure::Unclassified,
-					FreeTypePerfCounter::VanillaLayoutStandardLiteBindingUnclassified},
-			};
-
 		void AddVanillaLayoutBindingFailure(UInt64& failures,
 			VanillaLayoutBindingFailure failure)
 		{
 			failures |= static_cast<UInt64>(failure);
-		}
-
-		void RecordVanillaLayoutBindingFailures(UInt64 failures)
-		{
-			for (const VanillaLayoutBindingCounter& bindingCounter :
-				kVanillaLayoutBindingCounters)
-			{
-				if (failures & static_cast<UInt64>(bindingCounter.failure))
-					RecordFreeTypePerf(bindingCounter.counter);
-			}
 		}
 
 		struct NativeDirectDrawLiteSubmission
@@ -2218,7 +1979,6 @@ namespace fonthook::vectorfont
 			UInt32 baseVertex = 0;
 			UInt32 vertexCount = 0;
 			UInt32 triangleCount = 0;
-			bool measureVanillaStandardLiteCpuStages = false;
 			// Optional synchronous witness used by the metadata-only Vanilla route.
 			// Existing frame-command submissions leave it null and retain their
 			// established device-failure handling.
@@ -2674,9 +2434,6 @@ namespace fonthook::vectorfont
 		{
 			if (submission.successfulDrawWitness)
 				*submission.successfulDrawWitness = false;
-			FreeTypePerfScope bindingPerf(
-				FreeTypePerfPhase::VanillaLayoutStandardLiteBinding,
-				submission.measureVanillaStandardLiteCpuStages);
 			NativeSegmentDeviceStateCache* deviceState =
 				submission.deviceState;
 			const bool bindingReady = deviceState
@@ -2718,15 +2475,10 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			bindingPerf.Stop();
-			FreeTypePerfScope drawPerf(
-				FreeTypePerfPhase::VanillaLayoutStandardLiteDraw,
-				submission.measureVanillaStandardLiteCpuStages);
 			const HRESULT drawResult = submission.device->DrawIndexedPrimitive(
 				D3DPT_TRIANGLELIST,
 				static_cast<INT>(submission.baseVertex), 0,
 				submission.vertexCount, 0, submission.triangleCount);
-			drawPerf.Stop();
 			// Formal E745A0 clears the low dirty/revision bits after the indexed
 			// loop even when the D3D call fails. Preserve that exact side effect.
 			submission.data->m_usDirtyFlags &= 0xF000u;
@@ -3163,12 +2915,6 @@ namespace fonthook::vectorfont
 			const NiPropertyState* properties = dispatch.properties;
 			const NativeFontCompiledPacketCommand& program =
 				*dispatch.program;
-			const bool measureVanillaStandardLiteCpuStages =
-				certifiedDirectDraw
-				&& certifiedDirectDraw->measureVanillaStandardLiteCpuStages;
-			FreeTypePerfScope statePerf(
-				FreeTypePerfPhase::VanillaLayoutStandardLiteState,
-				measureVanillaStandardLiteCpuStages);
 			// InvokeGuardedNativeReplay admits only a completely classified
 			// callback table. Unknown injected callbacks return to vanilla B994F0
 			// before its prelude or any draw has executed.
@@ -3503,7 +3249,6 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			statePerf.Stop();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::NativeDirectDrawLiteCandidate);
 			NativeDirectDrawLiteSubmission builtDirectDraw;
@@ -3542,9 +3287,6 @@ namespace fonthook::vectorfont
 						preparedBuffer, properties);
 				NativeFontRenderImmediateAlt(geometry, nullptr, renderer);
 			}
-			FreeTypePerfScope postPerf(
-				FreeTypePerfPhase::VanillaLayoutStandardLitePost,
-				measureVanillaStandardLiteCpuStages);
 			const bool verifiedPost =
 				(program.standardV2SlotProofs
 					& NativeFontCompiledPacketCommand::
@@ -3742,7 +3484,6 @@ namespace fonthook::vectorfont
 						AddVanillaLayoutBindingFailure(bindingFailures,
 							VanillaLayoutBindingFailure::Unclassified);
 					}
-					RecordVanillaLayoutBindingFailures(bindingFailures);
 				}
 				VanillaLayoutStandardLiteFallback failure =
 					VanillaLayoutStandardLiteFallback::Binding;
@@ -3786,9 +3527,6 @@ namespace fonthook::vectorfont
 					VanillaLayoutStandardLiteFallback::Prelude);
 				return false;
 			}
-			directDraw.measureVanillaStandardLiteCpuStages =
-				ShouldSampleVanillaLayoutStandardLiteCpuStages();
-
 			NativeDirectImmediateScope immediateScope(geometry);
 			ExecuteStandardPassLite(pass, currentPass,
 				testAlpha, blendAlpha, setupRenderStates,
@@ -3797,15 +3535,10 @@ namespace fonthook::vectorfont
 				&directDraw);
 			if (!immediateScope.Drew() || !directDrawSucceeded)
 			{
-				RecordVanillaLayoutBindingFailures(static_cast<UInt64>(
-					VanillaLayoutBindingFailure::SubmissionWitness));
 				RecordVanillaLayoutStandardLiteFallback(
 					VanillaLayoutStandardLiteFallback::Binding);
 				return false;
 			}
-			ObserveVanillaLayoutStandardLiteBinding(
-				directDraw.binding,
-				GetNativeFontSortedFrameValidationToken());
 			RecordFreeTypePerf(drawToken.priorGenerationDeclaration
 				? FreeTypePerfCounter::
 					VanillaLayoutStandardLiteCompatibleDeclarationReplay
@@ -5694,8 +5427,6 @@ namespace fonthook::vectorfont
 			? reinterpret_cast<NiTriShape*>(pass->pGeometry) : nullptr;
 		const bool vanillaLayoutShape = IsVanillaLayoutShape(shape);
 		const bool nativeFontShape = IsNativeFontAtlasShape(shape);
-		if (!vanillaLayoutShape)
-			BreakVanillaLayoutStandardLiteBindingRun();
 		if (!nativeFontShape)
 		{
 			BreakVisibilityCameraRun();
@@ -5900,7 +5631,6 @@ namespace fonthook::vectorfont
 						}
 						if (!vanillaLayoutDrawn)
 						{
-							BreakVanillaLayoutStandardLiteBindingRun();
 							VanillaLayoutOriginalVtableScope vanillaVtable(shape);
 							if (vanillaVtable.Active())
 							{
@@ -5954,7 +5684,6 @@ namespace fonthook::vectorfont
 					InvalidateNativeFontSortedShaderState();
 				}
 			}
-			BreakVanillaLayoutStandardLiteBindingRun();
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutRuntimeFallback);
 			RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback();
