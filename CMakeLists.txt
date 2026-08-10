@@ -52,7 +52,11 @@ option(TNVSE_BUILD_FONT_QUALITY_PROBE
 if(TNVSE_BUILD_FONT_QUALITY_PROBE)
   add_executable(tnvse_font_quality_probe
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_distance_field_quality_probe.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen_common.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen_mtsdf.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen_mtsdf_rescue.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/vector/font_vector_msdfgen_true_sdf.cpp")
   target_compile_features(tnvse_font_quality_probe PRIVATE cxx_std_20)
   target_include_directories(tnvse_font_quality_probe PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")

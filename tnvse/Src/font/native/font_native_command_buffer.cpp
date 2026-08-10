@@ -1,5 +1,4 @@
-#include "font_native_shape_internal.h"
-#include "font_native_internal.h"
+#include "font_native_command_detail.h"
 
 #include "load_config.h"
 
@@ -17,80 +16,21 @@
 
 namespace fonthook::vectorfont
 {
-	namespace implementation::font_native_command_buffer {}
 	using namespace implementation::font_native_command_buffer;
 
 	namespace implementation::font_native_command_buffer
 	{
-		struct CommandTileShaderPropertyView : BSShaderProperty
+		NativeFontFrameCommandBuffer& CommandBuffer()
 		{
-			NiTexturePtr sourceTexture;
-			NiTexturePtr alphaTexture;
-			NiColorA overlayColor;
-			float tileAlpha = 1.0f;
-			NiPoint4 textureTransform;
-			NiTexturingProperty::ClampMode clampMode =
-				NiTexturingProperty::CLAMP_S_CLAMP_T;
-			bool byte90 = false;
-			bool rotates = false;
-			bool hasVertexColors = false;
-			bool noTexture = false;
-			BSStringT<char> texturePath;
-			RECT scissorRect = {};
-			bool useScissorTest = false;
-		};
-		static_assert(sizeof(CommandTileShaderPropertyView) == 0xB0);
-		static_assert(offsetof(
-			CommandTileShaderPropertyView, overlayColor) == 0x68);
+			thread_local NativeFontFrameCommandBuffer buffer;
+			return buffer;
+		}
 
-		struct NativeFontExecutionSegmentState
+		NativeFontCommandGlobalState& CommandGlobalState()
 		{
-			// A segment spans adjacent FreeType Tile submissions. Full frame,
-			// hook, device, ring, RT, and viewport validation is shared until a
-			// vanilla/non-FreeType boundary or an externally published resource
-			// mutation advances one of these epochs.
-			UInt64 validationToken = 0;
-			UInt32 boundaryEpoch = 0;
-			UInt32 externalMutationEpoch = 0;
-			NativeFontCommandFallback failure =
-				NativeFontCommandFallback::State;
-			bool validated = false;
-		};
-
-		struct NativeFontFrameCommandBuffer
-		{
-			NativeFontFrameStamp stamp;
-			std::vector<NativeFontDrawCommand> commands;
-			std::vector<NativeFontFrameCommandRun> runs;
-			std::vector<NativeFontCommandSpan> spans;
-			std::vector<NativeFontSinglePacketCommand>
-				singlePacketCommands;
-			std::vector<NativeFontDirectFacadeSinglePacketCommand>
-				directFacadeSinglePacketCommands;
-			CpuMemoryLease cpuMemory;
-			NativeFontExecutionSegmentState executionSegment;
-			UInt32 executionBoundaryEpoch = 1;
-			UInt32 frameExternalMutationEpoch = 0;
-			NativeFontCommandFallback executionBoundaryReason =
-				NativeFontCommandFallback::State;
-			size_t trackedCapacityBytes = 0;
-			size_t highWaterCommands = 0;
-			size_t highWaterRuns = 0;
-			size_t highWaterSpans = 0;
-			size_t highWaterSinglePackets = 0;
-			size_t highWaterDirectFacadeSinglePackets = 0;
-			bool enabled = false;
-			bool active = false;
-			bool building = false;
-		};
-
-		thread_local NativeFontFrameCommandBuffer s_commandBuffer;
-		// Resource lifecycles may publish from a reset/cache thread while the
-		// command buffer itself is render-thread local. One process-wide epoch
-		// lets packet callbacks reject that race with a single acquire load.
-		std::atomic<UInt32> s_externalMutationEpoch = 1;
-		std::atomic<UInt8> s_externalMutationReason =
-			static_cast<UInt8>(NativeFontCommandFallback::State);
+			static NativeFontCommandGlobalState state;
+			return state;
+		}
 
 		NativeFontCommandFallback NormalizeMutationReason(
 			NativeFontCommandFallback reason)
@@ -101,14 +41,14 @@ namespace fonthook::vectorfont
 
 		UInt32 LoadExternalMutationEpoch()
 		{
-			return s_externalMutationEpoch.load(std::memory_order_acquire);
+			return CommandGlobalState().externalMutationEpoch.load(std::memory_order_acquire);
 		}
 
 		NativeFontCommandFallback LoadExternalMutationReason()
 		{
 			return NormalizeMutationReason(
 				static_cast<NativeFontCommandFallback>(
-					s_externalMutationReason.load(
+					CommandGlobalState().externalMutationReason.load(
 						std::memory_order_acquire)));
 		}
 
@@ -752,352 +692,19 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	bool IsNativeFontStandardPassLiteDispatchCurrent(
-		const NativeFontStandardPassLiteDispatch& dispatch,
-		const NiTriShape* geometry,
-		const NativeFontCompiledPacketCommand* program,
-		UInt32 generation)
-	{
-		return dispatch.ready && geometry && program && generation
-			&& dispatch.geometry == geometry
-			&& dispatch.properties == &geometry->m_kProperties
-			&& dispatch.program == program
-			&& dispatch.shader == program->shader
-			&& dispatch.renderer
-			&& dispatch.generation == generation
-			&& program->generation == generation
-			&& dispatch.standardV2Ready
-				== (program->standardV2SlotProofs
-					== NativeFontCompiledPacketCommand::
-						kStandardV2RequiredProofs);
-	}
-
-	void InvalidateNativeFontStandardPassLiteDispatch(
-		NativeFontStandardPassLiteDispatch& dispatch)
-	{
-		dispatch = {};
-	}
-
-	bool BuildNativeFontStandardPassLiteDispatch(
-		NiTriShape* geometry,
-		const NativeFontCompiledPacketCommand* program,
-		UInt32 generation,
-		NativeFontStandardPassLiteDispatch& dispatch)
-	{
-		if (IsNativeFontStandardPassLiteDispatchCurrent(
-				dispatch, geometry, program, generation))
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::StandardPassLiteRetainedReuse);
-			return true;
-		}
-
-		InvalidateNativeFontStandardPassLiteDispatch(dispatch);
-		if (!g_bEnableFreeTypeFontCommandBuffer
-			|| !geometry || !program || !generation
-			|| !State().standardPassLitePredicatesValidated
-			|| geometry->GetSkinInstance()
-			|| !geometry->GetModelData())
-		{
-			return false;
-		}
-
-		void** geometryVtable =
-			*reinterpret_cast<void***>(geometry);
-		TileShader* shader = program->shader;
-		void** shaderVtable = shader
-			? *reinterpret_cast<void***>(shader) : nullptr;
-		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-		if (!IsNativeFontAtlasShape(geometry)
-			|| geometryVtable[kRenderImmediateAltSlot]
-				!= reinterpret_cast<void*>(&NativeFontRenderImmediateAlt)
-			|| !program->active || !program->profile
-			|| program->generation != generation
-			|| !shader || !shaderVtable
-			|| shaderVtable != program->shaderVtable
-			|| !program->prepareGeometryForRendering
-			|| !program->setupGeometryTextures
-			|| !program->setupGeometryConstants
-			|| !program->setupGeometryAlphaBlending
-			|| !program->setupGeometryAlphaTesting
-			|| !program->setupGeometryRenderStates
-			|| !program->postGeometry
-			|| !program->setupNonFirstPass
-			|| !renderer
-			|| program->device != renderer->GetD3DDevice())
-		{
-			return false;
-		}
-
-		dispatch.geometry = geometry;
-		dispatch.properties = &geometry->m_kProperties;
-		dispatch.renderer = renderer;
-		dispatch.shader = shader;
-		dispatch.program = program;
-		dispatch.generation = generation;
-		dispatch.standardV2Ready =
-			program->standardV2SlotProofs
-				== NativeFontCompiledPacketCommand::
-					kStandardV2RequiredProofs;
-		dispatch.ready = true;
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::StandardPassLiteRetainedBuild);
-		return true;
-	}
-
-	size_t GetNativeFontTileRetainedCapacityBytes(
-		const NativeFontShapePayload& payload)
-	{
-		return payload.retainedText.packets.heap_capacity()
-				* sizeof(NativeFontTileRetainedPacket)
-			+ payload.retainedText.runs.heap_capacity()
-				* sizeof(NativeFontTileRetainedRun);
-	}
-
-	void InvalidateNativeFontTileRetainedText(
-		NativeFontShapePayload& payload,
-		bool preserveStandardPassLite)
-	{
-		NativeFontTileRetainedText& retained = payload.retainedText;
-		retained.ready = false;
-		retained.atlasTextureEpoch = 0;
-		retained.bridgeEligible = false;
-		if (!preserveStandardPassLite)
-		{
-			InvalidateNativeFontStandardPassLiteDispatch(
-				retained.standardPassLite);
-		}
-	}
-
-	bool BuildNativeFontTileRetainedText(NiTriShape* ownerTile,
-		NativeFontShapePayload& payload, UInt32 generation,
-		UInt32 atlasTextureEpoch)
-	{
-		NativeFontTileRetainedText& retained = payload.retainedText;
-		// Keep an identity-matching Standard-lite dispatch available while a
-		// preflight refresh proves that the Tile/program pair is unchanged.
-		retained.ready = false;
-		retained.atlasTextureEpoch = 0;
-		retained.bridgeEligible = false;
-		if (!g_bEnableFreeTypeFontCommandBuffer || !ownerTile
-			|| !generation || !atlasTextureEpoch
-			|| !payload.payloadTemplate)
-		{
-			InvalidateNativeFontStandardPassLiteDispatch(
-				retained.standardPassLite);
-			return false;
-		}
-
-		const NativeFontPayloadTemplate& artifact =
-			*payload.payloadTemplate;
-		const std::vector<NativeFontPacketTemplate>& packets =
-			GetNativeFontPackets(artifact, payload.useCompositePackets);
-		auto discardRetained = [&retained]()
-		{
-			retained.ready = false;
-			retained.ownerTile = nullptr;
-			retained.artifact = nullptr;
-			retained.generation = 0;
-			retained.atlasTextureEpoch = 0;
-			retained.useCompositePackets = false;
-			retained.bridgeEligible = false;
-			retained.packets.clear();
-			retained.runs.clear();
-			InvalidateNativeFontStandardPassLiteDispatch(
-				retained.standardPassLite);
-		};
-		if (packets.empty()
-			|| payload.packetShaders.size() != packets.size()
-			|| payload.packetPrograms.size() != packets.size()
-			|| payload.preflightAtlasTextures.size()
-				!= artifact.atlasTextures.size())
-		{
-			discardRetained();
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedMiss);
-			return false;
-		}
-
-		bool canRefresh = retained.ownerTile == ownerTile
-			&& retained.artifact == &artifact
-			&& retained.generation == generation
-			&& retained.useCompositePackets
-				== payload.useCompositePackets
-			&& retained.packets.size() == packets.size()
-			&& !retained.runs.empty();
-		for (UInt32 index = 0;
-			index < static_cast<UInt32>(packets.size()); ++index)
-		{
-			const NativeFontPacketTemplate& packet = packets[index];
-			const NativeFontCompiledPacketCommand* program =
-				payload.packetPrograms[index];
-			const UInt64 packetEnd =
-				static_cast<UInt64>(packet.firstVertex)
-					+ packet.vertexCount;
-			if (!packet.vertexCount || (packet.vertexCount & 3u)
-				|| packetEnd > artifact.gpuVertices.size()
-				|| packet.atlasPage
-					>= payload.preflightAtlasTextures.size()
-				|| !payload.preflightAtlasTextures[packet.atlasPage]
-				|| !payload.packetShaders[index] || !program
-				|| !program->active || !program->profile
-				|| program->generation != generation
-				|| program->shader != payload.packetShaders[index])
-			{
-				discardRetained();
-				RecordFreeTypePerf(
-					FreeTypePerfCounter::CommandTileRetainedMiss);
-				return false;
-			}
-
-			if (canRefresh)
-			{
-				const NativeFontTileRetainedPacket& existing =
-					retained.packets[index];
-				canRefresh = existing.packet == &packet
-					&& existing.program == program
-					&& existing.packetIndex == index
-					&& existing.firstVertex == packet.firstVertex
-					&& existing.vertexCount == packet.vertexCount
-					&& existing.atlasPage == packet.atlasPage;
-				continue;
-			}
-		}
-
-		if (canRefresh)
-		{
-			if (retained.packets.size() == 1)
-			{
-				BuildNativeFontStandardPassLiteDispatch(
-					ownerTile, retained.packets.front().program,
-					generation, retained.standardPassLite);
-			}
-			else
-			{
-				InvalidateNativeFontStandardPassLiteDispatch(
-					retained.standardPassLite);
-			}
-			retained.atlasTextureEpoch = atlasTextureEpoch;
-			retained.bridgeEligible = retained.packets.size() > 1;
-			retained.ready = true;
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedRefresh);
-			return true;
-		}
-
-		discardRetained();
-		if (retained.packets.capacity() < packets.size()
-			|| retained.runs.capacity() < packets.size())
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedMiss);
-			return false;
-		}
-
-		for (UInt32 index = 0;
-			index < static_cast<UInt32>(packets.size()); ++index)
-		{
-			const NativeFontPacketTemplate& packet = packets[index];
-			NativeFontTileRetainedPacket command;
-			command.packet = &packet;
-			command.program = payload.packetPrograms[index];
-			command.packetIndex = index;
-			command.firstVertex = packet.firstVertex;
-			command.vertexCount = packet.vertexCount;
-			command.atlasPage = packet.atlasPage;
-			retained.packets.push_back(command);
-		}
-
-		for (UInt32 first = 0;
-			first < static_cast<UInt32>(retained.packets.size());)
-		{
-			const void* profile =
-				retained.packets[first].program->profile;
-			UInt32 end = first + 1u;
-			while (end < retained.packets.size()
-				&& retained.packets[end].program->profile == profile)
-			{
-				++end;
-			}
-			NativeFontTileRetainedRun run;
-			run.firstPacket = first;
-			run.packetCount = end - first;
-			run.bridgeEligible = true;
-			run.continuesBridgeSpan = first != 0;
-			retained.runs.push_back(run);
-			first = end;
-		}
-
-		retained.ownerTile = ownerTile;
-		retained.artifact = &artifact;
-		retained.generation = generation;
-		retained.atlasTextureEpoch = atlasTextureEpoch;
-		retained.useCompositePackets = payload.useCompositePackets;
-		retained.bridgeEligible = retained.packets.size() > 1;
-		if (retained.packets.size() == 1)
-		{
-			BuildNativeFontStandardPassLiteDispatch(
-				ownerTile, retained.packets.front().program,
-				generation, retained.standardPassLite);
-		}
-		else
-		{
-			InvalidateNativeFontStandardPassLiteDispatch(
-				retained.standardPassLite);
-		}
-		retained.ready = !retained.packets.empty()
-			&& !retained.runs.empty();
-		if (!retained.ready)
-		{
-			discardRetained();
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandTileRetainedMiss);
-			return false;
-		}
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandTileRetainedBuild);
-		return true;
-	}
-
-	bool IsNativeFontTileRetainedTextCurrent(
-		const NativeFontShapePayload& payload,
-		const NiTriShape* ownerTile, UInt32 generation,
-		UInt32 atlasTextureEpoch)
-	{
-		const NativeFontTileRetainedText& retained =
-			payload.retainedText;
-		if (!retained.ready || !ownerTile || !generation
-			|| !atlasTextureEpoch || !payload.payloadTemplate
-			|| retained.ownerTile != ownerTile
-			|| retained.artifact != payload.payloadTemplate.get()
-			|| retained.generation != generation
-			|| retained.atlasTextureEpoch != atlasTextureEpoch
-			|| retained.useCompositePackets
-				!= payload.useCompositePackets)
-		{
-			return false;
-		}
-		const std::vector<NativeFontPacketTemplate>& packets =
-			GetNativeFontPackets(*payload.payloadTemplate,
-				payload.useCompositePackets);
-		return !retained.packets.empty()
-			&& !retained.runs.empty()
-			&& retained.packets.size() == packets.size();
-	}
-
 	void NotifyNativeFontCommandExternalMutation(
 		NativeFontCommandFallback reason)
 	{
-		s_externalMutationReason.store(static_cast<UInt8>(
+		CommandGlobalState().externalMutationReason.store(static_cast<UInt8>(
 			NormalizeMutationReason(reason)), std::memory_order_relaxed);
 		UInt32 current =
-			s_externalMutationEpoch.load(std::memory_order_relaxed);
+			CommandGlobalState().externalMutationEpoch.load(std::memory_order_relaxed);
 		for (;;)
 		{
 			UInt32 next = current + 1u;
 			if (!next)
 				next = 1u;
-			if (s_externalMutationEpoch.compare_exchange_weak(
+			if (CommandGlobalState().externalMutationEpoch.compare_exchange_weak(
 				current, next, std::memory_order_release,
 				std::memory_order_relaxed))
 			{
@@ -1110,14 +717,14 @@ namespace fonthook::vectorfont
 		NativeFontCommandFallback reason)
 	{
 		AdvanceExecutionBoundaryEpoch(
-			s_commandBuffer, NormalizeMutationReason(reason));
+			CommandBuffer(), NormalizeMutationReason(reason));
 	}
 
 	void BeginNativeFontFrameCommandBuffer(BSShaderAccumulator* accumulator,
 		UInt64 validationToken, UInt32 generation, UInt32 atlasTextureEpoch)
 	{
 		EndNativeFontFrameCommandBuffer();
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		buffer.enabled = g_bEnableFreeTypeFontCommandBuffer;
 		if (!buffer.enabled || !g_bEnableFreeTypeFontRendering
 			|| !g_bEnableFreeTypeNativeAtlas || !accumulator
@@ -1144,7 +751,7 @@ namespace fonthook::vectorfont
 	void ReserveNativeFontFrameCommandBuffer(size_t ordinaryEntryCount,
 		size_t directFacadeCount)
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		if (!buffer.building)
 			return;
 
@@ -1166,7 +773,7 @@ namespace fonthook::vectorfont
 	UInt32 AddNativeFontFrameSinglePacketCommand(NiTriShape* facade,
 		const NativeFontShapeMetadata* metadata, NativeFontShapePayload* payload)
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		if (!buffer.building || !facade || !metadata || !payload
 			|| !payload->buildComplete || !payload->payloadTemplate)
 		{
@@ -1248,7 +855,7 @@ namespace fonthook::vectorfont
 	UInt32 AddNativeFontFrameDirectFacadeCommand(
 		const NativeFontShapeMetadata* metadata)
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		SingletonFacadeState* singleton = metadata
 			? GetSingletonFacadeState(*metadata) : nullptr;
 		if (!buffer.building || !metadata || !singleton)
@@ -1341,7 +948,7 @@ namespace fonthook::vectorfont
 	UInt32 AddNativeFontFrameCommandSpan(NiTriShape* facade,
 		const NativeFontShapeMetadata* metadata, NativeFontShapePayload* payload)
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		if (!buffer.building || !facade || !metadata || !payload
 			|| !payload->buildComplete || !payload->payloadTemplate)
 			return kInvalidNativeFontCommandIndex;
@@ -1452,7 +1059,7 @@ namespace fonthook::vectorfont
 
 	void ActivateNativeFontFrameCommandBuffer()
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		buffer.building = false;
 		buffer.active = buffer.enabled && buffer.stamp.device
 			&& ((!buffer.spans.empty() && !buffer.commands.empty())
@@ -1466,7 +1073,7 @@ namespace fonthook::vectorfont
 
 	void EndNativeFontFrameCommandBuffer()
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		for (const NativeFontDirectFacadeSinglePacketCommand& command
 			: buffer.directFacadeSinglePacketCommands)
 		{
@@ -1507,7 +1114,7 @@ namespace fonthook::vectorfont
 
 	void InvalidateNativeFontCommandGeometry(NiTriShape* geometry)
 	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
+		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
 		if (!geometry)
 			return;
 		NotifyNativeFontCommandExternalMutation(
@@ -1596,748 +1203,6 @@ namespace fonthook::vectorfont
 			RecordNativeFontCommandFallback(
 				NativeFontCommandFallback::Topology);
 		}
-	}
-
-	bool FindNativeFontSinglePacketCommand(UInt32 commandIndex,
-		UInt64 validationToken, NativeFontSinglePacketCommandView& view)
-	{
-		view = {};
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!buffer.active || !validationToken
-			|| validationToken != buffer.stamp.validationToken
-			|| commandIndex >= buffer.singlePacketCommands.size())
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandSinglePacketMiss);
-			return false;
-		}
-		const NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		if (command.validationToken != validationToken)
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::CommandSinglePacketMiss);
-			return false;
-		}
-		view.stamp = &buffer.stamp;
-		view.command = &command;
-		view.commandIndex = commandIndex;
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandSinglePacketHit);
-		return true;
-	}
-
-	bool BeginNativeFontSinglePacketCommandExecution(UInt32 commandIndex,
-		NiTriShape* geometry, NativeFontSinglePacketCommandView& view)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeFontSinglePacketCommand(commandIndex,
-				buffer.stamp.validationToken, view))
-		{
-			return false;
-		}
-		NativeFontCommandFallback failure =
-			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeFontCommandFallback::None)
-		{
-			RecordSinglePacketCommandFallback(failure);
-			return false;
-		}
-
-		NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		if (command.validationToken != buffer.stamp.validationToken
-			|| command.generation != buffer.stamp.generation
-			|| command.atlasTextureEpoch
-				!= buffer.stamp.atlasTextureEpoch
-			|| !command.payload || !command.artifact
-			|| !command.payload->payloadTemplate
-			|| command.payload->payloadTemplate.get()
-				!= command.artifact
-			|| command.payload->useCompositePackets
-				!= command.useCompositePackets
-			|| command.draw.payload != command.payload
-			|| !command.draw.packet
-			|| command.draw.packetIndex != 0)
-		{
-			RecordSinglePacketCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-		if (command.state != NativeFontCommandSpanState::Ready)
-		{
-			RecordSinglePacketCommandFallback(
-				NativeFontCommandFallback::State);
-			return false;
-		}
-		if (!geometry || command.facade != geometry
-			|| command.draw.sourceGeometry != geometry)
-		{
-			command.state = NativeFontCommandSpanState::Fault;
-			command.partialDraw = false;
-			command.executionValidationToken = 0;
-			command.executionSegmentEpoch = 0;
-			command.executionExternalMutationEpoch = 0;
-			RecordSinglePacketCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-
-		command.state = NativeFontCommandSpanState::Executing;
-		command.partialDraw = false;
-		command.executionValidationToken =
-			buffer.stamp.validationToken;
-		command.executionSegmentEpoch =
-			buffer.executionSegment.boundaryEpoch;
-		command.executionExternalMutationEpoch =
-			buffer.executionSegment.externalMutationEpoch;
-		view.command = &command;
-		return true;
-	}
-
-	void EndNativeFontSinglePacketCommandExecution(UInt32 commandIndex,
-		bool success, bool drewPacket)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (commandIndex >= buffer.singlePacketCommands.size())
-			return;
-		NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		command.partialDraw = drewPacket;
-		command.executionValidationToken = 0;
-		command.executionSegmentEpoch = 0;
-		command.executionExternalMutationEpoch = 0;
-		command.state = success
-			? NativeFontCommandSpanState::Consumed
-			: NativeFontCommandSpanState::Fault;
-	}
-
-	void AbandonNativeFontSinglePacketCommandExecution(UInt32 commandIndex)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (commandIndex >= buffer.singlePacketCommands.size())
-			return;
-		NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		if (command.state != NativeFontCommandSpanState::Executing
-			|| command.partialDraw)
-		{
-			return;
-		}
-		command.executionValidationToken = 0;
-		command.executionSegmentEpoch = 0;
-		command.executionExternalMutationEpoch = 0;
-		command.state = NativeFontCommandSpanState::Ready;
-	}
-
-	bool IsNativeFontSinglePacketCommandConsumed(
-		UInt32 commandIndex, UInt64 validationToken)
-	{
-		const NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!validationToken
-			|| validationToken != buffer.stamp.validationToken
-			|| commandIndex >= buffer.singlePacketCommands.size())
-		{
-			return false;
-		}
-		const NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		return command.validationToken == validationToken
-			&& command.state == NativeFontCommandSpanState::Consumed
-			&& command.partialDraw;
-	}
-
-	bool FindNativeFontCommandSpan(UInt32 spanIndex,
-		UInt64 validationToken, NativeFontCommandSpanView& view)
-	{
-		view = {};
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!buffer.active || !validationToken
-			|| validationToken != buffer.stamp.validationToken
-			|| spanIndex >= buffer.spans.size())
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::CommandSpanMiss);
-			return false;
-		}
-		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
-		if (span.validationToken != validationToken
-			|| span.firstCommand + span.commandCount
-				> buffer.commands.size()
-			|| span.firstRun + span.runCount > buffer.runs.size())
-		{
-			RecordFreeTypePerf(FreeTypePerfCounter::CommandSpanMiss);
-			return false;
-		}
-		view.stamp = &buffer.stamp;
-		view.span = &span;
-		view.commands = buffer.commands.data();
-		view.runs = buffer.runs.data();
-		view.spanIndex = spanIndex;
-		RecordFreeTypePerf(FreeTypePerfCounter::CommandSpanHit);
-		return true;
-	}
-
-	bool BeginNativeFontCommandSpanExecution(UInt32 spanIndex,
-		NiTriShape* geometry, NativeFontCommandSpanView& view)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeFontCommandSpan(spanIndex,
-				buffer.stamp.validationToken, view))
-		{
-			return false;
-		}
-		NativeFontCommandFallback failure =
-			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(failure);
-			return false;
-		}
-		NativeFontCommandSpan& span = buffer.spans[spanIndex];
-		if (span.validationToken != buffer.stamp.validationToken
-			|| span.generation != buffer.stamp.generation
-			|| span.atlasTextureEpoch
-				!= buffer.stamp.atlasTextureEpoch
-			|| !span.payload || !span.payload->payloadTemplate
-			|| span.payload->useCompositePackets
-				!= span.useCompositePackets)
-		{
-			RecordNativeFontCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-		if (span.state != NativeFontCommandSpanState::Ready)
-		{
-			RecordNativeFontCommandFallback(
-				NativeFontCommandFallback::State);
-			return false;
-		}
-		if (span.facade != geometry)
-		{
-			span.state = NativeFontCommandSpanState::Fault;
-			span.partialDraw = false;
-			span.executionValidationToken = 0;
-			span.executionSegmentEpoch = 0;
-			span.executionExternalMutationEpoch = 0;
-			RecordNativeFontCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-		span.state = NativeFontCommandSpanState::Executing;
-		span.partialDraw = false;
-		span.executionValidationToken =
-			buffer.stamp.validationToken;
-		span.executionSegmentEpoch =
-			buffer.executionSegment.boundaryEpoch;
-		span.executionExternalMutationEpoch =
-			buffer.executionSegment.externalMutationEpoch;
-		view.span = &span;
-		return true;
-	}
-
-	void EndNativeFontCommandSpanExecution(UInt32 spanIndex,
-		bool success, bool drewPacket)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (spanIndex >= buffer.spans.size())
-			return;
-		NativeFontCommandSpan& span = buffer.spans[spanIndex];
-		span.partialDraw = drewPacket;
-		span.executionValidationToken = 0;
-		span.executionSegmentEpoch = 0;
-		span.executionExternalMutationEpoch = 0;
-		span.state = success
-			? NativeFontCommandSpanState::Consumed
-			: NativeFontCommandSpanState::Fault;
-	}
-
-	bool ValidateNativeFontCommand(UInt32 spanIndex,
-		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active || spanIndex >= buffer.spans.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
-		if (span.state != NativeFontCommandSpanState::Executing
-			|| span.executionValidationToken
-				!= buffer.stamp.validationToken)
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		else if (commandOffset >= span.commandCount
-			|| span.firstCommand + commandOffset
-				>= buffer.commands.size())
-		{
-			commandFailure = NativeFontCommandFallback::Topology;
-		}
-		else
-			commandFailure =
-				ValidateExecutionSegmentEpoch(buffer,
-					span.executionSegmentEpoch,
-					span.executionExternalMutationEpoch);
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontDrawCommand& command =
-			buffer.commands[span.firstCommand + commandOffset];
-		commandFailure = ValidateDrawCommandState(buffer, command,
-			span.payload, commandOffset, geometry, renderer);
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(commandFailure);
-			return false;
-		}
-		return true;
-	}
-
-	bool GuardNativeFontCommand(UInt32 spanIndex,
-		UInt32 commandOffset, NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active || spanIndex >= buffer.spans.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontCommandSpan& span = buffer.spans[spanIndex];
-		if (commandOffset >= span.commandCount
-			|| span.firstCommand + commandOffset
-				>= buffer.commands.size())
-		{
-			commandFailure = NativeFontCommandFallback::Topology;
-		}
-		else
-		{
-			commandFailure = ValidatePacketExecutionGuard(buffer,
-				span.state, span.executionValidationToken,
-				span.executionSegmentEpoch,
-				span.executionExternalMutationEpoch, renderer);
-		}
-		if (commandFailure == NativeFontCommandFallback::None)
-		{
-			const NativeFontDrawCommand& command =
-				buffer.commands[span.firstCommand + commandOffset];
-			if (!geometry
-				|| (command.expectedGeometry
-					&& command.expectedGeometry != geometry))
-			{
-				commandFailure = NativeFontCommandFallback::Topology;
-			}
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordNativeFontCommandFallback(commandFailure);
-			return false;
-		}
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketStateValidationElided);
-		return true;
-	}
-
-	bool ValidateNativeFontSinglePacketCommand(UInt32 commandIndex,
-		NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active
-			|| commandIndex >= buffer.singlePacketCommands.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		if (command.state != NativeFontCommandSpanState::Executing
-			|| command.executionValidationToken
-				!= buffer.stamp.validationToken)
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		else
-		{
-			commandFailure = ValidateExecutionSegmentEpoch(buffer,
-				command.executionSegmentEpoch,
-				command.executionExternalMutationEpoch);
-		}
-		if (commandFailure == NativeFontCommandFallback::None)
-		{
-			commandFailure = ValidateDrawCommandState(buffer,
-				command.draw, command.payload, 0,
-				geometry, renderer);
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-		return true;
-	}
-
-	bool GuardNativeFontSinglePacketCommand(UInt32 commandIndex,
-		NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active
-			|| commandIndex >= buffer.singlePacketCommands.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontSinglePacketCommand& command =
-			buffer.singlePacketCommands[commandIndex];
-		commandFailure = ValidatePacketExecutionGuard(buffer,
-			command.state, command.executionValidationToken,
-			command.executionSegmentEpoch,
-			command.executionExternalMutationEpoch, renderer);
-		if (commandFailure == NativeFontCommandFallback::None
-			&& (!geometry || command.facade != geometry
-				|| command.draw.sourceGeometry != geometry))
-		{
-			commandFailure = NativeFontCommandFallback::Topology;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketStateValidationElided);
-		return true;
-	}
-
-	bool FindNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
-		UInt64 validationToken,
-		NativeFontDirectFacadeSinglePacketCommandView& view)
-	{
-		view = {};
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!buffer.active || !validationToken
-			|| validationToken != buffer.stamp.validationToken
-			|| commandIndex
-				>= buffer.directFacadeSinglePacketCommands.size())
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::
-					CommandDirectFacadeSinglePacketMiss);
-			return false;
-		}
-		const NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		if (command.validationToken != validationToken)
-		{
-			RecordFreeTypePerf(
-				FreeTypePerfCounter::
-					CommandDirectFacadeSinglePacketMiss);
-			return false;
-		}
-		view.stamp = &buffer.stamp;
-		view.command = &command;
-		view.commandIndex = commandIndex;
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandDirectFacadeSinglePacketHit);
-		return true;
-	}
-
-	bool BeginNativeFontDirectFacadeSinglePacketCommandExecution(
-		UInt32 commandIndex, const NativeFontShapeMetadata* singletonMetadata,
-		NiTriShape* geometry,
-		NativeFontDirectFacadeSinglePacketCommandView& view)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!FindNativeFontDirectFacadeSinglePacketCommand(commandIndex,
-				buffer.stamp.validationToken, view))
-		{
-			return false;
-		}
-		NativeFontCommandFallback failure =
-			EnsureExecutionSegmentValidated(buffer);
-		if (failure != NativeFontCommandFallback::None)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(failure);
-			return false;
-		}
-
-		NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		SingletonFacadeState* singleton = singletonMetadata
-			? GetSingletonFacadeState(*singletonMetadata) : nullptr;
-		if (command.validationToken != buffer.stamp.validationToken
-			|| command.generation != buffer.stamp.generation
-			|| command.atlasTextureEpoch
-				!= buffer.stamp.atlasTextureEpoch
-			|| !singleton || !command.singletonMetadata
-			|| command.singletonMetadata != singletonMetadata
-			|| !command.payload || !command.artifact
-			|| !command.payload->payloadTemplate
-			|| command.payload->payloadTemplate.get()
-				!= command.artifact
-			|| command.payload->useCompositePackets
-				!= command.useCompositePackets
-			|| !command.draw
-			|| command.draw->payload != command.payload
-			|| !command.draw->packet
-			|| command.draw->packetIndex != 0
-			|| command.draw->sourceGeometry != command.geometry
-			|| command.draw->expectedGeometry != command.geometry
-			|| singleton->commandBuildValidationToken.load(
-				std::memory_order_acquire)
-				!= buffer.stamp.validationToken
-			|| singleton->preparedValidationToken
-				!= buffer.stamp.validationToken
-			|| singleton->preparedGeneration != buffer.stamp.generation
-			|| singleton->preparedAtlasTextureEpoch
-				!= buffer.stamp.atlasTextureEpoch
-			|| singleton->commandValidationToken.load(
-				std::memory_order_acquire)
-				!= buffer.stamp.validationToken
-			|| singleton->commandDirectFacadeSinglePacketIndex.load(
-				std::memory_order_acquire) != commandIndex
-			|| singleton->frameMode.load(std::memory_order_acquire)
-				!= SingletonFacadeFrameMode::Direct)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-		if (command.state != NativeFontCommandSpanState::Ready)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeFontCommandFallback::State);
-			return false;
-		}
-		if (!geometry || command.geometry != geometry)
-		{
-			command.state = NativeFontCommandSpanState::Fault;
-			command.partialDraw = false;
-			command.executionValidationToken = 0;
-			command.executionSegmentEpoch = 0;
-			command.executionExternalMutationEpoch = 0;
-			RecordDirectFacadeSinglePacketCommandFallback(
-				NativeFontCommandFallback::Topology);
-			return false;
-		}
-
-		command.state = NativeFontCommandSpanState::Executing;
-		command.partialDraw = false;
-		command.executionValidationToken =
-			buffer.stamp.validationToken;
-		command.executionSegmentEpoch =
-			buffer.executionSegment.boundaryEpoch;
-		command.executionExternalMutationEpoch =
-			buffer.executionSegment.externalMutationEpoch;
-		view.command = &command;
-		return true;
-	}
-
-	void EndNativeFontDirectFacadeSinglePacketCommandExecution(
-		UInt32 commandIndex, bool success, bool drewPacket)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (commandIndex
-			>= buffer.directFacadeSinglePacketCommands.size())
-		{
-			return;
-		}
-		NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		command.partialDraw = drewPacket;
-		command.executionValidationToken = 0;
-		command.executionSegmentEpoch = 0;
-		command.executionExternalMutationEpoch = 0;
-		command.state = success
-			? NativeFontCommandSpanState::Consumed
-			: NativeFontCommandSpanState::Fault;
-	}
-
-	void AbandonNativeFontDirectFacadeSinglePacketCommandExecution(
-		UInt32 commandIndex)
-	{
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (commandIndex >= buffer.directFacadeSinglePacketCommands.size())
-			return;
-		NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		if (command.state != NativeFontCommandSpanState::Executing
-			|| command.partialDraw)
-		{
-			return;
-		}
-		command.executionValidationToken = 0;
-		command.executionSegmentEpoch = 0;
-		command.executionExternalMutationEpoch = 0;
-		command.state = NativeFontCommandSpanState::Ready;
-	}
-
-	bool IsNativeFontDirectFacadeSinglePacketCommandConsumed(
-		UInt32 commandIndex, UInt64 validationToken)
-	{
-		const NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		if (!validationToken
-			|| validationToken != buffer.stamp.validationToken
-			|| commandIndex >= buffer.directFacadeSinglePacketCommands.size())
-		{
-			return false;
-		}
-		const NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		return command.validationToken == validationToken
-			&& command.state == NativeFontCommandSpanState::Consumed
-			&& command.partialDraw;
-	}
-
-	bool ValidateNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
-		NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketLightValidation);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active
-			|| commandIndex
-				>= buffer.directFacadeSinglePacketCommands.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		SingletonFacadeState* singleton = command.singletonMetadata
-			? GetSingletonFacadeState(*command.singletonMetadata)
-			: nullptr;
-		if (command.state != NativeFontCommandSpanState::Executing
-			|| command.executionValidationToken
-				!= buffer.stamp.validationToken)
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		else
-		{
-			commandFailure = ValidateExecutionSegmentEpoch(buffer,
-				command.executionSegmentEpoch,
-				command.executionExternalMutationEpoch);
-		}
-		if (commandFailure == NativeFontCommandFallback::None
-			&& (!singleton
-				|| singleton->commandValidationToken.load(
-					std::memory_order_acquire)
-					!= buffer.stamp.validationToken
-				|| singleton->commandDirectFacadeSinglePacketIndex.load(
-						std::memory_order_acquire) != commandIndex
-				|| singleton->frameMode.load(
-					std::memory_order_acquire)
-					!= SingletonFacadeFrameMode::Direct))
-		{
-			commandFailure = NativeFontCommandFallback::Topology;
-		}
-		if (commandFailure == NativeFontCommandFallback::None)
-		{
-			commandFailure = ValidateDrawCommandState(buffer,
-				*command.draw, command.payload, 0,
-				geometry, renderer);
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-		return true;
-	}
-
-	bool GuardNativeFontDirectFacadeSinglePacketCommand(UInt32 commandIndex,
-		NiTriShape* geometry, NiRenderer* renderer)
-	{
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketEpochGuard);
-		NativeFontFrameCommandBuffer& buffer = s_commandBuffer;
-		NativeFontCommandFallback commandFailure =
-			NativeFontCommandFallback::None;
-		if (!buffer.active
-			|| commandIndex
-				>= buffer.directFacadeSinglePacketCommands.size())
-		{
-			commandFailure = NativeFontCommandFallback::State;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-
-		const NativeFontDirectFacadeSinglePacketCommand& command =
-			buffer.directFacadeSinglePacketCommands[commandIndex];
-		SingletonFacadeState* singleton = command.singletonMetadata
-			? GetSingletonFacadeState(*command.singletonMetadata)
-			: nullptr;
-		commandFailure = ValidatePacketExecutionGuard(buffer,
-			command.state, command.executionValidationToken,
-			command.executionSegmentEpoch,
-			command.executionExternalMutationEpoch, renderer);
-		if (commandFailure == NativeFontCommandFallback::None
-			&& (!singleton
-				|| singleton->frameMode.load(std::memory_order_acquire)
-					!= SingletonFacadeFrameMode::Direct
-				|| !geometry || command.geometry != geometry
-				|| !command.draw
-				|| command.draw->sourceGeometry != geometry
-				|| command.draw->expectedGeometry != geometry))
-		{
-			commandFailure = NativeFontCommandFallback::Topology;
-		}
-		if (commandFailure != NativeFontCommandFallback::None)
-		{
-			RecordDirectFacadeSinglePacketCommandFallback(commandFailure);
-			return false;
-		}
-		RecordFreeTypePerf(
-			FreeTypePerfCounter::CommandPacketStateValidationElided);
-		return true;
 	}
 
 	void RecordNativeFontCommandFallback(
