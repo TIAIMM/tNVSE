@@ -654,8 +654,7 @@ namespace fonthook::vectorfont
 
 			const NativeFontCompositeConstructionWitness& construction =
 				span.constructionWitness;
-			const bool constructionWitnessValid = collectValidationWitness
-				&& construction.complete
+			const bool constructionProfileWitnessValid = construction.complete
 				&& construction.registrationVerticesValid
 				&& construction.vanillaLayoutVerticesValid
 				&& construction.staticLayerMask >= 1u
@@ -665,14 +664,20 @@ namespace fonthook::vectorfont
 				&& std::isfinite(
 					construction.uniformDistanceParameterScale)
 				&& construction.uniformDistanceParameterScale >= 1.0f;
-			if (constructionWitnessValid)
+			if (constructionProfileWitnessValid)
 			{
 				PayloadVertexValidationWitness validationWitness;
-				validationWitness.firstVertex = span.firstVertex;
-				validationWitness.vertexCount = span.vertexCount;
-				validationWitness.complete = true;
-				validationWitness.registrationVerticesValid = true;
-				validationWitness.vanillaLayoutVerticesValid = true;
+				// A partial shifted-shadow span proves its own profile but not the
+				// shadow/body compatibility vertices retained elsewhere in the
+				// payload. Promote to a payload witness only for exact full coverage.
+				if (collectValidationWitness)
+				{
+					validationWitness.firstVertex = span.firstVertex;
+					validationWitness.vertexCount = span.vertexCount;
+					validationWitness.complete = true;
+					validationWitness.registrationVerticesValid = true;
+					validationWitness.vanillaLayoutVerticesValid = true;
+				}
 				RecordFreeTypePerf(FreeTypePerfCounter::
 					DirectCompositeProfileVertexScanSaved,
 					span.vertexCount);

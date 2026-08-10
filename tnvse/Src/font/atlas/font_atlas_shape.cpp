@@ -1189,12 +1189,58 @@ namespace fonthook::vectorfont
 			UInt8 layerMask = 0;
 		};
 
+		struct CompositeConstructionProfile
+		{
+			float uniformSdfSpread = 0.0f;
+			float uniformDistanceParameterScale = 0.0f;
+			UInt8 staticLayerMask = 0;
+		};
+
+		bool IsValidCompositeConstructionProfile(
+			const CompositeConstructionProfile& profile)
+		{
+			return profile.staticLayerMask >= 1u
+				&& profile.staticLayerMask <= 15u
+				&& std::isfinite(profile.uniformSdfSpread)
+				&& profile.uniformSdfSpread > 0.0f
+				&& std::isfinite(profile.uniformDistanceParameterScale)
+				&& profile.uniformDistanceParameterScale >= 1.0f;
+		}
+
+		bool VertexMatchesCompositeConstructionProfile(
+			const NativeFontGpuVertex& vertex,
+			const NativeFontGpuVertex& quadFirst,
+			const CompositeConstructionProfile& profile)
+		{
+			return std::isfinite(vertex.x) && std::isfinite(vertex.y)
+				&& std::isfinite(vertex.z) && std::isfinite(vertex.u)
+				&& std::isfinite(vertex.v)
+				&& std::isfinite(vertex.sdfSpread)
+				&& std::isfinite(vertex.distanceParameterScale)
+				&& std::isfinite(vertex.glyphU0)
+				&& std::isfinite(vertex.glyphV0)
+				&& std::isfinite(vertex.glyphU1)
+				&& std::isfinite(vertex.glyphV1)
+				&& vertex.glyphU0 <= vertex.glyphU1
+				&& vertex.glyphV0 <= vertex.glyphV1
+				&& vertex.layerMask
+					== static_cast<float>(profile.staticLayerMask)
+				&& vertex.sdfSpread == profile.uniformSdfSpread
+				&& vertex.distanceParameterScale
+					== profile.uniformDistanceParameterScale
+				&& vertex.glyphU0 == quadFirst.glyphU0
+				&& vertex.glyphV0 == quadFirst.glyphV0
+				&& vertex.glyphU1 == quadFirst.glyphU1
+				&& vertex.glyphV1 == quadFirst.glyphV1;
+		}
+
 		bool AppendOneGlyphCompositeQuads(
 			std::vector<NativeFontGpuVertex>& vertices,
 			const std::vector<CompositeGlyphQuadSource>& sources,
 			UInt32 pageCount, const NativeFontEffectShapeConfig& effects,
 			NiPoint3& boundMinimum, NiPoint3& boundMaximum,
-			std::vector<NativeFontCompositeSpan>& spans)
+			std::vector<NativeFontCompositeSpan>& spans,
+			const CompositeConstructionProfile* constructionProfile)
 		{
 			spans.clear();
 			if (!effects.shaderEffects || sources.empty() || !pageCount)
@@ -1209,6 +1255,9 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
+			bool constructionProfileValid = constructionProfile
+				&& pageCount == 1u
+				&& IsValidCompositeConstructionProfile(*constructionProfile);
 			bool canAliasSource = pageCount == 1 && !shiftedShadow
 				&& sources.size() * 4u == vertices.size();
 			UInt64 fusedAliasProofVisits = 0;
@@ -1222,6 +1271,13 @@ namespace fonthook::vectorfont
 					|| bodyEnd > sourceVertexCount)
 				{
 					return false;
+				}
+				if (constructionProfileValid
+					&& (source.atlasPage != 0u
+						|| source.layerMask
+							!= constructionProfile->staticLayerMask))
+				{
+					constructionProfileValid = false;
 				}
 				const NativeFontGpuVertex& topLeft =
 					vertices[source.firstVertex];
@@ -1328,6 +1384,12 @@ namespace fonthook::vectorfont
 						quad[ordinal].v = texture[ordinal].y;
 						quad[ordinal].layerMask =
 							static_cast<float>(source.layerMask);
+						if (constructionProfileValid
+							&& !VertexMatchesCompositeConstructionProfile(
+								quad[ordinal], quad[0], *constructionProfile))
+						{
+							constructionProfileValid = false;
+						}
 						boundMinimum.x = std::min(
 							boundMinimum.x, quad[ordinal].x);
 						boundMinimum.y = std::min(
@@ -1347,9 +1409,35 @@ namespace fonthook::vectorfont
 					static_cast<UInt32>(vertices.size()) - firstVertex;
 				if (vertexCount)
 				{
-					spans.push_back({
-						firstVertex, vertexCount, page, pageCount == 1
-					});
+					NativeFontCompositeSpan span;
+					span.firstVertex = firstVertex;
+					span.vertexCount = vertexCount;
+					span.atlasPage = page;
+					span.fused = pageCount == 1;
+					const UInt64 expectedVertexCount =
+						static_cast<UInt64>(sources.size()) * 4u;
+					if (constructionProfileValid && page == 0u
+						&& firstVertex == sourceVertexCount
+						&& vertexCount == expectedVertexCount
+						&& static_cast<UInt64>(vertices.size())
+							== static_cast<UInt64>(sourceVertexCount)
+								+ expectedVertexCount)
+					{
+						span.constructionWitness.uniformSdfSpread =
+							constructionProfile->uniformSdfSpread;
+						span.constructionWitness.
+							uniformDistanceParameterScale =
+							constructionProfile->
+								uniformDistanceParameterScale;
+						span.constructionWitness.staticLayerMask =
+							constructionProfile->staticLayerMask;
+						span.constructionWitness.complete = true;
+						span.constructionWitness.
+							registrationVerticesValid = true;
+						span.constructionWitness.
+							vanillaLayoutVerticesValid = true;
+					}
+					spans.push_back(span);
 				}
 			}
 			return !spans.empty();
@@ -2763,6 +2851,12 @@ namespace fonthook::vectorfont
 				&& physicalQuads == result.glyphCount
 				&& counts[0][0] == 0u
 				&& counts[1][0] == result.glyphCount;
+			const bool directShiftedShadowComposite = distanceField
+				&& atlases.size() == 1u && shadowHasOffset
+				&& static_cast<UInt64>(physicalQuads)
+					== static_cast<UInt64>(result.glyphCount) * 2u
+				&& counts[0][0] == result.glyphCount
+				&& counts[1][0] == result.glyphCount;
 			std::vector<CompositeGlyphQuadSource> compositeSources;
 			if (distanceField && !directFullSpanComposite)
 				compositeSources.reserve(result.glyphCount);
@@ -2995,9 +3089,33 @@ namespace fonthook::vectorfont
 			}
 			else if (distanceField)
 			{
+				CompositeConstructionProfile constructionProfile;
+				const CompositeConstructionProfile* constructionProfilePointer =
+					nullptr;
+				if (directShiftedShadowComposite && pageProfileReady[0])
+				{
+					// The shifted union span is appended after the ordinary shadow/body
+					// ranges. Prove only that span here; payload sealing still validates
+					// every retained compatibility vertex below.
+					constructionProfile.uniformSdfSpread =
+						static_cast<float>(pageSdfSpreads[0]);
+					constructionProfile.uniformDistanceParameterScale =
+						1.0f / pageSourceScales[0];
+					constructionProfile.staticLayerMask = static_cast<UInt8>(
+						bodyLayerMask
+						| (1u << static_cast<UInt8>(AtlasLayer::Shadow)));
+					constructionProfilePointer = &constructionProfile;
+				}
 				compositeReady = AppendOneGlyphCompositeQuads(vertices,
 					compositeSources, static_cast<UInt32>(atlases.size()),
-					effects, boundMinimum, boundMaximum, compositeSpans);
+					effects, boundMinimum, boundMaximum, compositeSpans,
+					constructionProfilePointer);
+				if (compositeReady && compositeSpans.size() == 1u
+					&& compositeSpans[0].constructionWitness.complete)
+				{
+					RecordFreeTypePerf(FreeTypePerfCounter::
+						DirectCompositeConstructionWitness);
+				}
 			}
 			if (distanceField && !compositeReady)
 			{
@@ -4051,7 +4169,7 @@ namespace fonthook::vectorfont
 			if (compositeCandidate
 				&& AppendOneGlyphCompositeQuads(vertices, compositeSources,
 					static_cast<UInt32>(atlases.size()), effects,
-					boundMinimum, boundMaximum, compositeSpans))
+					boundMinimum, boundMaximum, compositeSpans, nullptr))
 			{
 				RecordFreeTypePerf(atlases.size() == 1
 					? FreeTypePerfCounter::CompositeFusedEligible

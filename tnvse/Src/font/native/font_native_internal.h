@@ -431,9 +431,11 @@ namespace fonthook::vectorfont
 		UInt32 vertexCount = 0;
 		UInt16 atlasPage = 0;
 		bool fused = false;
-		// The sealed direct compiler can prove the common full-span profile while
-		// it writes every vertex. Other producers leave this empty and retain the
-		// ordinary post-construction validation scan.
+		// The sealed direct compiler can prove an individual composite span while
+		// it writes every vertex. A span-local witness skips only profile recovery;
+		// payload validation may reuse it as well only when the span covers the
+		// complete published vertex vector. Other producers leave this empty and
+		// retain the ordinary post-construction validation scans.
 		NativeFontCompositeConstructionWitness constructionWitness;
 	};
 
