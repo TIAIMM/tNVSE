@@ -212,19 +212,8 @@ namespace fonthook::vectorfont
 
 		bool CaptureSortedTrackedShapeTopology(SortedPayloadScratch& scratch,
 			BSShaderAccumulator* accumulator, bool stockRenderAlphaTraversal,
-			bool stockImmediateDispatch,
-			SInt64* topologyTicks)
+			bool stockImmediateDispatch)
 		{
-			const SInt64 topologyStart = BeginFreeTypePerfSample();
-			auto finishTopology = [&](bool result)
-			{
-				const SInt64 ticks = EndFreeTypePerfSample(
-					FreeTypePerfPhase::FramePrepTopology, topologyStart);
-				if (topologyTicks)
-					*topologyTicks = ticks;
-				return result;
-			};
-
 			if (!accumulator || scratch.active || scratch.nestedBypassDepth
 				|| accumulator->eRenderMode
 					!= BSShaderManager::BSSM_RENDER_TILES
@@ -232,7 +221,7 @@ namespace fonthook::vectorfont
 				|| !accumulator->m_ppkItems)
 			{
 				++AccumulatorThread().thinRegistrationDiagnostics.sortedScanFallback;
-				return finishTopology(false);
+				return false;
 			}
 
 			const size_t itemCount =
@@ -326,7 +315,7 @@ namespace fonthook::vectorfont
 					scratch.sortedOccurrenceCounts.clear();
 					scratch.sortedFrameEntryIndices.clear();
 					++AccumulatorThread().thinRegistrationDiagnostics.sortedScanFallback;
-					return finishTopology(false);
+					return false;
 				}
 				scratch.sortedFrameEntryIndices[
 					static_cast<size_t>(itemIndex)] =
@@ -372,7 +361,7 @@ namespace fonthook::vectorfont
 			scratch.frameAccumulator = accumulator;
 			scratch.stockRenderAlphaTraversal = stockRenderAlphaTraversal;
 			scratch.stockImmediateDispatch = stockImmediateDispatch;
-			return finishTopology(true);
+			return true;
 		}
 
 		void ResolveSingletonFacadeSortedTopology(

@@ -88,8 +88,6 @@ namespace fonthook::vectorfont
 		}
 		if (vanillaLayoutShape)
 			RecordFreeTypeGpuEnvelopeVanillaPass();
-		else
-			RecordFreeTypeGpuEnvelopeNativeFacadePass();
 
 		FreeTypePerfScope dispatchRoutePerf(
 			FreeTypePerfPhase::DispatchRoute,
@@ -292,20 +290,8 @@ namespace fonthook::vectorfont
 						{
 							RecordFreeTypePerf(
 								FreeTypePerfCounter::VanillaLayoutDraw);
-							DirectTileShaderPropertyView* drawTile =
-								GetDirectTileProperty(shape);
-							RECT drawScissor = {};
-							const bool drawUsesScissor = drawTile
-								&& drawTile->useScissorTest;
-							if (drawTile)
-								drawScissor = drawTile->scissorRect;
 							RecordFreeTypeGpuEnvelopeVanillaDraw(
-								vanillaLayoutStandardLiteDrawn,
-								packet.vertexCount,
-								packet.vertexCount / 2u,
-								drawUsesScissor,
-								drawScissor.left, drawScissor.top,
-								drawScissor.right, drawScissor.bottom);
+								vanillaLayoutStandardLiteDrawn);
 							if (shiftedVanillaLayout)
 							{
 								RecordFreeTypePerf(FreeTypePerfCounter::
@@ -322,7 +308,6 @@ namespace fonthook::vectorfont
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::VanillaLayoutRuntimeFallback);
-			RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback();
 			if (shiftedVanillaLayout)
 			{
 				RecordFreeTypePerf(FreeTypePerfCounter::

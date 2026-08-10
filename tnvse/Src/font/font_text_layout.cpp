@@ -369,8 +369,6 @@ namespace fonthook
 			FontEx* font, const Font::TextData& data,
 			size_t textLength, std::vector<DirectTextUnit>&& units)
 	{
-		vectorfont::FreeTypePerfScope perf(
-			vectorfont::FreeTypePerfPhase::Sidecar);
 		const char* text = data.xNewText.c_str();
 		if (!font || !text)
 			return {};

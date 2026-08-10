@@ -46,42 +46,6 @@ namespace fonthook::vectorfont
 			return hash ? hash : 1;
 		}
 
-		class ThinRegistrationSampleScope
-		{
-		public:
-			explicit ThinRegistrationSampleScope(bool sample)
-				: m_start(sample ? BeginFreeTypePerfSample() : 0)
-			{
-			}
-
-			bool IsActive() const
-			{
-				return m_start != 0;
-			}
-
-			~ThinRegistrationSampleScope()
-			{
-				if (m_start)
-				{
-					EndFreeTypePerfSample(
-						FreeTypePerfPhase::RegisterRoute, m_start);
-				}
-			}
-
-		private:
-			SInt64 m_start = 0;
-		};
-
-		__forceinline bool ShouldSampleRegisterRoute()
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog)
-				return false;
-			if (--AccumulatorThread().registerRouteSampleCountdown != 0)
-				return false;
-			AccumulatorThread().registerRouteSampleCountdown = kRegisterRouteSampleRate;
-			return true;
-		}
-
 		void FlushThinRegistrationDiagnostics()
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog)
@@ -97,8 +61,6 @@ namespace fonthook::vectorfont
 					RecordFreeTypePerf(counter, value);
 			};
 			record(FreeTypePerfCounter::ThinRegistrationCall, values.calls);
-			record(FreeTypePerfCounter::ThinRegistrationTimingSample,
-				values.samples);
 			record(FreeTypePerfCounter::ThinRegistrationFastForward,
 				values.fastForward);
 			record(FreeTypePerfCounter::ThinRegistrationHookMismatch,
@@ -479,9 +441,6 @@ namespace fonthook::vectorfont
 			ThinRegistrationDiagnostics& diagnostics =
 				AccumulatorThread().thinRegistrationDiagnostics;
 			++diagnostics.calls;
-			ThinRegistrationSampleScope timing(ShouldSampleRegisterRoute());
-			if (timing.IsActive())
-				++diagnostics.samples;
 
 			if (!IsThinRegistrationHookChainCurrentUnchecked())
 			{

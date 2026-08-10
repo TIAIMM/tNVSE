@@ -591,11 +591,6 @@ namespace fonthook::vectorfont
 			NativeFontShapePayload& payload,
 			UInt32 commandSpanIndex)
 		{
-			FreeTypePerfScope perf(
-				FreeTypePerfPhase::Submit);
-			FreeTypePerfScope commandPerf(
-				FreeTypePerfPhase::CommandSubmit,
-				commandSpanIndex != kInvalidNativeFontCommandIndex);
 			InvalidateSegmentDeviceStateCache();
 			NativePacketDrawResult draw;
 			NativeRingSubmissionScope ringScope;
@@ -771,12 +766,6 @@ namespace fonthook::vectorfont
 				|| packets[0].vertexCount
 					!= artifact.gpuVertices.size();
 
-			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
-			FreeTypePerfScope commandPerf(
-				FreeTypePerfPhase::CommandSubmit,
-				commandSpanIndex != kInvalidNativeFontCommandIndex
-					|| singlePacketCommandIndex
-						!= kInvalidNativeFontCommandIndex);
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SinglePacketDirectCandidate);
 

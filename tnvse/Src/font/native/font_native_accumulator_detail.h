@@ -39,7 +39,6 @@ namespace fonthook::vectorfont::implementation::font_native_accumulator
 			0xB65A90;
 		inline constexpr UInt32 kMaximumMissingMetadataLogs = 8;
 		inline constexpr size_t kMaximumLinearTieRepairItems = 8192;
-		inline constexpr UInt32 kRegisterRouteSampleRate = 256;
 		ASSERT_OFFSET(NiBackToFrontAccumulator, m_iNumItems, 0x1C);
 		ASSERT_OFFSET(NiBackToFrontAccumulator, m_ppkItems, 0x24);
 		ASSERT_OFFSET(NiBackToFrontAccumulator, m_iCurrItem, 0x2C);
@@ -157,7 +156,6 @@ namespace fonthook::vectorfont::implementation::font_native_accumulator
 		struct ThinRegistrationDiagnostics
 		{
 			UInt64 calls = 0;
-			UInt64 samples = 0;
 			UInt64 fastForward = 0;
 			UInt64 hookMismatch = 0;
 			UInt64 slowAudits = 0;
@@ -170,11 +168,6 @@ namespace fonthook::vectorfont::implementation::font_native_accumulator
 			UInt64 facadeFallback = 0;
 			UInt64 occurrenceFallback = 0;
 		};
-
-		// Diagnostics are flushed at every frame-clear boundary. Keep the timing
-		// phase separate so short registration cycles still contribute one sample
-		// per kRegisterRouteSampleRate calls across the lifetime of this thread.
-
 
 	struct AccumulatorRuntimeState
 	{
@@ -193,7 +186,6 @@ namespace fonthook::vectorfont::implementation::font_native_accumulator
 		bool loggedEqualDepthTieRepairFailure = false;
 		SortedPayloadScratch sortedPayloadScratch;
 		ThinRegistrationDiagnostics thinRegistrationDiagnostics;
-		UInt32 registerRouteSampleCountdown = kRegisterRouteSampleRate;
 	};
 
 	AccumulatorRuntimeState& AccumulatorState();
@@ -230,7 +222,7 @@ namespace fonthook::vectorfont::implementation::font_native_accumulator
 		SortedPayloadScratch& scratch, BSShaderAccumulator& accumulator);
 	bool CaptureSortedTrackedShapeTopology(SortedPayloadScratch& scratch,
 		BSShaderAccumulator* accumulator, bool stockRenderAlphaTraversal,
-		bool stockImmediateDispatch, SInt64* topologyTicks);
+		bool stockImmediateDispatch);
 	void ResolveSingletonFacadeSortedTopology(
 		SortedPayloadScratch& scratch, BSShaderAccumulator* accumulator,
 		UInt64 validationToken);

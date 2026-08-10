@@ -45,14 +45,7 @@ namespace fonthook::vectorfont
 				&& accumulator->m_iNumItems > 0 && accumulator->m_ppkItems)
 			{
 				const SInt64 framePrepStart = BeginFreeTypePerfSample();
-				const size_t itemCount = static_cast<size_t>(
-					accumulator->m_iNumItems);
-				FreeTypeAccumulatorPrepTailSample prepTailSample;
-				prepTailSample.itemCount = static_cast<UInt32>(itemCount);
 				{
-					FreeTypePerfScope resetPrepPerf(
-						FreeTypePerfPhase::FramePrepReset, true,
-						&prepTailSample.resetTicks);
 					ResetSortedPrepScratch(scratch);
 				}
 				const bool stockRenderAlphaTraversal =
@@ -62,8 +55,7 @@ namespace fonthook::vectorfont
 				const bool stockImmediateDispatch = stockRenderAlphaTraversal
 					&& IsNativeFontRenderPassImmediatelyHookCurrentUnchecked();
 				CaptureSortedTrackedShapeTopology(scratch, accumulator,
-					stockRenderAlphaTraversal, stockImmediateDispatch,
-					&prepTailSample.topologyTicks);
+					stockRenderAlphaTraversal, stockImmediateDispatch);
 				if (scratch.metadataShapes.empty())
 				{
 					RecordFreeTypePerf(
@@ -72,10 +64,8 @@ namespace fonthook::vectorfont
 					// either an entirely vanilla traversal or a fail-open topology scan;
 					// in both cases the ordinary dispatch path remains authoritative.
 					// Do not build a readiness stamp or command frame.
-					const SInt64 framePrepTicks = EndFreeTypePerfSample(
+					EndFreeTypePerfSample(
 						FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
-					prepTailSample.totalTicks = framePrepTicks;
-					RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 					{
 						FreeTypePerfScope vanillaRenderPerf(
 							FreeTypePerfPhase::FrameRouteVanillaRender);
@@ -95,9 +85,6 @@ namespace fonthook::vectorfont
 				// the final model bound and Tile/scissor state, so a proven cull does
 				// not need a metadata owner, packet artifact, or renderer-ring slot.
 				{
-					FreeTypePerfScope visibilityPrepPerf(
-						FreeTypePerfPhase::FramePrepVisibility, true,
-						&prepTailSample.visibilityTicks);
 					BeginNativeFontVisibilityFrame();
 					// Every tracked facade is unique at this point. Allocate its final
 					// frame entry before visibility evaluation and populate the witness
@@ -142,9 +129,6 @@ namespace fonthook::vectorfont
 				}
 				if (!scratch.metadataAcquireShapes.empty())
 				{
-					FreeTypePerfScope metadataPerf(
-						FreeTypePerfPhase::FramePrepMetadata, true,
-						&prepTailSample.metadataTicks);
 					AcquireNativeFontShapeMetadataBatch(
 						scratch.metadataAcquireShapes,
 						scratch.metadataOwners);
@@ -181,15 +165,11 @@ namespace fonthook::vectorfont
 				}
 
 				NativePreflightFrameContext preflightContext;
-				const SInt64 facadePrepStart = BeginFreeTypePerfSample();
 				const bool hasMetadataSurvivors =
 					!scratch.metadataAcquireShapes.empty();
 				UInt32 generation = 0;
 				UInt64 frameValidationToken = 0;
 				{
-					FreeTypePerfScope readinessPrepPerf(
-						FreeTypePerfPhase::FramePrepReadiness, true,
-						&prepTailSample.readinessTicks);
 					if (hasMetadataSurvivors)
 					{
 						NativeFontRuntimeReadinessView readiness;
@@ -209,9 +189,6 @@ namespace fonthook::vectorfont
 						frameValidationToken = ++scratch.nextValidationToken;
 				}
 				{
-					FreeTypePerfScope lookupPrepPerf(
-						FreeTypePerfPhase::FramePrepLookup, true,
-						&prepTailSample.lookupTicks);
 					const size_t trackedCount = scratch.frameEntries.size();
 					scratch.payloadTemplates.reserve(trackedCount);
 					scratch.singletonFacades.reserve(
@@ -227,9 +204,6 @@ namespace fonthook::vectorfont
 
 				bool hasVanillaLayoutSurvivors = false;
 				{
-					FreeTypePerfScope facadeLoopPrepPerf(
-						FreeTypePerfPhase::FramePrepFacadeLoop, true,
-						&prepTailSample.facadeLoopTicks);
 					for (size_t candidateIndex = 0;
 						candidateIndex < scratch.frameEntries.size();
 						++candidateIndex)
@@ -348,9 +322,6 @@ namespace fonthook::vectorfont
 					}
 					}
 				}
-				EndFreeTypePerfSample(
-					FreeTypePerfPhase::FramePrepFacades,
-					facadePrepStart);
 				const bool hasPreparedPayloads =
 					!scratch.payloadTemplates.empty();
 				const bool hasTrackedNativeSubmissions =
@@ -367,17 +338,11 @@ namespace fonthook::vectorfont
 				}
 				if (hasPreparedPayloads)
 				{
-					FreeTypePerfScope ringPrepPerf(
-						FreeTypePerfPhase::FramePrepRing, true,
-						&prepTailSample.ringTicks);
 					PrepareSortedNativeFontPayloads(
 						scratch.payloadTemplates, generation);
 				}
 				if (hasPreparedPayloads)
 				{
-					FreeTypePerfScope singletonPrepPerf(
-						FreeTypePerfPhase::FramePrepSingletons, true,
-						&prepTailSample.singletonTicks);
 					for (const NativeFontShapeMetadata* metadata
 						: scratch.singletonFacades)
 					{
@@ -404,12 +369,7 @@ namespace fonthook::vectorfont
 					&& hasPreparedPayloads;
 				if (commandFrameActive)
 				{
-					FreeTypePerfScope commandBuild(
-						FreeTypePerfPhase::CommandBuild, true,
-						&prepTailSample.commandTicks);
 					{
-						FreeTypePerfScope commandBuildStamp(
-							FreeTypePerfPhase::CommandBuildStamp);
 						BeginNativeFontFrameCommandBuffer(accumulator,
 							frameValidationToken, generation,
 							preflightContext.atlasTextureEpoch);
@@ -418,8 +378,6 @@ namespace fonthook::vectorfont
 							scratch.singletonFacades.size());
 					}
 					{
-						FreeTypePerfScope commandBuildDirectFacade(
-							FreeTypePerfPhase::CommandBuildDirectFacade);
 						for (const NativeFontShapeMetadata* metadata
 							: scratch.singletonFacades)
 						{
@@ -431,8 +389,6 @@ namespace fonthook::vectorfont
 						}
 					}
 					{
-						FreeTypePerfScope commandBuildOrdinary(
-							FreeTypePerfPhase::CommandBuildOrdinary);
 						for (SortedFrameEntry& entry
 							: scratch.frameEntries)
 						{
@@ -495,8 +451,6 @@ namespace fonthook::vectorfont
 						}
 					}
 					{
-						FreeTypePerfScope commandBuildFinalize(
-							FreeTypePerfPhase::CommandBuildFinalize);
 						ActivateNativeFontFrameCommandBuffer();
 					}
 				}
@@ -505,9 +459,6 @@ namespace fonthook::vectorfont
 					EndNativeFontFrameCommandBuffer();
 				}
 				{
-					FreeTypePerfScope publishPrepPerf(
-						FreeTypePerfPhase::FramePrepPublish, true,
-						&prepTailSample.publishTicks);
 					RefreshSortedScratchMemory(scratch);
 					if (hasSortedShaderParticipants)
 						BeginNativeFontSortedShaderBatch();
@@ -518,19 +469,8 @@ namespace fonthook::vectorfont
 					scratch.activeValidationToken = frameValidationToken;
 					scratch.active = true;
 				}
-				const SInt64 framePrepTicks = EndFreeTypePerfSample(
+				EndFreeTypePerfSample(
 					FreeTypePerfPhase::FrameRoutePrep, framePrepStart);
-				prepTailSample.totalTicks = framePrepTicks;
-				prepTailSample.facadeCount =
-					static_cast<UInt32>(scratch.metadataShapes.size());
-				prepTailSample.survivorCount = static_cast<UInt32>(
-					scratch.metadataAcquireShapes.size());
-				prepTailSample.payloadCount =
-					static_cast<UInt32>(scratch.payloadTemplates.size());
-				prepTailSample.singletonCount =
-					static_cast<UInt32>(scratch.singletonFacades.size());
-				prepTailSample.commandFrameActive = commandFrameActive;
-				RecordFreeTypeAccumulatorPrepTailSample(prepTailSample);
 				{
 					FreeTypePerfScope vanillaRenderPerf(
 						FreeTypePerfPhase::FrameRouteVanillaRender);
@@ -539,18 +479,9 @@ namespace fonthook::vectorfont
 					// shape now admits a sampled asynchronous Tile alpha envelope.
 					NiDX9Renderer* renderer = hasTrackedNativeSubmissions
 						? NiDX9Renderer::GetSingleton() : nullptr;
-					FreeTypeGpuEnvelopeViewport gpuViewport;
-					if (renderer)
-					{
-						gpuViewport.x = renderer->m_kD3DPort.X;
-						gpuViewport.y = renderer->m_kD3DPort.Y;
-						gpuViewport.width = renderer->m_kD3DPort.Width;
-						gpuViewport.height = renderer->m_kD3DPort.Height;
-					}
 					FreeTypeGpuAlphaEnvelopeScope gpuTiming(
 						renderer ? renderer->GetD3DDevice() : nullptr,
-						hasPreparedPayloads, hasVanillaLayoutSurvivors,
-						gpuViewport);
+						hasPreparedPayloads, hasVanillaLayoutSurvivors);
 					state.predecessorRenderAlphaGeometry(accumulator);
 				}
 				if (hasPreparedPayloads)

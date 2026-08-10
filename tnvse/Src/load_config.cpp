@@ -22,7 +22,6 @@ bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
-UINT32 g_uiFreeTypeFontCompositeCacheMB = 32;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputLog;
 bool g_bMultibyteInputCompositionPreview;
@@ -255,12 +254,12 @@ void LoadConfig()
 	gLog.FormattedMessage("g_bEnableFreeTypeFontCompositePass: %d",
 		g_bEnableFreeTypeFontCompositePass);
 
-	g_uiFreeTypeFontCompositeCacheMB = std::clamp<UINT32>(
+	const UINT32 compositeCacheBudgetMB = std::clamp<UINT32>(
 		ReadConfigInt(kFreeTypeFontSection, "uiFreeTypeFontCompositeCacheMB",
 			32, filename), 0, 512);
 	gLog.FormattedMessage(
 		"g_uiFreeTypeFontCompositeCacheMB: %u (deprecated; whole-text RTT cache disabled)",
-		g_uiFreeTypeFontCompositeCacheMB);
+		compositeCacheBudgetMB);
 
 	g_bMultibyteInput = ReadConfigInt(kMultibyteInputSection,
 		"bMultibyteInput", 0, filename);

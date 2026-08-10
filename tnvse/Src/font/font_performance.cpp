@@ -27,15 +27,12 @@ namespace fonthook::vectorfont
 			kDurationExponentBuckets * kDurationSubBuckets;
 		constexpr size_t kGpuQueryRingSize = 32;
 		constexpr UInt32 kVanillaLayoutGpuTimingSampleRate = 16u;
-		constexpr size_t kGpuVanillaLayoutDrawBucketCount = 5;
 
 		struct PerfCounterBatchState
 		{
 			std::array<UInt64, kCounterCount> values = {};
 			std::array<UInt16, kCounterCount> touched = {};
 			size_t touchedCount = 0;
-			UInt64 recordCount = 0;
-			UInt64 scopeCount = 0;
 			UInt32 depth = 0;
 		};
 
@@ -66,85 +63,21 @@ namespace fonthook::vectorfont
 
 		struct GpuEnvelopeWorkload
 		{
-			FreeTypeGpuEnvelopeViewport viewport;
-			UInt32 immediatePasses = 0;
 			UInt32 foreignPasses = 0;
-			UInt32 nativeFacadePasses = 0;
 			UInt32 vanillaPasses = 0;
 			UInt32 vanillaCulls = 0;
-			UInt32 vanillaAppCulls = 0;
-			UInt32 vanillaAlphaCulls = 0;
-			UInt32 vanillaClipCulls = 0;
-			UInt32 vanillaScissorCulls = 0;
 			UInt32 vanillaStandardLiteDraws = 0;
 			UInt32 vanillaStockDraws = 0;
-			UInt32 vanillaRuntimeFallbacks = 0;
-			UInt64 vanillaVertices = 0;
-			UInt64 vanillaTriangles = 0;
-			UInt32 scissoredDraws = 0;
-			UInt32 unscissoredDraws = 0;
-			UInt32 invalidScissorDraws = 0;
-			UInt32 viewportUnavailableDraws = 0;
-			UInt64 effectiveClipRectPixels = 0;
-			UInt64 viewportOpportunityPixels = 0;
-		};
-
-		struct GpuVanillaLayoutDrawBucket
-		{
-			UInt64 samples = 0;
-			UInt64 nanoseconds = 0;
-			UInt64 maximumNanoseconds = 0;
 		};
 
 		struct GpuVanillaLayoutWorkloadAggregate
 		{
 			UInt64 samples = 0;
-			UInt64 immediatePasses = 0;
 			UInt64 foreignPasses = 0;
-			UInt64 nativeFacadePasses = 0;
 			UInt64 vanillaPasses = 0;
 			UInt64 vanillaCulls = 0;
-			UInt64 vanillaAppCulls = 0;
-			UInt64 vanillaAlphaCulls = 0;
-			UInt64 vanillaClipCulls = 0;
-			UInt64 vanillaScissorCulls = 0;
 			UInt64 vanillaStandardLiteDraws = 0;
 			UInt64 vanillaStockDraws = 0;
-			UInt64 vanillaRuntimeFallbacks = 0;
-			UInt64 vanillaVertices = 0;
-			UInt64 vanillaTriangles = 0;
-			UInt64 scissoredDraws = 0;
-			UInt64 unscissoredDraws = 0;
-			UInt64 invalidScissorDraws = 0;
-			UInt64 viewportUnavailableDraws = 0;
-			UInt64 effectiveClipRectPixels = 0;
-			UInt64 viewportOpportunityPixels = 0;
-			std::array<GpuVanillaLayoutDrawBucket,
-				kGpuVanillaLayoutDrawBucketCount> drawBuckets = {};
-			UInt64 worstNanoseconds = 0;
-			GpuEnvelopeWorkload worstWorkload;
-		};
-
-		struct AccumulatorPrepTailWorst
-		{
-			UInt64 nanoseconds = 0;
-			UInt64 resetNanoseconds = 0;
-			UInt64 topologyNanoseconds = 0;
-			UInt64 visibilityNanoseconds = 0;
-			UInt64 metadataNanoseconds = 0;
-			UInt64 readinessNanoseconds = 0;
-			UInt64 lookupNanoseconds = 0;
-			UInt64 facadeLoopNanoseconds = 0;
-			UInt64 ringNanoseconds = 0;
-			UInt64 singletonNanoseconds = 0;
-			UInt64 commandNanoseconds = 0;
-			UInt64 publishNanoseconds = 0;
-			UInt32 itemCount = 0;
-			UInt32 facadeCount = 0;
-			UInt32 survivorCount = 0;
-			UInt32 payloadCount = 0;
-			UInt32 singletonCount = 0;
-			bool commandFrameActive = false;
 		};
 
 		struct PerformanceState
@@ -172,9 +105,6 @@ namespace fonthook::vectorfont
 			std::mutex gpuVanillaLayoutWorkloadMutex;
 			GpuVanillaLayoutWorkloadAggregate
 				gpuVanillaLayoutWorkload;
-			std::array<std::atomic<UInt64>, 4> accumulatorPrepTailCounts = {};
-			std::mutex accumulatorPrepTailMutex;
-			AccumulatorPrepTailWorst accumulatorPrepTailWorst;
 			ULONGLONG lastReport = 0;
 		};
 
@@ -321,21 +251,8 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		size_t GpuVanillaLayoutDrawBucketFor(UInt32 draws)
-		{
-			if (draws <= 8u)
-				return 0;
-			if (draws <= 16u)
-				return 1;
-			if (draws <= 32u)
-				return 2;
-			if (draws <= 64u)
-				return 3;
-			return 4;
-		}
-
 		void RecordGpuVanillaLayoutEnvelopeWorkload(
-			UInt64 nanoseconds, const GpuEnvelopeWorkload& workload)
+			const GpuEnvelopeWorkload& workload)
 		{
 			PerformanceState& state = GetPerformanceState();
 			std::lock_guard<std::mutex> lock(
@@ -343,47 +260,12 @@ namespace fonthook::vectorfont
 			GpuVanillaLayoutWorkloadAggregate& aggregate =
 				state.gpuVanillaLayoutWorkload;
 			++aggregate.samples;
-			aggregate.immediatePasses += workload.immediatePasses;
 			aggregate.foreignPasses += workload.foreignPasses;
-			aggregate.nativeFacadePasses += workload.nativeFacadePasses;
 			aggregate.vanillaPasses += workload.vanillaPasses;
 			aggregate.vanillaCulls += workload.vanillaCulls;
-			aggregate.vanillaAppCulls += workload.vanillaAppCulls;
-			aggregate.vanillaAlphaCulls += workload.vanillaAlphaCulls;
-			aggregate.vanillaClipCulls += workload.vanillaClipCulls;
-			aggregate.vanillaScissorCulls += workload.vanillaScissorCulls;
 			aggregate.vanillaStandardLiteDraws +=
 				workload.vanillaStandardLiteDraws;
 			aggregate.vanillaStockDraws += workload.vanillaStockDraws;
-			aggregate.vanillaRuntimeFallbacks +=
-				workload.vanillaRuntimeFallbacks;
-			aggregate.vanillaVertices += workload.vanillaVertices;
-			aggregate.vanillaTriangles += workload.vanillaTriangles;
-			aggregate.scissoredDraws += workload.scissoredDraws;
-			aggregate.unscissoredDraws += workload.unscissoredDraws;
-			aggregate.invalidScissorDraws +=
-				workload.invalidScissorDraws;
-			aggregate.viewportUnavailableDraws +=
-				workload.viewportUnavailableDraws;
-			aggregate.effectiveClipRectPixels +=
-				workload.effectiveClipRectPixels;
-			aggregate.viewportOpportunityPixels +=
-				workload.viewportOpportunityPixels;
-
-			const UInt32 vanillaDraws =
-				workload.vanillaStandardLiteDraws
-					+ workload.vanillaStockDraws;
-			GpuVanillaLayoutDrawBucket& bucket = aggregate.drawBuckets[
-				GpuVanillaLayoutDrawBucketFor(vanillaDraws)];
-			++bucket.samples;
-			bucket.nanoseconds += nanoseconds;
-			bucket.maximumNanoseconds = std::max(
-				bucket.maximumNanoseconds, nanoseconds);
-			if (nanoseconds > aggregate.worstNanoseconds)
-			{
-				aggregate.worstNanoseconds = nanoseconds;
-				aggregate.worstWorkload = workload;
-			}
 		}
 
 		struct GpuQuerySlot
@@ -611,8 +493,7 @@ namespace fonthook::vectorfont
 				{
 					RecordGpuVanillaLayoutEnvelopeDuration(
 						static_cast<UInt64>(scaled));
-					RecordGpuVanillaLayoutEnvelopeWorkload(
-						static_cast<UInt64>(scaled), workload);
+					RecordGpuVanillaLayoutEnvelopeWorkload(workload);
 					RecordGpuTimingCounter(
 						GpuTimingCounter::VanillaLayoutCompleted);
 				}
@@ -620,8 +501,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool BeginGpuAlphaEnvelope(IDirect3DDevice9* device,
-			bool hasPreparedPayloads, bool hasVanillaLayout,
-			const FreeTypeGpuEnvelopeViewport& viewport)
+			bool hasPreparedPayloads, bool hasVanillaLayout)
 		{
 			if (!g_bEnableFreeTypeFontRenderingLog
 				|| (!hasPreparedPayloads && !hasVanillaLayout))
@@ -692,7 +572,6 @@ namespace fonthook::vectorfont
 				}
 				slot.includesVanillaLayout = hasVanillaLayout;
 				slot.workload = {};
-				slot.workload.viewport = viewport;
 				const HRESULT disjointResult = slot.disjoint->Issue(
 					D3DISSUE_BEGIN);
 				const HRESULT frequencyResult = SUCCEEDED(disjointResult)
@@ -928,27 +807,6 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
-		struct AccumulatorPrepTailSummary
-		{
-			std::array<UInt64, 4> counts = {};
-			AccumulatorPrepTailWorst worst;
-		};
-
-		AccumulatorPrepTailSummary ConsumeAccumulatorPrepTailSummary()
-		{
-			PerformanceState& state = GetPerformanceState();
-			AccumulatorPrepTailSummary result;
-			for (size_t index = 0; index < result.counts.size(); ++index)
-			{
-				result.counts[index] = state.accumulatorPrepTailCounts[index]
-					.exchange(0, std::memory_order_relaxed);
-			}
-			std::lock_guard<std::mutex> lock(state.accumulatorPrepTailMutex);
-			result.worst = state.accumulatorPrepTailWorst;
-			state.accumulatorPrepTailWorst = {};
-			return result;
-		}
-
 	}
 
 	void RecordFreeTypeGpuEnvelopeForeignPass()
@@ -956,17 +814,7 @@ namespace fonthook::vectorfont
 		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
 		if (!workload)
 			return;
-		IncrementEnvelopeCounter(workload->immediatePasses);
 		IncrementEnvelopeCounter(workload->foreignPasses);
-	}
-
-	void RecordFreeTypeGpuEnvelopeNativeFacadePass()
-	{
-		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
-		if (!workload)
-			return;
-		IncrementEnvelopeCounter(workload->immediatePasses);
-		IncrementEnvelopeCounter(workload->nativeFacadePasses);
 	}
 
 	void RecordFreeTypeGpuEnvelopeVanillaPass()
@@ -974,49 +822,18 @@ namespace fonthook::vectorfont
 		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
 		if (!workload)
 			return;
-		IncrementEnvelopeCounter(workload->immediatePasses);
 		IncrementEnvelopeCounter(workload->vanillaPasses);
 	}
 
-	void RecordFreeTypeGpuEnvelopeVanillaCull(
-		FreeTypeGpuEnvelopeCull cull)
+	void RecordFreeTypeGpuEnvelopeVanillaCull()
 	{
 		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
 		if (!workload)
 			return;
 		IncrementEnvelopeCounter(workload->vanillaCulls);
-		switch (cull)
-		{
-		case FreeTypeGpuEnvelopeCull::App:
-			IncrementEnvelopeCounter(workload->vanillaAppCulls);
-			break;
-		case FreeTypeGpuEnvelopeCull::Alpha:
-			IncrementEnvelopeCounter(workload->vanillaAlphaCulls);
-			break;
-		case FreeTypeGpuEnvelopeCull::Clip:
-			IncrementEnvelopeCounter(workload->vanillaClipCulls);
-			break;
-		case FreeTypeGpuEnvelopeCull::Scissor:
-			IncrementEnvelopeCounter(workload->vanillaScissorCulls);
-			break;
-		}
 	}
 
-	void RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback()
-	{
-		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
-		if (workload)
-		{
-			IncrementEnvelopeCounter(
-				workload->vanillaRuntimeFallbacks);
-		}
-	}
-
-	void RecordFreeTypeGpuEnvelopeVanillaDraw(
-		bool standardLite, UInt32 vertexCount,
-		UInt32 triangleCount, bool useScissor,
-		SInt32 scissorLeft, SInt32 scissorTop,
-		SInt32 scissorRight, SInt32 scissorBottom)
+	void RecordFreeTypeGpuEnvelopeVanillaDraw(bool standardLite)
 	{
 		GpuEnvelopeWorkload* workload = GetActiveGpuEnvelopeWorkload();
 		if (!workload)
@@ -1024,59 +841,13 @@ namespace fonthook::vectorfont
 		IncrementEnvelopeCounter(standardLite
 			? workload->vanillaStandardLiteDraws
 			: workload->vanillaStockDraws);
-		workload->vanillaVertices += vertexCount;
-		workload->vanillaTriangles += triangleCount;
-
-		const FreeTypeGpuEnvelopeViewport& viewport = workload->viewport;
-		if (!viewport.width || !viewport.height)
-		{
-			IncrementEnvelopeCounter(
-				workload->viewportUnavailableDraws);
-			return;
-		}
-		const UInt64 viewportPixels = static_cast<UInt64>(viewport.width)
-			* static_cast<UInt64>(viewport.height);
-		if (!useScissor)
-		{
-			IncrementEnvelopeCounter(workload->unscissoredDraws);
-			workload->effectiveClipRectPixels += viewportPixels;
-			workload->viewportOpportunityPixels += viewportPixels;
-			return;
-		}
-
-		IncrementEnvelopeCounter(workload->scissoredDraws);
-		if (scissorRight <= scissorLeft || scissorBottom <= scissorTop)
-		{
-			IncrementEnvelopeCounter(workload->invalidScissorDraws);
-			return;
-		}
-		const SInt64 viewportLeft = viewport.x;
-		const SInt64 viewportTop = viewport.y;
-		const SInt64 viewportRight = viewportLeft + viewport.width;
-		const SInt64 viewportBottom = viewportTop + viewport.height;
-		const SInt64 clippedLeft = std::max<SInt64>(
-			scissorLeft, viewportLeft);
-		const SInt64 clippedTop = std::max<SInt64>(
-			scissorTop, viewportTop);
-		const SInt64 clippedRight = std::min<SInt64>(
-			scissorRight, viewportRight);
-		const SInt64 clippedBottom = std::min<SInt64>(
-			scissorBottom, viewportBottom);
-		const UInt64 clippedPixels = clippedRight > clippedLeft
-			&& clippedBottom > clippedTop
-			? static_cast<UInt64>(clippedRight - clippedLeft)
-				* static_cast<UInt64>(clippedBottom - clippedTop)
-			: 0u;
-		workload->effectiveClipRectPixels += clippedPixels;
-		workload->viewportOpportunityPixels += viewportPixels;
 	}
 
 	FreeTypeGpuAlphaEnvelopeScope::FreeTypeGpuAlphaEnvelopeScope(
 		IDirect3DDevice9* device, bool hasPreparedPayloads,
-		bool hasVanillaLayout,
-		const FreeTypeGpuEnvelopeViewport& viewport)
+		bool hasVanillaLayout)
 		: m_active(BeginGpuAlphaEnvelope(device, hasPreparedPayloads,
-			hasVanillaLayout, viewport))
+			hasVanillaLayout))
 	{
 	}
 
@@ -1092,9 +863,8 @@ namespace fonthook::vectorfont
 	}
 
 	FreeTypePerfScope::FreeTypePerfScope(
-		FreeTypePerfPhase phase, bool enabled, SInt64* elapsedTicks)
+		FreeTypePerfPhase phase, bool enabled)
 		: m_phase(phase),
-		m_elapsedTicks(elapsedTicks),
 		m_active(enabled && g_bEnableFreeTypeFontRenderingLog)
 	{
 		if (!m_active)
@@ -1122,8 +892,6 @@ namespace fonthook::vectorfont
 		if (!QueryPerformanceCounter(&now))
 			return;
 		const SInt64 ticks = now.QuadPart - m_start;
-		if (m_elapsedTicks)
-			*m_elapsedTicks = ticks;
 		RecordDuration(m_phase, ticks);
 	}
 
@@ -1141,7 +909,6 @@ namespace fonthook::vectorfont
 					static_cast<UInt16>(counterIndex);
 			}
 			batch.values[counterIndex] += amount;
-			++batch.recordCount;
 			return;
 		}
 		GetPerformanceState().counters[counterIndex].fetch_add(
@@ -1155,13 +922,8 @@ namespace fonthook::vectorfont
 			return;
 		PerfCounterBatchState& batch = s_perfCounterBatch;
 		if (!batch.depth)
-		{
 			batch.touchedCount = 0;
-			batch.recordCount = 0;
-			batch.scopeCount = 0;
-		}
 		++batch.depth;
-		++batch.scopeCount;
 	}
 
 	FreeTypePerfCounterBatchScope::~FreeTypePerfCounterBatchScope()
@@ -1173,7 +935,6 @@ namespace fonthook::vectorfont
 			return;
 
 		PerformanceState& state = GetPerformanceState();
-		const UInt64 atomicFlushes = static_cast<UInt64>(batch.touchedCount);
 		for (size_t touchedIndex = 0;
 			touchedIndex < batch.touchedCount; ++touchedIndex)
 		{
@@ -1186,26 +947,7 @@ namespace fonthook::vectorfont
 					amount, std::memory_order_relaxed);
 			}
 		}
-		// Publishing the four batch diagnostics below also costs one atomic add
-		// each. Report the net reduction rather than only the payload coalescing.
-		const UInt64 atomicPublications = atomicFlushes + 4u;
-		const UInt64 atomicsSaved = batch.recordCount > atomicPublications
-			? batch.recordCount - atomicPublications : 0;
-		state.counters[static_cast<size_t>(
-			FreeTypePerfCounter::PerfCounterBatchScope)].fetch_add(
-			batch.scopeCount, std::memory_order_relaxed);
-		state.counters[static_cast<size_t>(
-			FreeTypePerfCounter::PerfCounterBatchRecord)].fetch_add(
-			batch.recordCount, std::memory_order_relaxed);
-		state.counters[static_cast<size_t>(
-			FreeTypePerfCounter::PerfCounterBatchAtomicFlush)].fetch_add(
-			atomicFlushes, std::memory_order_relaxed);
-		state.counters[static_cast<size_t>(
-			FreeTypePerfCounter::PerfCounterBatchAtomicSaved)].fetch_add(
-			atomicsSaved, std::memory_order_relaxed);
 		batch.touchedCount = 0;
-		batch.recordCount = 0;
-		batch.scopeCount = 0;
 	}
 
 	SInt64 BeginFreeTypePerfSample()
@@ -1226,62 +968,6 @@ namespace fonthook::vectorfont
 		const SInt64 ticks = now.QuadPart - start;
 		RecordDuration(phase, ticks);
 		return ticks;
-	}
-
-	void RecordFreeTypeAccumulatorPrepTailSample(
-		const FreeTypeAccumulatorPrepTailSample& sample)
-	{
-		const SInt64 frequency = QueryPerfFrequency();
-		if (!g_bEnableFreeTypeFontRenderingLog
-			|| sample.totalTicks <= 0 || frequency <= 0)
-			return;
-		const auto toNanoseconds = [frequency](SInt64 ticks)
-		{
-			if (ticks <= 0)
-				return UInt64{ 0 };
-			const long double scaled = static_cast<long double>(ticks)
-				* 1000000000.0L / static_cast<long double>(frequency);
-			return static_cast<UInt64>(
-				std::max<long double>(1.0L, scaled));
-		};
-		const UInt64 nanoseconds = toNanoseconds(sample.totalTicks);
-		constexpr std::array<UInt64, 4> thresholds = {
-			250000u, 500000u, 1000000u, 2000000u
-		};
-		PerformanceState& state = GetPerformanceState();
-		for (size_t index = 0; index < thresholds.size(); ++index)
-		{
-			if (nanoseconds >= thresholds[index])
-			{
-				state.accumulatorPrepTailCounts[index].fetch_add(
-					1, std::memory_order_relaxed);
-			}
-		}
-		if (nanoseconds < thresholds.front())
-			return;
-		std::lock_guard<std::mutex> lock(state.accumulatorPrepTailMutex);
-		if (nanoseconds <= state.accumulatorPrepTailWorst.nanoseconds)
-			return;
-		state.accumulatorPrepTailWorst = {
-			nanoseconds,
-			toNanoseconds(sample.resetTicks),
-			toNanoseconds(sample.topologyTicks),
-			toNanoseconds(sample.visibilityTicks),
-			toNanoseconds(sample.metadataTicks),
-			toNanoseconds(sample.readinessTicks),
-			toNanoseconds(sample.lookupTicks),
-			toNanoseconds(sample.facadeLoopTicks),
-			toNanoseconds(sample.ringTicks),
-			toNanoseconds(sample.singletonTicks),
-			toNanoseconds(sample.commandTicks),
-			toNanoseconds(sample.publishTicks),
-			sample.itemCount,
-			sample.facadeCount,
-			sample.survivorCount,
-			sample.payloadCount,
-			sample.singletonCount,
-			sample.commandFrameActive
-		};
 	}
 
 	void ReportFreeTypePerf(bool force)
@@ -1330,8 +1016,6 @@ namespace fonthook::vectorfont
 		{
 			return gpuTimingCounters[static_cast<size_t>(counter)];
 		};
-		(void)ConsumeAccumulatorPrepTailSummary();
-
 		const DurationSummary& layout =
 			phaseValue(FreeTypePerfPhase::Layout);
 		const DurationSummary& artifactCompile =

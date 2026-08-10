@@ -288,22 +288,9 @@ namespace fonthook::vectorfont
 		CompositeFusedEligible,
 		CompositeOrderedEligible,
 		CompositeOverlapFallback,
-		CompositeMultiPageFallback,
 		CompositeShaderFallback,
 		CompositeDraw,
 		TilePass,
-		CompositeCacheHit,
-		CompositeCacheMiss,
-		CompositeCacheStateChange,
-		CompositeCacheGenerated,
-		CompositeCacheEvicted,
-		CompositeCacheBytes,
-		CompositeCacheBudgetReject,
-		CompositeCacheRttFailure,
-		CompositeCacheRestoreFailure,
-		CompositeVisualValidated,
-		CompositeVisualRejected,
-		CompositeVisualInconclusive,
 		CommandRecorded,
 		CommandSpanRecorded,
 		CommandPacketRecorded,
@@ -439,7 +426,6 @@ namespace fonthook::vectorfont
 		ThinRegistrationHookMismatch,
 		ThinRegistrationSlowAudit,
 		ThinRegistrationSuppressed,
-		ThinRegistrationTimingSample,
 		ThinRegistrationMetadataBatch,
 		ThinRegistrationMetadataShape,
 		ThinRegistrationMetadataMissing,
@@ -515,10 +501,6 @@ namespace fonthook::vectorfont
 		VanillaLayoutStandardLiteFallbackPrelude,
 		VanillaLayoutStandardLiteCurrentDeclarationReplay,
 		VanillaLayoutStandardLiteCompatibleDeclarationReplay,
-		PerfCounterBatchScope,
-		PerfCounterBatchRecord,
-		PerfCounterBatchAtomicFlush,
-		PerfCounterBatchAtomicSaved,
 		Count,
 	};
 	static_assert(
@@ -550,116 +532,24 @@ namespace fonthook::vectorfont
 	enum class FreeTypePerfPhase : UInt8
 	{
 		Layout = 0,
-		Sidecar,
-		DirectCompile,
 		TextArtifactCompile,
-		NativeRegistration,
-		NativeRegistrationReadiness,
-		NativeRegistrationShape,
-		NativeRegistrationBudget,
-		NativeRegistrationAllocation,
-		NativeRegistrationPayload,
-		NativeRegistrationAccounting,
-		NativeRegistrationPublish,
-		Preflight,
-		Submit,
-		CommandBuild,
-		CommandBuildStamp,
-		CommandBuildDirectFacade,
-		CommandBuildOrdinary,
-		CommandBuildFinalize,
-		CommandSubmit,
-		ExtendedFntGeometry,
 		FrameRouteTotal,
 		FrameRoutePrep,
-		FramePrepReset,
-		FramePrepTopology,
-		FramePrepVisibility,
-		FramePrepMetadata,
-		FramePrepFacades,
-		FramePrepReadiness,
-		FramePrepLookup,
-		FramePrepFacadeLoop,
-		FramePrepRing,
-		FramePrepRingInputScan,
-		FramePrepRingResource,
-		FramePrepRingStaticScan,
-		FramePrepRingStaticLock,
-		FramePrepRingStaticCopy,
-		FramePrepRingStaticUnlock,
-		FramePrepRingStaticCommit,
-		FramePrepRingDynamicResolve,
-		FramePrepRingDynamicLock,
-		FramePrepRingDynamicCopy,
-		FramePrepRingDynamicUnlock,
-		FramePrepRingDynamicCommit,
-		FramePrepRingLeasePublish,
-		FramePrepSingletons,
-		FramePrepPublish,
 		FrameRouteVanillaRender,
-		RegisterRoute,
 		DispatchRoute,
-		PreflightClipHonorGate,
 		Count,
 	};
 	inline constexpr UInt32 kNativeFontDispatchRouteCpuSampleRate = 256u;
-	inline constexpr UInt32 kNativeFontVisibilityHonorCpuSampleRate = 256u;
-	struct FreeTypeAccumulatorPrepTailSample
-	{
-		SInt64 totalTicks = 0;
-		SInt64 resetTicks = 0;
-		SInt64 topologyTicks = 0;
-		SInt64 visibilityTicks = 0;
-		SInt64 metadataTicks = 0;
-		SInt64 readinessTicks = 0;
-		SInt64 lookupTicks = 0;
-		SInt64 facadeLoopTicks = 0;
-		SInt64 ringTicks = 0;
-		SInt64 singletonTicks = 0;
-		SInt64 commandTicks = 0;
-		SInt64 publishTicks = 0;
-		UInt32 itemCount = 0;
-		UInt32 facadeCount = 0;
-		UInt32 survivorCount = 0;
-		UInt32 payloadCount = 0;
-		UInt32 singletonCount = 0;
-		bool commandFrameActive = false;
-	};
 	SInt64 BeginFreeTypePerfSample();
 	SInt64 EndFreeTypePerfSample(FreeTypePerfPhase aePhase, SInt64 aiStart);
-	void RecordFreeTypeAccumulatorPrepTailSample(
-		const FreeTypeAccumulatorPrepTailSample& arSample);
 	void ResetFreeTypeGpuTiming();
-
-	struct FreeTypeGpuEnvelopeViewport
-	{
-		UInt32 x = 0;
-		UInt32 y = 0;
-		UInt32 width = 0;
-		UInt32 height = 0;
-	};
-
-	enum class FreeTypeGpuEnvelopeCull : UInt8
-	{
-		App = 0,
-		Alpha,
-		Clip,
-		Scissor,
-	};
 
 	// These recorders update only the currently sampled asynchronous query slot.
 	// Unsampled frames and non-render threads are no-ops.
 	void RecordFreeTypeGpuEnvelopeForeignPass();
-	void RecordFreeTypeGpuEnvelopeNativeFacadePass();
 	void RecordFreeTypeGpuEnvelopeVanillaPass();
-	void RecordFreeTypeGpuEnvelopeVanillaCull(
-		FreeTypeGpuEnvelopeCull aeCull);
-	void RecordFreeTypeGpuEnvelopeVanillaRuntimeFallback();
-	void RecordFreeTypeGpuEnvelopeVanillaDraw(
-		bool abStandardLite, UInt32 auiVertexCount,
-		UInt32 auiTriangleCount, bool abUseScissor,
-		SInt32 aiScissorLeft, SInt32 aiScissorTop,
-		SInt32 aiScissorRight, SInt32 aiScissorBottom);
+	void RecordFreeTypeGpuEnvelopeVanillaCull();
+	void RecordFreeTypeGpuEnvelopeVanillaDraw(bool abStandardLite);
 
 	// Measures the GPU command-stream interval occupied by the complete Tile
 	// alpha traversal when that traversal contains prepared direct payloads or
@@ -670,8 +560,7 @@ namespace fonthook::vectorfont
 	public:
 		explicit FreeTypeGpuAlphaEnvelopeScope(
 			IDirect3DDevice9* apDevice, bool abHasPreparedPayloads,
-			bool abHasVanillaLayout,
-			const FreeTypeGpuEnvelopeViewport& arViewport);
+			bool abHasVanillaLayout);
 		~FreeTypeGpuAlphaEnvelopeScope();
 
 		FreeTypeGpuAlphaEnvelopeScope(
@@ -687,8 +576,7 @@ namespace fonthook::vectorfont
 	{
 	public:
 		explicit FreeTypePerfScope(
-			FreeTypePerfPhase aePhase, bool abEnabled = true,
-			SInt64* apElapsedTicks = nullptr);
+			FreeTypePerfPhase aePhase, bool abEnabled = true);
 		~FreeTypePerfScope();
 		void Stop();
 
@@ -698,7 +586,6 @@ namespace fonthook::vectorfont
 	private:
 		FreeTypePerfPhase m_phase;
 		SInt64 m_start = 0;
-		SInt64* m_elapsedTicks = nullptr;
 		bool m_active = false;
 	};
 	struct FaceConfig

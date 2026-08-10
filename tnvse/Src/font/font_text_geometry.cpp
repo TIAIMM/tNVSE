@@ -606,9 +606,6 @@ namespace fonthook
 				rasterScale);
 			return;
 		}
-		vectorfont::FreeTypePerfScope extendedFntPerf(
-			vectorfont::FreeTypePerfPhase::ExtendedFntGeometry);
-
 		int alignmentOffset = 0;
 		if (aiFlags == 4)
 			alignmentOffset = -textData.xLineWidths.m_item;
@@ -890,9 +887,6 @@ namespace fonthook
 				textObject->m_kLocal.m_Translate = NiPoint3(afStartX, currentZ, startY);
 			return textObject;
 		}
-		vectorfont::FreeTypePerfScope extendedFntPerf(
-			vectorfont::FreeTypePerfPhase::ExtendedFntGeometry);
-
 		int iActualCharCount = AdjustCharCountForDB(
 			apTextString->pString, charIdx, extraGlyphs, textLen);
 

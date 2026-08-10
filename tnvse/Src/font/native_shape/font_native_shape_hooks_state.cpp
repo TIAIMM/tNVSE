@@ -111,20 +111,10 @@ namespace fonthook::vectorfont
 			switch (cull)
 			{
 			case NativeFontVisibilityCull::AppCulled:
-				RecordFreeTypeGpuEnvelopeVanillaCull(
-					FreeTypeGpuEnvelopeCull::App);
-				break;
 			case NativeFontVisibilityCull::ZeroAlpha:
-				RecordFreeTypeGpuEnvelopeVanillaCull(
-					FreeTypeGpuEnvelopeCull::Alpha);
-				break;
 			case NativeFontVisibilityCull::Clip:
-				RecordFreeTypeGpuEnvelopeVanillaCull(
-					FreeTypeGpuEnvelopeCull::Clip);
-				break;
 			case NativeFontVisibilityCull::Scissor:
-				RecordFreeTypeGpuEnvelopeVanillaCull(
-					FreeTypeGpuEnvelopeCull::Scissor);
+				RecordFreeTypeGpuEnvelopeVanillaCull();
 				break;
 			default:
 				break;

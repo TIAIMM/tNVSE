@@ -163,15 +163,6 @@ namespace fonthook::vectorfont
 		thread_local UInt64 s_clipCameraEpoch = 0;
 		thread_local UInt64 s_clipFrameToken = 0;
 		thread_local bool s_previousClipCameraValid = false;
-		thread_local UInt32 s_visibilityHonorSampleCursor = 0;
-
-		bool ShouldSampleVisibilityHonorGate()
-		{
-			if (!g_bEnableFreeTypeFontRenderingLog)
-				return false;
-			const UInt32 sample = s_visibilityHonorSampleCursor++;
-			return sample % kNativeFontVisibilityHonorCpuSampleRate == 0u;
-		}
 
 		size_t HashClipTransformIdentity(const void* identity)
 		{
@@ -1483,9 +1474,6 @@ namespace fonthook::vectorfont
 		const NativeFontVisibilityPreflight& preflight,
 		bool reuseCertifiedCamera)
 	{
-		FreeTypePerfScope honorGatePerf(
-			FreeTypePerfPhase::PreflightClipHonorGate,
-			ShouldSampleVisibilityHonorGate());
 		auto reject = [](FreeTypePerfCounter reason)
 		{
 			RecordFreeTypePerf(reason);

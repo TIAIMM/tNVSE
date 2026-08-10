@@ -938,8 +938,6 @@ namespace fonthook::vectorfont
 		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
-		FreeTypePerfScope perf(
-			FreeTypePerfPhase::NativeRegistration);
 		if (!IsNativeFontRendererAvailable()
 			|| !payloadTemplate || payloadTemplate->quadCount != quadCount
 			|| !ValidateNativeFontShape(shape, effectConfig, colorContract,
@@ -996,11 +994,8 @@ namespace fonthook::vectorfont
 		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
-		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
 		bool rendererAvailable = false;
 		{
-			FreeTypePerfScope readiness(
-				FreeTypePerfPhase::NativeRegistrationReadiness);
 			rendererAvailable = IsNativeFontRendererAvailable();
 		}
 		if (!rendererAvailable || !shape || !payloadTemplate
@@ -1010,8 +1005,6 @@ namespace fonthook::vectorfont
 		}
 		bool shapeReady = false;
 		{
-			FreeTypePerfScope shapeProof(
-				FreeTypePerfPhase::NativeRegistrationShape);
 			shapeReady = !payloadTemplate->packets.empty()
 				&& ValidateNativeFontShape(shape, effectConfig, colorContract,
 					payloadTemplate.get())
@@ -1028,8 +1021,6 @@ namespace fonthook::vectorfont
 			+ kSingletonFacadeEstimatedShapeBytes + 6u * sizeof(void*);
 		bool budgetReady = false;
 		{
-			FreeTypePerfScope budget(
-				FreeTypePerfPhase::NativeRegistrationBudget);
 			budgetReady = GetCpuMemoryCategoryHeadroom(
 				CpuMemoryCategory::RuntimeMetadata, estimatedBytes)
 				>= estimatedBytes;
@@ -1039,8 +1030,6 @@ namespace fonthook::vectorfont
 
 		std::shared_ptr<SingletonFacadeMetadata> metadata;
 		{
-			FreeTypePerfScope allocation(
-				FreeTypePerfPhase::NativeRegistrationAllocation);
 			metadata = std::make_shared<SingletonFacadeMetadata>();
 		}
 		InitializeNativeFontMetadataIdentity(*metadata, shape);
@@ -1062,8 +1051,6 @@ namespace fonthook::vectorfont
 		NiTriShapeData* data = shape->GetModelData();
 		singleton.slot.shellBuffer = data ? data->m_pkBuffData : nullptr;
 		{
-			FreeTypePerfScope payloadBuild(
-				FreeTypePerfPhase::NativeRegistrationPayload);
 			if (!InitializeNativeFontShapePayload(font, shape, *metadata,
 				payloadTemplate, geometryOrigin, metadata->nativePayload))
 			{
@@ -1100,8 +1087,6 @@ namespace fonthook::vectorfont
 			FreeTypePerfCounter::SingletonFacadeChildAllocationAvoided,
 			avoidedChildAllocations);
 		{
-			FreeTypePerfScope accounting(
-				FreeTypePerfPhase::NativeRegistrationAccounting);
 			metadata->cpuMemory.Reset(CpuMemoryCategory::RuntimeMetadata,
 				estimatedBytes
 					+ metadata->nativePayload.packetShaders.heap_capacity()
@@ -1115,8 +1100,6 @@ namespace fonthook::vectorfont
 		}
 
 		{
-			FreeTypePerfScope publish(
-				FreeTypePerfPhase::NativeRegistrationPublish);
 			NativeFontShapeState& state = State();
 			std::lock_guard<std::mutex> lock(state.metadataMutex);
 			state.metadataGenerations[GetMetadataGenerationSlot(shape)].fetch_add(
@@ -1140,7 +1123,6 @@ namespace fonthook::vectorfont
 		NativeFontPayloadTemplatePtr payloadTemplate,
 		const NiPoint3& geometryOrigin)
 	{
-		FreeTypePerfScope perf(FreeTypePerfPhase::NativeRegistration);
 		if (!IsNativeFontRendererAvailable() || !shape || !payloadTemplate
 			|| payloadTemplate->quadCount != quadCount
 			|| payloadTemplate->pageCount != 1

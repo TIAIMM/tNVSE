@@ -66,8 +66,6 @@ namespace fonthook::vectorfont
 			const NativePreflightFrameContext* frameContext,
 			const bool* forcedCompositeTopology)
 		{
-			FreeTypePerfScope perf(
-				FreeTypePerfPhase::Preflight);
 			if (!facade || !payload.buildComplete || !payload.payloadTemplate
 				|| payload.payloadTemplate->packets.empty())
 			{

@@ -183,7 +183,6 @@ namespace fonthook::vectorfont
 			return;
 		}
 
-		const SInt64 inputScanStart = BeginFreeTypePerfSample();
 		UInt32 maximumVertices = 0;
 		for (const NativeFontPayloadTemplatePtr& payloadTemplate : payloadTemplates)
 		{
@@ -199,28 +198,21 @@ namespace fonthook::vectorfont
 				continue;
 			maximumVertices = std::max(maximumVertices, vertexCount);
 		}
-		EndFreeTypePerfSample(
-			FreeTypePerfPhase::FramePrepRingInputScan, inputScanStart);
 		if (!maximumVertices)
 			return;
 
-		const SInt64 resourceStart = BeginFreeTypePerfSample();
 		NativeFontRingState& state = RingState();
 		std::lock_guard<std::mutex> lock(state.mutex);
 		const char* operation = "sorted-frame-resource";
 		HRESULT result = D3DERR_DEVICELOST;
 		const bool resourcesReady = EnsureRingResourcesLocked(
 			state, generation, maximumVertices, operation, result);
-		EndFreeTypePerfSample(
-			FreeTypePerfPhase::FramePrepRingResource, resourceStart);
 		if (!resourcesReady)
 		{
 			return;
 		}
 		const auto publishLease = [&](bool allStatic = false)
 		{
-			FreeTypePerfScope publishPerf(
-				FreeTypePerfPhase::FramePrepRingLeasePublish);
 			return PublishSortedRingLeaseLocked(
 				state, payloadTemplates, generation, allStatic);
 		};
@@ -241,7 +233,6 @@ namespace fonthook::vectorfont
 			std::memory_order_relaxed);
 		if (state.staticVertexBuffer)
 		{
-			const SInt64 staticScanStart = BeginFreeTypePerfSample();
 			std::vector<NativeFontPayloadTemplatePtr> selected;
 			selected.reserve(std::min<size_t>(payloadTemplates.size(),
 				kStaticPromotionPayloadLimit));
@@ -366,9 +357,6 @@ namespace fonthook::vectorfont
 				++selectedPayloads;
 			}
 			selected.resize(selectedPayloads);
-			EndFreeTypePerfSample(
-				FreeTypePerfPhase::FramePrepRingStaticScan,
-				staticScanStart);
 
 			if (selectedPayloads && selectedVertices)
 			{
@@ -380,8 +368,6 @@ namespace fonthook::vectorfont
 					selectedVertices * sizeof(NativeFontGpuVertex);
 				void* destination = nullptr;
 				{
-					FreeTypePerfScope staticLockPerf(
-						FreeTypePerfPhase::FramePrepRingStaticLock);
 					result = state.staticVertexBuffer->Lock(
 						byteOffset, byteCount, &destination, 0);
 				}
@@ -389,8 +375,6 @@ namespace fonthook::vectorfont
 				{
 					UInt32 copiedVertices = 0;
 					{
-						FreeTypePerfScope staticCopyPerf(
-							FreeTypePerfPhase::FramePrepRingStaticCopy);
 						for (const NativeFontPayloadTemplatePtr& payloadTemplate
 							: selected)
 						{
@@ -405,13 +389,9 @@ namespace fonthook::vectorfont
 						}
 					}
 					{
-						FreeTypePerfScope staticUnlockPerf(
-							FreeTypePerfPhase::FramePrepRingStaticUnlock);
 						result = state.staticVertexBuffer->Unlock();
 					}
 					{
-						FreeTypePerfScope staticCommitPerf(
-							FreeTypePerfPhase::FramePrepRingStaticCommit);
 						if (copiedVertices == selectedVertices
 							&& SUCCEEDED(result))
 						{
@@ -494,8 +474,6 @@ namespace fonthook::vectorfont
 				}
 				else
 				{
-					FreeTypePerfScope staticCommitPerf(
-						FreeTypePerfPhase::FramePrepRingStaticCommit);
 					for (const NativeFontPayloadTemplatePtr& payloadTemplate
 						: selected)
 					{
@@ -521,7 +499,6 @@ namespace fonthook::vectorfont
 			return;
 		}
 
-		const SInt64 dynamicResolveStart = BeginFreeTypePerfSample();
 		RefreshRingCpuMemoryLocked(state);
 
 		// Resolve existing locations first. If an append cannot fit, rebatch every
@@ -555,9 +532,6 @@ namespace fonthook::vectorfont
 		}
 		if (!missingDynamicVertices)
 		{
-			EndFreeTypePerfSample(
-				FreeTypePerfPhase::FramePrepRingDynamicResolve,
-				dynamicResolveStart);
 			publishLease();
 			return;
 		}
@@ -573,17 +547,11 @@ namespace fonthook::vectorfont
 		if (!uploadVertices64 || uploadVertices64 > state.vertexCapacity
 			|| uploadVertices64 > std::numeric_limits<UInt32>::max())
 		{
-			EndFreeTypePerfSample(
-				FreeTypePerfPhase::FramePrepRingDynamicResolve,
-				dynamicResolveStart);
 			return;
 		}
 		if (discard
 			&& state.activeSubmissions.load(std::memory_order_acquire))
 		{
-			EndFreeTypePerfSample(
-				FreeTypePerfPhase::FramePrepRingDynamicResolve,
-				dynamicResolveStart);
 			return;
 		}
 
@@ -608,13 +576,8 @@ namespace fonthook::vectorfont
 			startVertex * sizeof(NativeFontGpuVertex);
 		const UINT byteCount =
 			uploadVertices * sizeof(NativeFontGpuVertex);
-		EndFreeTypePerfSample(
-			FreeTypePerfPhase::FramePrepRingDynamicResolve,
-			dynamicResolveStart);
 		void* destination = nullptr;
 		{
-			FreeTypePerfScope dynamicLockPerf(
-				FreeTypePerfPhase::FramePrepRingDynamicLock);
 			result = state.vertexBuffer->Lock(
 				byteOffset, byteCount, &destination, lockFlags);
 		}
@@ -623,8 +586,6 @@ namespace fonthook::vectorfont
 
 		UInt32 copiedVertices = 0;
 		{
-			FreeTypePerfScope dynamicCopyPerf(
-				FreeTypePerfPhase::FramePrepRingDynamicCopy);
 			for (const NativeFontPayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{
@@ -647,8 +608,6 @@ namespace fonthook::vectorfont
 			}
 		}
 		{
-			FreeTypePerfScope dynamicUnlockPerf(
-				FreeTypePerfPhase::FramePrepRingDynamicUnlock);
 			result = state.vertexBuffer->Unlock();
 		}
 		if (copiedVertices != uploadVertices || FAILED(result))
@@ -657,8 +616,6 @@ namespace fonthook::vectorfont
 
 		UInt32 mappedVertices = 0;
 		{
-			FreeTypePerfScope dynamicCommitPerf(
-				FreeTypePerfPhase::FramePrepRingDynamicCommit);
 			for (const NativeFontPayloadTemplatePtr& payloadTemplate
 				: payloadTemplates)
 			{

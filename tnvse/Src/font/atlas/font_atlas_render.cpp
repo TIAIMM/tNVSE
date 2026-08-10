@@ -180,8 +180,6 @@ namespace fonthook::vectorfont
 
 		DirectAtlasShapeBuildResult direct;
 		{
-			FreeTypePerfScope perf(
-				FreeTypePerfPhase::DirectCompile);
 			direct = cpuEffects
 				? TryCreateSealedCpuEffectShape(
 					font, runtime, profile, glyphs, rasterScale,

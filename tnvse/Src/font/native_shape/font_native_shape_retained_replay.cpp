@@ -269,9 +269,6 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			FreeTypePerfScope submitPerf(FreeTypePerfPhase::Submit);
-			FreeTypePerfScope commandPerf(
-				FreeTypePerfPhase::CommandSubmit);
 			draw.vanillaLikeBitmapRoute =
 				payload.vanillaLikeBitmapPackets;
 			NativeRingSubmissionScope ringScope;
@@ -503,12 +500,6 @@ namespace fonthook::vectorfont
 			{
 				return false;
 			}
-			FreeTypePerfScope perf(FreeTypePerfPhase::Submit);
-			FreeTypePerfScope commandPerf(
-				FreeTypePerfPhase::CommandSubmit,
-				directFacadeSinglePacketCommandIndex
-						!= kInvalidNativeFontCommandIndex);
-
 			const NativeFontShapePayload* payload = &metadata.nativePayload;
 			const NativeFontPacketTemplate* packet = nullptr;
 			NativeFontDirectFacadePacketBinding binding;
