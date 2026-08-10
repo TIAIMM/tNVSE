@@ -569,39 +569,6 @@ namespace fonthook::vectorfont
 			return true;
 		}
 
-		void TrimTextArtifactCache(AtlasState& state)
-		{
-			const size_t preferred = static_cast<size_t>(
-				g_uiFreeTypeFontMemoryCacheMB) * 1024u * 1024u / 12u;
-			const size_t limit = GetCpuMemoryCategoryHeadroom(
-				CpuMemoryCategory::TextArtifact, preferred);
-			while ((GetCpuMemoryUsage(CpuMemoryCategory::TextArtifact) > limit
-					|| IsCpuMemoryBudgetExceeded())
-				&& !state.textArtifactLru.empty())
-			{
-				const TextArtifactKey key = state.textArtifactLru.back();
-				auto existing = state.textArtifactCache.find(key);
-				if (existing != state.textArtifactCache.end())
-				{
-					state.textArtifactCacheBytes -= std::min(
-						state.textArtifactCacheBytes,
-						existing->second.bytes);
-					state.textArtifactCache.erase(existing);
-					RecordFreeTypePerf(
-						FreeTypePerfCounter::TextArtifactEviction);
-				}
-				state.textArtifactLru.pop_back();
-			}
-		}
-
-	void TrimAtlasCpuCachesForTotalBudget()
-	{
-		AtlasState& state = State();
-		std::lock_guard<std::mutex> lock(state.textArtifactMutex);
-		TrimTextArtifactCache(state);
-	}
-
-
 		UInt64 BuildAtlasContentHash(UInt64 maskGenerationHash,
 			UInt8 maskCombination, UInt8 sdfSpread,
 			SInt32 outlineStroke, SInt32 glowStroke, UInt64 cpuCoverageHash,

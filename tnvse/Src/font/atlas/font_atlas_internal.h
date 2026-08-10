@@ -849,51 +849,6 @@ namespace fonthook::vectorfont
 		bool compactResidentIndexReleased = false;
 	};
 
-	struct TextArtifactKey
-	{
-		uintptr_t atlasIdentity = 0;
-		UInt64 contentHash = 0;
-		UInt64 quadColorHash = 0;
-		UInt32 generation = 0;
-		UInt32 quadCount = 0;
-
-		bool operator==(const TextArtifactKey& other) const
-		{
-			return atlasIdentity == other.atlasIdentity
-				&& contentHash == other.contentHash
-				&& quadColorHash == other.quadColorHash
-				&& generation == other.generation
-				&& quadCount == other.quadCount;
-		}
-	};
-
-	struct TextArtifactKeyHash
-	{
-		size_t operator()(const TextArtifactKey& key) const
-		{
-			return static_cast<size_t>(key.contentHash ^ (key.contentHash >> 32))
-				^ static_cast<size_t>(
-					key.quadColorHash ^ (key.quadColorHash >> 32))
-				^ key.atlasIdentity ^ (static_cast<size_t>(key.generation) << 8)
-				^ key.quadCount;
-		}
-	};
-
-	struct QuadBatchFingerprint
-	{
-		UInt64 contentHash = 0;
-		UInt64 quadColorHash = 0;
-		UInt32 quadCount = 0;
-	};
-
-	struct TextArtifactEntry
-	{
-		NativeFontPayloadTemplatePtr data;
-		size_t bytes = 0;
-		std::list<TextArtifactKey>::iterator lru;
-		CpuMemoryLease cpuMemory;
-	};
-
 	class DefaultAtlasTexture : public NiTexture
 	{
 	public:
@@ -952,11 +907,6 @@ namespace fonthook::vectorfont
 		std::unordered_map<UInt64,
 			std::weak_ptr<const SealedDirectFontProfile>>
 			sealedDirectProfiles;
-		std::unordered_map<TextArtifactKey, TextArtifactEntry,
-			TextArtifactKeyHash> textArtifactCache;
-		std::list<TextArtifactKey> textArtifactLru;
-		size_t textArtifactCacheBytes = 0;
-		std::mutex textArtifactMutex;
 	};
 
 	AtlasState& State();
@@ -1055,8 +1005,6 @@ namespace fonthook::vectorfont
 		RetiredAtlasReleaseList& retiredReleases);
 	void CollectPrunableRetiredAtlasesLocked(
 		RetiredAtlasReleaseList& retiredReleases);
-	void TrimTextArtifactCache(AtlasState& state);
-	void TrimAtlasCpuCachesForTotalBudget();
 	void ResolveGpuAtlasBudget(bool force);
 	bool IsGpuAtlasCacheUnlimited();
 	size_t GetAtlasCacheLimit();

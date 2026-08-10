@@ -34,8 +34,8 @@ namespace fonthook::vectorfont
 			return prewarmLimit;
 
 		// Full atlas profiles no longer need a large CPU bitmap working set. Keep
-		// an adaptive 8-16 MiB demand cache for cold misses without reducing the
-		// unified text-artifact budget that affects every frame.
+		// an adaptive 8-16 MiB demand cache for cold misses without consuming the
+		// aggregate headroom needed by live shape-owned text payloads.
 		constexpr size_t kMinimumPostPrewarmBitmapBytes = 8u * 1024u * 1024u;
 		constexpr size_t kMaximumPostPrewarmBitmapBytes = 16u * 1024u * 1024u;
 		const size_t adaptiveLimit = std::clamp(configuredBytes / 16u,

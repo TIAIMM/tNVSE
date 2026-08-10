@@ -13,7 +13,6 @@
 namespace fonthook::vectorfont
 {
 	void TrimFreeTypeCpuCachesForTotalBudget();
-	void TrimAtlasCpuCachesForTotalBudget();
 	void TrimNativeFontCpuCachesForTotalBudget();
 
 	namespace implementation::font_cpu_budget {}
@@ -208,7 +207,6 @@ namespace fonthook::vectorfont
 		// until the real aggregate is below the configured limit or all reclaimable
 		// entries are gone.
 		TrimNativeFontCpuCachesForTotalBudget();
-		TrimAtlasCpuCachesForTotalBudget();
 		TrimFreeTypeCpuCachesForTotalBudget();
 		state.lastEnforcedGeneration.store(
 			state.allocationGeneration.load(

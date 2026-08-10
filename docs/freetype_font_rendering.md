@@ -2011,34 +2011,21 @@ bilinear footprint because
 the distance spread and an additional guard texel are already inside each glyph
 bitmap. Aggressive composite and ARGB fallback pages retain four
 transparent pixels per side, isolating the 1/4 mip even when glyph dimensions
-are not multiples of four. Repeated text also reuses cached layout and unique
-text artifacts. Text artifacts use a two-observation coarse-signature admission
-filter: a one-shot menu string is returned directly to its shape without
-entering the global map/LRU, while a warmed signature may create a fully
-validated cache resident. A 64-bucket, four-way
-thread-local weak front serves recent resident or still-live artifacts without
-taking the global cache mutex and does not pin an artifact after its real owners
-release it. For the common single-page Composite route, the first compilation
-also accumulates its exact geometry/color fingerprint inside the mandatory
-quad-to-vertex loop and publishes only a weak probation entry. If the same
-artifact is requested again while its first shape still owns it, the second
-observation reuses that immutable payload and promotes it into the normal LRU
-subject to the existing memory budget; it no longer compiles the artifact a
-second time merely to establish admission. An expired probation entry simply
-misses and follows the original compile/admit path. Each lookup probes only one
-bucket. The two-observation history uses
-256 four-way buckets and preferentially replaces one-shot candidates before an
-established signature. Non-Composite and multi-page first observations retain
-the constant-cost geometry/effect signature and skip the exact per-quad
-fingerprint.
+are not multiples of four. Repeated text can still reuse the prepared layout,
+glyph bitmaps, and atlas residency, but the final text artifact is deliberately
+not cached across shapes. Every shape compiles one immutable artifact directly
+from its current quads. There is no artifact admission signature, exact
+cache fingerprint, thread-local weak front, probation entry, global artifact
+map/LRU, or artifact-cache mutex.
+
 One artifact owns the packed
 vertices, bound, atlas-page
 property/texture references, and merged contiguous packet descriptors that used
 to live in separate batch and packet-template caches. Geometry, per-glyph base
 colors, layer constants, composite mode, and referenced page identities
-therefore form one
-validated cache identity; an atlas wrapper address cannot revive an artifact
-whose retained property or texture differs. TSDF, MTSDF, and 32-bit fallback
+are validated together before publication, and the live shape retains the
+result for its own lifetime. No atlas wrapper or geometry hash can revive that
+payload for another shape. TSDF, MTSDF, and 32-bit fallback
 profiles use separate cache keys; mode-0 baked BGRA composite additionally has a
 distinct pixel/render profile and prewarm identity. Changing
 `uiFreeTypeFontDistanceFieldMode`
@@ -2117,16 +2104,9 @@ the original profile and payload-validation traversal. The periodic counters
 `direct_composite_profile_vertex_scan_saved` distinguish the exact fast path
 from all compatibility fallbacks.
 
-Runtime cache-key work is amortized at the point where the corresponding
-identity becomes immutable:
+Remaining runtime cache-key work is amortized at the point where the
+corresponding reusable identity becomes immutable:
 
-- A one-shot common single-page Composite artifact computes its exact geometry
-  and color fingerprints while the required compiler loop already has each quad
-  hot. That weak probation identity does not add a separate source traversal or
-  extend the artifact lifetime. Other one-shot routes compute only the
-  constant-cost admission signature. Once admitted, one quad traversal computes
-  geometry and color fingerprints together; effect/range identity consumes that
-  color fingerprint instead of scanning the quads again.
 - Distance-field atlas keys are derived directly from the sealed byte-role
   raster profile. The MTSDF/true-SDF route therefore avoids rescanning the
   bitmap list and building, sorting, and deduplicating an empty baked-color
@@ -2194,16 +2174,16 @@ authoritative, so a fixed budget can retain fewer MTSDF pages; it does not
 silently exceed the configured ceiling to preserve the old page count.
 
 `uiFreeTypeFontMemoryCacheMB` is one aggregate CPU-memory ceiling shared by
-glyph bitmaps, layout runs, unified text artifacts, atlas
+glyph bitmaps, layout runs, live text artifacts, atlas
 metadata/backing data, persistent file mappings, runtime font metadata, and the
-retained CPU maps/scratch buffers used by native submission. Cached/shared
-objects and static-promotion candidates hold category leases for their actual
-lifetime. Removing an LRU or map key therefore does not pretend to reclaim an
-object that a live shape or thread-local hot entry still owns, and the old
-per-cache fractions are only preferred local targets constrained by the
+retained CPU maps/scratch buffers used by native submission. Live artifacts are
+shape-owned and retain their category leases until those shapes release them;
+they are not reclaimable cache entries. Cached/shared objects and
+static-promotion candidates hold category leases for their actual lifetime, and
+the old per-cache fractions are only preferred local targets constrained by the
 remaining global headroom, not independent budgets. When the total is above the
-ceiling, tNVSE trims optional native residency/candidate maps, unified text
-artifacts, layouts, and glyph bitmaps in reconstructibility order.
+ceiling, tNVSE trims optional native residency/candidate maps, layouts, and
+glyph bitmaps in reconstructibility order.
 Memory still referenced by active shapes, atlases, font runtimes, static GPU
 residency, or required mappings is reported as `pinned-overcommit` instead of
 being invalidated silently.

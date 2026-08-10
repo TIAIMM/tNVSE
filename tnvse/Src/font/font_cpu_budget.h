@@ -63,9 +63,9 @@ namespace fonthook::vectorfont
 	bool ReleaseFontPrewarmEmergencyAddressSpace();
 	bool HasFontPrewarmEmergencyAddressSpace();
 
-	// A lease follows the allocation's real lifetime. Removing an LRU entry does
-	// not pretend to reclaim memory while a shape, TLS hot entry, or another
-	// shared_ptr still owns the underlying object.
+	// A lease follows the allocation's real lifetime. Removing a cache index does
+	// not pretend to reclaim memory while a shape or another shared_ptr still owns
+	// the underlying object.
 	class CpuMemoryLease
 	{
 	public:

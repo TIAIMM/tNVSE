@@ -103,15 +103,6 @@ namespace fonthook::vectorfont
 		return layoutKind != NativeFontVanillaLayoutKind::None;
 	}
 
-	// The thread-local text-artifact front is set-associative so menu churn
-	// retains recent weak references without turning lookup into a linear scan.
-	// Admission history is larger because one-shot strings must not evict a
-	// warmed signature merely because both hashes share a direct-mapped slot.
-	inline constexpr UInt32 kTextArtifactHotBucketCount = 64;
-	inline constexpr UInt32 kTextArtifactHotWays = 4;
-	inline constexpr UInt32 kTextArtifactAdmissionBucketCount = 256;
-	inline constexpr UInt32 kTextArtifactAdmissionWays = 4;
-
 	enum class FreeTypePerfCounter : UInt16
 	{
 		BitmapMemoryHit,
@@ -130,21 +121,7 @@ namespace fonthook::vectorfont
 		AtlasUpload,
 		AtlasUploadBytes,
 		AtlasUploadRect,
-		TextArtifactHit,
-		TextArtifactMiss,
-		TextArtifactHotHit,
-		TextArtifactProbationHotPublished,
-		TextArtifactProbationHotHit,
-		TextArtifactProbationHotPromoted,
-		TextArtifactProbationFingerprintQuad,
-		TextArtifactHotEntryExpired,
-		TextArtifactHotEntryReplacement,
-		TextArtifactAdmissionHistoryHit,
-		TextArtifactAdmissionCandidateReplacement,
-		TextArtifactAdmissionEstablishedReplacement,
-		TextArtifactAdmissionBypass,
-		TextArtifactAdmission,
-		TextArtifactEviction,
+		TextArtifactCompile,
 		TextArtifactCompiledVertex,
 		TextArtifactVertexInitializationBytesAvoided,
 		DirectShapeVertexInitializationBytesAvoided,
