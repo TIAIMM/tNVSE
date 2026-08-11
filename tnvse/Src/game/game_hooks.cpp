@@ -845,7 +845,7 @@ namespace fonthook
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);
-			if (node)
+			if (node && g_bFixPipBoySearchIcon)
 				pipboy_search_icon_compat::NormalizeInactiveEmptySearchWidth(tile);
 			return node;
 		}

@@ -22,6 +22,7 @@ bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
+bool g_bFixPipBoySearchIcon = true;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputLog;
 bool g_bMultibyteInputCompositionPreview;
@@ -254,6 +255,11 @@ void LoadConfig()
 		filename) != 0;
 	gLog.FormattedMessage("g_bEnableFreeTypeFontCompositePass: %d",
 		g_bEnableFreeTypeFontCompositePass);
+
+	g_bFixPipBoySearchIcon = ReadConfigInt(
+		kFreeTypeFontSection, "bFixPipBoySearchIcon", 1, filename) != 0;
+	gLog.FormattedMessage("g_bFixPipBoySearchIcon: %d",
+		g_bFixPipBoySearchIcon);
 
 	const UINT32 compositeCacheBudgetMB = std::clamp<UINT32>(
 		ReadConfigInt(kFreeTypeFontSection, "uiFreeTypeFontCompositeCacheMB",

@@ -23,6 +23,7 @@ extern bool g_bEnableFreeTypeFontCommandBuffer;
 extern UINT32 g_uiFreeTypeFontDistanceFieldMode;
 extern UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 extern bool g_bEnableFreeTypeFontCompositePass;
+extern bool g_bFixPipBoySearchIcon;
 extern bool g_bMultibyteInput;
 extern bool g_bMultibyteInputLog;
 extern bool g_bMultibyteInputCompositionPreview;
