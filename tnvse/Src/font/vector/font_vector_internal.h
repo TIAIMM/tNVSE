@@ -1115,6 +1115,8 @@ namespace fonthook::vectorfont
 	FontPrewarmPumpStatus PumpFontPrewarm();
 	void ServiceFontPrewarmHostMessages();
 	bool IsFontPrewarmActive();
+	bool TryDispatchPrewarmAtlasRebuildToLoadingThread(
+		RuntimeFont& arRuntime, float afRasterScale, bool& arResult);
 	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,

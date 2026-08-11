@@ -13,6 +13,7 @@
 #include <deque>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <unordered_set>
@@ -50,6 +51,7 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		constexpr UInt32 kMaximumFontGenerationRestarts = 2;
 		constexpr UInt32 kMaximumTransactionRestarts = 2;
 		constexpr UInt32 kMaximumHostMessagesPerService = 32;
+		constexpr ULONGLONG kLoadingThreadAtlasDispatchTimeoutMs = 5000;
 		constexpr bool CanRetryAfterMemoryFailure(UInt32 failureCount,
 			UInt32 maximumFailures)
 		{
@@ -91,6 +93,21 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 			UInt8 dependencyDeferrals = 0;
 			UInt32 memoryRetries = 0;
 			UInt32 generationRestarts = 0;
+		};
+
+		enum class PrewarmAtlasRequestKind : UInt8
+		{
+			LoadSnapshot,
+			LoadSharedDoubleByteRole,
+			RebuildPublishedSnapshot,
+		};
+
+		struct PrewarmAtlasRequestResult
+		{
+			bool succeeded = false;
+			bool memoryPressure = false;
+			ULONGLONG queueMs = 0;
+			ULONGLONG executionMs = 0;
 		};
 
 
@@ -199,7 +216,8 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		UInt32 totalMemoryRetryCount = 0;
 		bool transactionRestartPending = false;
 		bool terminalPrewarmFailure = false;
-		DWORD prewarmHostThreadId = 0;
+		std::atomic_bool prewarmActive{ false };
+		std::atomic<DWORD> prewarmHostThreadId{ 0 };
 		bool rebuildProgressTracked = false;
 		bool rebuildProgressReportingStarted = false;
 		float rebuildProgress = 0.0f;
@@ -262,6 +280,10 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 	void RecordPrewarmStep(ULONGLONG started);
 	void ReportPrewarmProcessMemoryState(const char* phase);
 	void PrepareIncrementalSession();
+	bool ExecutePrewarmAtlasRequestOnLoadingThread(
+		PrewarmAtlasRequestKind kind, UInt32 fontId, float rasterScale,
+		PrewarmAtlasRequestResult& result);
+	void ServiceFontPrewarmLoadingThread();
 
 	void RestoreOnePrewarmSnapshot();
 	void BeginNextPrewarmFont();

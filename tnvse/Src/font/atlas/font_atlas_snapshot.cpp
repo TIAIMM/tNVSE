@@ -904,6 +904,12 @@ namespace fonthook::vectorfont
 
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& runtime, float rasterScale)
 	{
+		bool dispatchedResult = false;
+		if (TryDispatchPrewarmAtlasRebuildToLoadingThread(
+				runtime, rasterScale, dispatchedResult))
+		{
+			return dispatchedResult;
+		}
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		const bool needsDoubleByte = IsDbcsCodePage(GetFreeTypeTextCodePage());
 		UInt32 discardedPages = 0;

@@ -138,6 +138,9 @@ namespace fonthook
 	};
 	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm();
 	void ServiceFreeTypeFontPrewarmHostMessages();
+	// Called only by the verified LoadingMenu::Update call-site hook, after the
+	// original update and before LoadingMenu::ShowChanges.
+	void ServiceFreeTypeFontPrewarmLoadingThread();
 	bool IsFreeTypeFontPrewarmActive();
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();

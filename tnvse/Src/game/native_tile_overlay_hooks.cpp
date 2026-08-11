@@ -21,6 +21,7 @@ namespace fonthook
 		{
 			if (OverlayRuntime().predecessorLoadingMenuUpdate)
 				OverlayRuntime().predecessorLoadingMenuUpdate(loadingMenu);
+			ServiceFreeTypeFontPrewarmLoadingThread();
 			ConsumeNativePrewarmOverlayCommand();
 		}
 

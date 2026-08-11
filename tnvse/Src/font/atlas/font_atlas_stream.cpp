@@ -686,9 +686,11 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	bool FinalizeStreamingPrewarmAtlas(RuntimeFont& runtime, float rasterScale)
+	bool PrepareStreamingPrewarmAtlasFinalization(RuntimeFont& runtime,
+		float rasterScale, StreamingPrewarmFinalization& finalization)
 	{
-		const ULONGLONG finalizeStarted = GetTickCount64();
+		finalization = {};
+		finalization.finalizeStarted = GetTickCount64();
 		std::unique_ptr<StreamingPrewarmState> completed;
 		{
 			std::lock_guard<std::mutex> lock(s_streamMutex);
@@ -698,6 +700,7 @@ namespace fonthook::vectorfont
 			if (!state->enabled)
 			{
 				s_streams.erase(&runtime);
+				finalization.fontId = GetRuntimeConfig(runtime).fontId;
 				return true;
 			}
 			const size_t roleCount = IsDbcsCodePage(state->codePage) ? 2 : 1;
@@ -726,6 +729,14 @@ namespace fonthook::vectorfont
 			// snapshot validation and D3D9 allocation begin.
 			ReleasePageStorage(role.current);
 			std::unordered_set<UInt64>().swap(role.cacheIds);
+		}
+		finalization.fontId = completed->fontId;
+		finalization.restoreRequired = true;
+		for (const StreamingRole& role : completed->roles)
+		{
+			finalization.pages += role.pages.size();
+			finalization.placements += role.totalPlacements;
+			finalization.bytes += role.totalPixelBytes;
 		}
 
 		// Publishing a streamed role replaces the content-addressed snapshot files.
@@ -761,46 +772,48 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		const ULONGLONG publishedAt = GetTickCount64();
+		finalization.publishedAt = GetTickCount64();
 		// Preserve the global skyline repack, but stage only source headers and
 		// placements in the atlas index. SaveGlyphAtlasSnapshot then reads one
 		// bounded source page at a time from disk and writes the globally repacked
 		// destination pages. No intermediate streamed generation is uploaded.
-		const bool staged = StageGlyphAtlasSnapshotMetadata(runtime, rasterScale);
-		const ULONGLONG stagedAt = GetTickCount64();
-		const bool repacked = staged
+		finalization.staged = StageGlyphAtlasSnapshotMetadata(runtime, rasterScale);
+		finalization.stagedAt = GetTickCount64();
+		finalization.repacked = finalization.staged
 			&& SaveGlyphAtlasSnapshot(runtime, rasterScale);
-		const ULONGLONG repackedAt = GetTickCount64();
-		bool restored = false;
-		if (repacked)
+		finalization.repackedAt = GetTickCount64();
+		if (finalization.repacked)
 		{
 			// The manifest is the transaction commit marker. Do not make the
 			// generation restorable until both byte roles have been repacked.
 			MarkGlyphManifestComplete(runtime);
-			restored = RebuildGlyphAtlasFromSnapshot(runtime, rasterScale)
-				&& HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale);
 		}
-		UInt64 pages = 0;
-		UInt64 placements = 0;
-		UInt64 bytes = 0;
-		for (const StreamingRole& role : completed->roles)
-		{
-			pages += role.pages.size();
-			placements += role.totalPlacements;
-			bytes += role.totalPixelBytes;
-		}
+		return true;
+	}
+
+	bool CompleteStreamingPrewarmAtlasFinalization(RuntimeFont& runtime,
+		float rasterScale, const StreamingPrewarmFinalization& finalization,
+		bool restoreSucceeded, ULONGLONG restoreMs)
+	{
+		if (!finalization.restoreRequired)
+			return true;
+		const bool restored = finalization.repacked && restoreSucceeded
+			&& HasGloballyRepackedGlyphAtlasSnapshot(runtime, rasterScale);
 		gLog.FormattedMessage(
 			"tnvse_freetype_font: streamed prewarm finalized font=%u scale=%.3f pages=%llu placements=%llu rawBytes=%llu publishMs=%llu metadataStageMs=%llu repackMs=%llu restoreMs=%llu stage=%s repack=%s restore=%s",
-			completed->fontId, rasterScale,
-			static_cast<unsigned long long>(pages),
-			static_cast<unsigned long long>(placements),
-			static_cast<unsigned long long>(bytes),
-			static_cast<unsigned long long>(publishedAt - finalizeStarted),
-			static_cast<unsigned long long>(stagedAt - publishedAt),
-			static_cast<unsigned long long>(repackedAt - stagedAt),
-			static_cast<unsigned long long>(GetTickCount64() - repackedAt),
-			staged ? "complete" : "failed",
-			repacked ? "complete" : "failed",
+			finalization.fontId, rasterScale,
+			static_cast<unsigned long long>(finalization.pages),
+			static_cast<unsigned long long>(finalization.placements),
+			static_cast<unsigned long long>(finalization.bytes),
+			static_cast<unsigned long long>(
+				finalization.publishedAt - finalization.finalizeStarted),
+			static_cast<unsigned long long>(
+				finalization.stagedAt - finalization.publishedAt),
+			static_cast<unsigned long long>(
+				finalization.repackedAt - finalization.stagedAt),
+			static_cast<unsigned long long>(restoreMs),
+			finalization.staged ? "complete" : "failed",
+			finalization.repacked ? "complete" : "failed",
 			restored ? (g_bEnableFreeTypeDefaultPoolAtlas
 				? "repacked-default-pool" : "repacked-managed") : "failed");
 		return restored;

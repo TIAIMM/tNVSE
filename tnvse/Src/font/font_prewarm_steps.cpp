@@ -40,25 +40,18 @@ namespace fonthook::vectorfont
 
 			bool snapshotReady = false;
 			bool snapshotMemoryPressure = false;
-			ResetAtlasAllocationMemoryPressure();
-			try
+			PrewarmAtlasRequestResult snapshotResult;
+			if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+					PrewarmAtlasRequestKind::LoadSnapshot, job.fontId,
+					PrewarmRuntime().session.rasterScale, snapshotResult))
 			{
-				snapshotReady =
-					TryLoadGloballyRepackedGlyphAtlasSnapshot(
-						*runtime, PrewarmRuntime().session.rasterScale);
+				AbortPrewarmTransaction(
+					"loading-thread-snapshot-service-unavailable");
+				RecordPrewarmStep(stepStarted);
+				return;
 			}
-			catch (const std::bad_alloc&)
-			{
-				snapshotMemoryPressure = true;
-			}
-			catch (...)
-			{
-				ResetAtlasAllocationMemoryPressure();
-				throw;
-			}
-			snapshotMemoryPressure =
-				ConsumeAtlasAllocationMemoryPressure()
-				|| snapshotMemoryPressure;
+			snapshotReady = snapshotResult.succeeded;
+			snapshotMemoryPressure = snapshotResult.memoryPressure;
 			if (snapshotMemoryPressure)
 			{
 				RecordPrewarmMemoryPressure(job);
@@ -200,26 +193,19 @@ namespace fonthook::vectorfont
 			bool sharedRoleMemoryPressure = false;
 			if (active.sharedDoubleAlias)
 			{
-				ResetAtlasAllocationMemoryPressure();
-				try
+				PrewarmAtlasRequestResult sharedRoleResult;
+				if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+						PrewarmAtlasRequestKind::LoadSharedDoubleByteRole,
+						active.job.fontId,
+						PrewarmRuntime().session.rasterScale,
+						sharedRoleResult))
 				{
-					sharedRoleReady =
-						TryLoadGloballyRepackedGlyphAtlasSnapshotRole(
-							*runtime, VectorFontByteClass::DoubleByte,
-							PrewarmRuntime().session.rasterScale);
+					AbortPrewarmTransaction(
+						"loading-thread-shared-role-service-unavailable");
+					return;
 				}
-				catch (const std::bad_alloc&)
-				{
-					sharedRoleMemoryPressure = true;
-				}
-				catch (...)
-				{
-					ResetAtlasAllocationMemoryPressure();
-					throw;
-				}
-				sharedRoleMemoryPressure =
-					ConsumeAtlasAllocationMemoryPressure()
-					|| sharedRoleMemoryPressure;
+				sharedRoleReady = sharedRoleResult.succeeded;
+				sharedRoleMemoryPressure = sharedRoleResult.memoryPressure;
 			}
 			if (sharedRoleMemoryPressure)
 			{
@@ -808,11 +794,15 @@ namespace fonthook::vectorfont
 				0.81f, true);
 			bool finalized = false;
 			bool finalizationMemoryPressure = false;
+			StreamingPrewarmFinalization finalization;
+			bool finalizationPrepared = false;
 			ResetAtlasAllocationMemoryPressure();
 			try
 			{
-				finalized = FinalizeStreamingPrewarmAtlas(
-					*runtime, PrewarmRuntime().session.rasterScale);
+				finalizationPrepared =
+					PrepareStreamingPrewarmAtlasFinalization(
+						*runtime, PrewarmRuntime().session.rasterScale,
+						finalization);
 			}
 			catch (const std::bad_alloc&)
 			{
@@ -826,6 +816,34 @@ namespace fonthook::vectorfont
 			finalizationMemoryPressure =
 				ConsumeAtlasAllocationMemoryPressure()
 				|| finalizationMemoryPressure;
+			if (finalizationPrepared && finalization.restoreRequired
+				&& finalization.repacked && !finalizationMemoryPressure)
+			{
+				PrewarmAtlasRequestResult restoreResult;
+				if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+						PrewarmAtlasRequestKind::RebuildPublishedSnapshot,
+						active.job.fontId,
+						PrewarmRuntime().session.rasterScale,
+						restoreResult))
+				{
+					AbortPrewarmTransaction(
+						"loading-thread-finalize-service-unavailable");
+					RecordPrewarmStep(stepStarted);
+					return;
+				}
+				finalizationMemoryPressure = restoreResult.memoryPressure;
+				finalized = CompleteStreamingPrewarmAtlasFinalization(
+					*runtime, PrewarmRuntime().session.rasterScale,
+					finalization, restoreResult.succeeded,
+					restoreResult.queueMs + restoreResult.executionMs);
+			}
+			else if (finalizationPrepared)
+			{
+				finalized = CompleteStreamingPrewarmAtlasFinalization(
+					*runtime, PrewarmRuntime().session.rasterScale,
+					finalization, !finalization.restoreRequired,
+					0);
+			}
 
 			if (finalized
 				&& active.job.route == FontAtlasRoute::ArgbFallback

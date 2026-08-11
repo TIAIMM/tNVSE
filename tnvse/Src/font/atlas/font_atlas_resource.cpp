@@ -993,51 +993,87 @@ namespace fonthook::vectorfont
 			{
 				continue;
 			}
-			std::lock_guard<std::mutex> lock(state.atlasMutex);
-			bool stillIndexed = false;
-			const auto currentRange =
-				state.atlasPageDedup.equal_range(pageContentHash);
-			for (auto current = currentRange.first;
-				current != currentRange.second; ++current)
+			IDirect3DTexture9* d3dTexture = nullptr;
 			{
-				const std::shared_ptr<AtlasResource> indexed =
-					current->second.lock();
-				if (indexed.get() == existing.get())
+				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				bool stillIndexed = false;
+				const auto currentRange =
+					state.atlasPageDedup.equal_range(pageContentHash);
+				for (auto current = currentRange.first;
+					current != currentRange.second; ++current)
 				{
-					stillIndexed = true;
-					break;
+					const std::shared_ptr<AtlasResource> indexed =
+						current->second.lock();
+					if (indexed.get() == existing.get())
+					{
+						stillIndexed = true;
+						break;
+					}
 				}
+				if (!stillIndexed
+					|| existing->backend != AtlasBackend::DefaultPool
+					|| existing->resetPending || !existing->property
+					|| existing->pageContentHash != pageContentHash
+					|| existing->compactSnapshot != existingSnapshot
+					|| !CompactSnapshotResourceMetadataMatches(
+						*existing, *resource))
+				{
+					continue;
+				}
+				d3dTexture = QueryAtlasD3DTexture(*existing);
 			}
-			if (!stillIndexed
-				|| existing->backend != AtlasBackend::DefaultPool
-				|| existing->resetPending || !existing->property
-				|| existing->pageContentHash != pageContentHash
-				|| existing->compactSnapshot != existingSnapshot
-				|| !CompactSnapshotResourceMetadataMatches(
-					*existing, *resource))
-			{
-				continue;
-			}
-			IDirect3DTexture9* d3dTexture = QueryAtlasD3DTexture(*existing);
 			if (!d3dTexture)
 				continue;
-			NiTexturingProperty* property = CreateDefaultTextureProperty(
+			// Constructing a Gamebryo texture property enters renderer-owned object
+			// lifetimes. Keep that work outside atlasMutex so a concurrent render or
+			// reset callback cannot invert the driver lock against the atlas lock.
+			NiTexturingPropertyPtr property = CreateDefaultTextureProperty(
 				d3dTexture, resource->pixelMode);
 			if (d3dTexture)
 				d3dTexture->Release();
 			if (!property)
 				continue;
-			resource->property = property;
-			resource->pixelData = nullptr;
-			resource->backend = AtlasBackend::DefaultPool;
-			resource->resetPending = false;
-			resource->sharedGpuPage = true;
-			resource->pageContentHash = pageContentHash;
-			++resource->generation;
-			RefreshAtlasResourceCpuMemory(*resource);
-			existing->sharedGpuPage = true;
-			state.atlasPageDedup.emplace(pageContentHash, resource);
-			return true;
+
+			bool published = false;
+			{
+				std::lock_guard<std::mutex> lock(state.atlasMutex);
+				bool stillIndexed = false;
+				const auto currentRange =
+					state.atlasPageDedup.equal_range(pageContentHash);
+				for (auto current = currentRange.first;
+					current != currentRange.second; ++current)
+				{
+					const std::shared_ptr<AtlasResource> indexed =
+						current->second.lock();
+					if (indexed.get() == existing.get())
+					{
+						stillIndexed = true;
+						break;
+					}
+				}
+				if (stillIndexed
+					&& existing->backend == AtlasBackend::DefaultPool
+					&& !existing->resetPending && existing->property
+					&& existing->pageContentHash == pageContentHash
+					&& existing->compactSnapshot == existingSnapshot
+					&& CompactSnapshotResourceMetadataMatches(
+						*existing, *resource))
+				{
+					resource->property = property;
+					resource->pixelData = nullptr;
+					resource->backend = AtlasBackend::DefaultPool;
+					resource->resetPending = false;
+					resource->sharedGpuPage = true;
+					resource->pageContentHash = pageContentHash;
+					++resource->generation;
+					RefreshAtlasResourceCpuMemory(*resource);
+					existing->sharedGpuPage = true;
+					state.atlasPageDedup.emplace(pageContentHash, resource);
+					published = true;
+				}
+			}
+			if (published)
+				return true;
 		}
 		return false;
 	}

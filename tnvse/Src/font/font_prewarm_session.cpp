@@ -157,7 +157,10 @@ namespace fonthook::vectorfont
 			PrewarmRuntime().configuredFontsPrewarmed = false;
 			PrewarmRuntime().transactionRestartPending = false;
 			PrewarmRuntime().terminalPrewarmFailure = true;
-			PrewarmRuntime().prewarmHostThreadId = 0;
+			PrewarmRuntime().prewarmActive.store(
+				false, std::memory_order_release);
+			PrewarmRuntime().prewarmHostThreadId.store(
+				0, std::memory_order_release);
 			try { HideNativePrewarmOverlay(); }
 			catch (...) {}
 			PrewarmRuntime().rebuildProgressTracked = false;
@@ -309,7 +312,10 @@ namespace fonthook::vectorfont
 
 		void PrepareIncrementalSession()
 		{
-			PrewarmRuntime().prewarmHostThreadId = GetCurrentThreadId();
+			PrewarmRuntime().prewarmActive.store(
+				true, std::memory_order_release);
+			PrewarmRuntime().prewarmHostThreadId.store(
+				GetCurrentThreadId(), std::memory_order_release);
 			PrewarmRuntime().transactionRestartPending = false;
 			PrewarmRuntime().session.transactionRestarts = PrewarmRuntime().transactionRestartCount;
 			PrewarmRuntime().session.memoryRetries = PrewarmRuntime().totalMemoryRetryCount;
