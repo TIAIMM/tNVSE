@@ -205,10 +205,16 @@ namespace fonthook::vectorfont
 				? 1u : std::min<size_t>(
 					usefulWorkers, std::clamp<UInt32>(maximumWorkers,
 						1, kMaximumPrewarmRasterWorkers));
-			return SaturatingAdd(
-				SaturatingMultiply(glyphs, retainedBytesPerGlyph),
-				SaturatingMultiply(workers,
-					transientBytesPerWorker));
+			const size_t retainedBytes = SaturatingMultiply(
+				glyphs, retainedBytesPerGlyph);
+			const size_t workerScratchBytes = SaturatingMultiply(
+				workers, transientBytesPerWorker);
+			const size_t auxiliaryStackReserveBytes = SaturatingMultiply(
+				workers > 1 ? workers - 1u : 0u,
+				kPrewarmAuxiliaryThreadStackReserveBytes);
+			return SaturatingAdd(retainedBytes,
+				SaturatingAdd(workerScratchBytes,
+					auxiliaryStackReserveBytes));
 		}
 
 		UInt32 ResolveMemoryBoundedGlyphLimit(size_t targetBytes,

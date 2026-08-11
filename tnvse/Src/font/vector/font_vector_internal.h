@@ -5,6 +5,7 @@
 #include "font_vector_msdfgen.h"
 #include "load_config.h"
 
+#include <algorithm>
 #include <array>
 #include <list>
 #include <memory>
@@ -87,7 +88,24 @@ namespace fonthook::vectorfont
 	// Background prewarm must not saturate every logical processor while the
 	// game and window message loop continue. Worker threads also run below normal
 	// priority; the coordinator itself consumes one of these slots.
-	constexpr UInt32 kMaximumPrewarmRasterWorkers = 4;
+	constexpr UInt32 kMaximumPrewarmRasterWorkers = 8;
+	constexpr UInt32 ResolvePrewarmCpuWorkerLimit(UInt32 logicalProcessors)
+	{
+		if (logicalProcessors <= 1)
+			return 1;
+		const UInt32 availableWorkers = logicalProcessors - 1u;
+		const UInt32 responsivenessLimit = logicalProcessors <= 8
+			? std::min<UInt32>(availableWorkers, 4)
+			: std::max<UInt32>(1, logicalProcessors / 2u);
+		return std::min<UInt32>(kMaximumPrewarmRasterWorkers,
+			std::min(availableWorkers, responsivenessLimit));
+	}
+	static_assert(ResolvePrewarmCpuWorkerLimit(1) == 1);
+	static_assert(ResolvePrewarmCpuWorkerLimit(4) == 3);
+	static_assert(ResolvePrewarmCpuWorkerLimit(8) == 4);
+	static_assert(ResolvePrewarmCpuWorkerLimit(12) == 6);
+	static_assert(ResolvePrewarmCpuWorkerLimit(16) == 8);
+	static_assert(ResolvePrewarmCpuWorkerLimit(32) == 8);
 	constexpr UInt32 kExpensivePrewarmParallelThreshold = 8;
 	constexpr UInt32 kFillPrewarmParallelThreshold = 64;
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
@@ -1035,10 +1053,10 @@ namespace fonthook::vectorfont
 		const std::vector<GlyphBitmapRequest>& arRequests, float afRasterScale,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& arResults,
 		UInt32 aMaximumWorkers);
-	// Releases worker-local FreeType libraries/faces retained only to amortize
-	// repeated batches for the current font. Call before atlas finalization or
-	// memory recovery so this scratch never overlaps a large physical page.
-	void ReleasePrewarmRasterWorkerContexts() noexcept;
+	// Stops auxiliary raster threads and releases their worker-local FreeType
+	// libraries/faces. Call before atlas finalization or memory recovery so thread
+	// stacks and scratch never overlap a large physical page.
+	void ReleasePrewarmRasterWorkers() noexcept;
 	void BeginCompleteCodePageAtlasOnlyPrewarm();
 	void EndCompleteCodePageAtlasOnlyPrewarm();
 	void FlushGlyphBitmapDiskCache();

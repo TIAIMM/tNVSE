@@ -42,6 +42,10 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		constexpr size_t kMaximumPrewarmBatchBytes = 24u * 1024u * 1024u;
 		constexpr size_t kPrewarmPerGlyphMetadataBytes = 512u;
 		constexpr size_t kPrewarmPerWorkerFixedBytes = 256u * 1024u;
+		// FalloutNV.exe reserves 1 MiB for each new thread stack. The coordinator
+		// already exists, so only auxiliary raster workers add this x86 VA cost.
+		constexpr size_t kPrewarmAuxiliaryThreadStackReserveBytes =
+			1u * 1024u * 1024u;
 		constexpr size_t kMaximumPrewarmStreamingWorkingBytes =
 			16u * 1024u * 1024u;
 		// Worst-case 8192x8192 four-byte page. This is a recovery estimate;

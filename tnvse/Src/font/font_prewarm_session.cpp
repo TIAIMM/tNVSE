@@ -43,7 +43,7 @@ namespace fonthook::vectorfont
 
 		void EndAtlasOnlyPrewarmPolicy()
 		{
-			ReleasePrewarmRasterWorkerContexts();
+			ReleasePrewarmRasterWorkers();
 			if (!PrewarmRuntime().atlasOnlyPrewarmPending)
 				return;
 			EndCompleteCodePageAtlasOnlyPrewarm();
@@ -111,7 +111,7 @@ namespace fonthook::vectorfont
 		void PreparePrewarmMemoryRetry(const char* stage, UInt32 fontId,
 			UInt32 retry, size_t pendingBytes)
 		{
-			ReleasePrewarmRasterWorkerContexts();
+			ReleasePrewarmRasterWorkers();
 			const bool releasedEmergency =
 				ReleaseFontPrewarmEmergencyAddressSpace();
 			ReleasePrewarmBatchReferences("prewarm-memory-retry");

@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -1209,11 +1211,203 @@ namespace fonthook::vectorfont
 	};
 
 	// GetPrewarmGlyphBitmaps is synchronously driven by the single prewarm host
-	// thread. Contexts are never shared by two batch workers at once; retaining
-	// only the FreeType library/face state avoids reopening it hundreds of times
-	// without introducing a persistent worker-thread lifetime.
+	// thread. Contexts are never shared by two batch workers at once. Both the
+	// contexts and auxiliary threads survive only across raster batches for the
+	// current font and are stopped before atlas finalization or memory recovery.
 	static std::vector<std::unique_ptr<PrewarmRasterWorkerContext>>
 		s_prewarmRasterWorkerContexts;
+	using PrewarmRasterWorkerTask = void(*)(void*, UInt32) noexcept;
+
+	class PrewarmRasterWorkerPool
+	{
+	public:
+		UInt32 Prepare(UInt32 requestedWorkers) noexcept
+		{
+			requestedWorkers = std::clamp<UInt32>(
+				requestedWorkers, 1, kMaximumPrewarmRasterWorkers);
+			const UInt32 requestedAuxiliary = requestedWorkers - 1u;
+			std::lock_guard<std::mutex> lock(m_mutex);
+			if (m_stopping || m_batchActive)
+				return 1;
+			while (m_workers.size() < requestedAuxiliary)
+			{
+				const UInt32 workerIndex =
+					static_cast<UInt32>(m_workers.size() + 1u);
+				try
+				{
+					m_workers.emplace_back(
+						[this, workerIndex]
+						{
+							WorkerMain(workerIndex);
+						});
+				}
+				catch (...)
+				{
+					break;
+				}
+			}
+			return static_cast<UInt32>(std::min<size_t>(
+				requestedAuxiliary, m_workers.size()) + 1u);
+		}
+
+		void Execute(UInt32 workerCount, PrewarmRasterWorkerTask task,
+			void* context) noexcept
+		{
+			if (!task)
+				return;
+			std::lock_guard<std::mutex> dispatchLock(m_dispatchMutex);
+			workerCount = std::clamp<UInt32>(
+				workerCount, 1, kMaximumPrewarmRasterWorkers);
+			UInt32 auxiliaryWorkers = 0;
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				if (!m_stopping && !m_batchActive)
+				{
+					auxiliaryWorkers = static_cast<UInt32>(
+						std::min<size_t>(workerCount - 1u, m_workers.size()));
+					if (auxiliaryWorkers)
+					{
+						m_task = task;
+						m_taskContext = context;
+						m_activeAuxiliaryWorkers = auxiliaryWorkers;
+						m_completedAuxiliaryWorkers = 0;
+						m_batchActive = true;
+						if (++m_generation == 0)
+							++m_generation;
+					}
+				}
+			}
+			if (!auxiliaryWorkers)
+			{
+				task(context, 0);
+				return;
+			}
+
+			m_workAvailable.notify_all();
+			task(context, 0);
+			{
+				std::unique_lock<std::mutex> lock(m_mutex);
+				m_batchCompleted.wait(lock, [this]
+				{
+					return m_completedAuxiliaryWorkers
+						>= m_activeAuxiliaryWorkers;
+				});
+				m_task = nullptr;
+				m_taskContext = nullptr;
+				m_activeAuxiliaryWorkers = 0;
+				m_completedAuxiliaryWorkers = 0;
+				m_batchActive = false;
+			}
+		}
+
+		void Stop() noexcept
+		{
+			// Serialize teardown with a possible in-flight batch. Normal prewarm
+			// ownership already calls Stop between batches; this also makes shutdown
+			// safe if a future caller requests it concurrently.
+			std::lock_guard<std::mutex> dispatchLock(m_dispatchMutex);
+			std::vector<std::thread> workers;
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				if (m_workers.empty())
+					return;
+				m_stopping = true;
+				workers.swap(m_workers);
+			}
+			m_workAvailable.notify_all();
+			for (std::thread& worker : workers)
+			{
+				if (worker.joinable())
+					worker.join();
+			}
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				m_task = nullptr;
+				m_taskContext = nullptr;
+				m_activeAuxiliaryWorkers = 0;
+				m_completedAuxiliaryWorkers = 0;
+				m_batchActive = false;
+				m_stopping = false;
+			}
+		}
+
+	private:
+		void WorkerMain(UInt32 workerIndex) noexcept
+		{
+			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+			UInt64 observedGeneration = 0;
+			for (;;)
+			{
+				PrewarmRasterWorkerTask task = nullptr;
+				void* context = nullptr;
+				UInt64 generation = 0;
+				{
+					std::unique_lock<std::mutex> lock(m_mutex);
+					m_workAvailable.wait(lock,
+						[this, workerIndex, &observedGeneration]
+						{
+							return m_stopping
+								|| (m_batchActive
+									&& m_generation != observedGeneration
+									&& workerIndex <= m_activeAuxiliaryWorkers);
+						});
+					if (m_stopping)
+						return;
+					task = m_task;
+					context = m_taskContext;
+					generation = m_generation;
+					observedGeneration = generation;
+				}
+
+				if (task)
+					task(context, workerIndex);
+				{
+					std::lock_guard<std::mutex> lock(m_mutex);
+					if (m_batchActive && m_generation == generation)
+					{
+						++m_completedAuxiliaryWorkers;
+						if (m_completedAuxiliaryWorkers
+							>= m_activeAuxiliaryWorkers)
+						{
+							m_batchCompleted.notify_one();
+						}
+					}
+				}
+			}
+		}
+
+		std::mutex m_dispatchMutex;
+		std::mutex m_mutex;
+		std::condition_variable m_workAvailable;
+		std::condition_variable m_batchCompleted;
+		std::vector<std::thread> m_workers;
+		PrewarmRasterWorkerTask m_task = nullptr;
+		void* m_taskContext = nullptr;
+		UInt64 m_generation = 0;
+		UInt32 m_activeAuxiliaryWorkers = 0;
+		UInt32 m_completedAuxiliaryWorkers = 0;
+		bool m_batchActive = false;
+		bool m_stopping = false;
+	};
+
+	static PrewarmRasterWorkerPool* TryGetRasterWorkerPool() noexcept
+	{
+		// Explicit prewarm lifecycle owns every thread. The process-lifetime
+		// allocation prevents a joinable std::thread destructor under loader lock.
+		// Allocation failure safely selects the caller-only path for this process.
+		static PrewarmRasterWorkerPool* pool = []() noexcept
+		{
+			try
+			{
+				return new PrewarmRasterWorkerPool;
+			}
+			catch (...)
+			{
+				return static_cast<PrewarmRasterWorkerPool*>(nullptr);
+			}
+		}();
+		return pool;
+	}
 
 	static void EnsurePrewarmRasterWorkerContexts(UInt32 count)
 	{
@@ -1226,8 +1420,12 @@ namespace fonthook::vectorfont
 		}
 	}
 
-	void ReleasePrewarmRasterWorkerContexts() noexcept
+	void ReleasePrewarmRasterWorkers() noexcept
 	{
+		// Stop auxiliary threads before releasing their indexed FreeType contexts
+		// and before the caller enters large atlas/D3D allocation phases.
+		if (PrewarmRasterWorkerPool* pool = TryGetRasterWorkerPool())
+			pool->Stop();
 		std::vector<std::unique_ptr<PrewarmRasterWorkerContext>> empty;
 		empty.swap(s_prewarmRasterWorkerContexts);
 	}
@@ -1283,10 +1481,11 @@ namespace fonthook::vectorfont
 			GetSystemInfo(&info);
 			processors = std::max<DWORD>(1, info.dwNumberOfProcessors);
 		}
-		// Leave one logical processor for game rendering, the window message loop,
-		// and system services while the below-normal-priority coordinator runs.
-		// The x86 process also caps worker-local FreeType heaps at a predictable level.
-		const UInt32 workers = processors > 1 ? processors - 1 : 1;
+		// Preserve the former four-worker ceiling on small hosts. Wider hosts may
+		// use at most half their logical processors (and never more than the shared
+		// hard cap), leaving ample capacity for the blocked main thread's window and
+		// D3D service plus system work. The memory policy can reduce this further.
+		const UInt32 workers = ResolvePrewarmCpuWorkerLimit(processors);
 		const size_t usefulWorkers = expensiveWork
 			? workCount
 			: (workCount + kFillPrewarmWorkChunk - 1u)
@@ -1390,8 +1589,20 @@ namespace fonthook::vectorfont
 		{
 			const bool expensiveWork =
 				IsExpensivePrewarmWork(workItems);
-			const UInt32 workerCount = ResolvePrewarmWorkerCount(
+			const UInt32 requestedWorkerCount = ResolvePrewarmWorkerCount(
 				workItems, expensiveWork, maximumWorkers);
+			PrewarmRasterWorkerPool* workerPool = TryGetRasterWorkerPool();
+			const UInt32 workerCount = workerPool
+				? workerPool->Prepare(requestedWorkerCount) : 1u;
+			if (workerCount < requestedWorkerCount)
+			{
+				// A constrained x86 process may refuse another thread stack. Keep
+				// the workers that did start and let the caller thread consume the
+				// same atomic queue instead of failing the font.
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm worker creation limited requested=%u active=%u; continuing with reduced parallelism",
+					requestedWorkerCount, workerCount);
+			}
 			EnsurePrewarmRasterWorkerContexts(workerCount);
 			static UInt32 loggedMaximumWorkers = 0;
 			if (workerCount > loggedMaximumWorkers)
@@ -1462,26 +1673,16 @@ namespace fonthook::vectorfont
 					abortWorkers.store(true, std::memory_order_relaxed);
 				}
 			};
-			std::vector<std::thread> workers;
-			workers.reserve(workerCount > 0 ? workerCount - 1 : 0);
-			try
-			{
-				for (UInt32 index = 1; index < workerCount; ++index)
-					workers.emplace_back(worker, index);
-			}
-			catch (...)
-			{
-				// A constrained x86 process may refuse another thread stack.
-				// Keep the workers that did start and let the caller thread
-				// consume the same atomic queue instead of failing the font.
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm worker creation limited requested=%u active=%u; continuing with reduced parallelism",
-					workerCount,
-					static_cast<UInt32>(workers.size() + 1u));
-			}
-			worker(0);
-			for (std::thread& thread : workers)
-				thread.join();
+			using Worker = decltype(worker);
+			const PrewarmRasterWorkerTask task =
+				[](void* context, UInt32 workerIndex) noexcept
+				{
+					(*static_cast<Worker*>(context))(workerIndex);
+				};
+			if (workerPool)
+				workerPool->Execute(workerCount, task, &worker);
+			else
+				task(&worker, 0);
 			if (IsFontPrewarmStopRequested())
 				return;
 			if (workerAllocationFailed.load(std::memory_order_relaxed))

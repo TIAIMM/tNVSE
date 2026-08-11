@@ -717,7 +717,7 @@ namespace fonthook::vectorfont
 		{
 			// Worker faces are useful only while raster batches are active. Drop
 			// them before atlas consolidation can allocate a 256 MiB 8192x8192 page.
-			ReleasePrewarmRasterWorkerContexts();
+			ReleasePrewarmRasterWorkers();
 			if (!PrewarmRuntime().session.activeFont)
 			{
 				TransitionPrewarmPhase(PrewarmPhase::BeginFont);
