@@ -6,6 +6,7 @@
 #include "hook_identity.h"
 #include "hook_site.h"
 #include "load_config.h"
+#include "pipboy_search_icon_compat.h"
 #include "SafeWrite.h"
 #include "text_hooks.h"
 #include "tnvse.h"
@@ -844,6 +845,8 @@ namespace fonthook
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);
+			if (node)
+				pipboy_search_icon_compat::NormalizeInactiveEmptySearchWidth(tile);
 			return node;
 		}
 
