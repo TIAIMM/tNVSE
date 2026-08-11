@@ -53,7 +53,8 @@ namespace fonthook
 			return GetOverlayTextInputMenu()
 				|| GetOverlayStewieInputTarget().valid
 				|| GetOverlayDialogueHistoryInputTarget().valid
-				|| GetOverlayMcmExtenderInputTarget().valid;
+				|| GetOverlayMcmExtenderInputTarget().valid
+				|| GetOverlayModernHelpMenuInputTarget().valid;
 		}
 
 		void TryRemoveCompositionEcho()
@@ -96,7 +97,13 @@ namespace fonthook
 			}
 
 			if (RemovePreviousMcmExtenderAsciiCompositionEcho(compositionLead))
+			{
 				DebugLog("tnvse_multibyte_input_event: source=IMECompositionEcho action=remove_ascii_echo_mcm_extender input=0x%08X", static_cast<UInt32>(compositionLead));
+				return;
+			}
+
+			if (RemovePreviousModernHelpMenuAsciiCompositionEcho(compositionLead))
+				DebugLog("tnvse_multibyte_input_event: source=IMECompositionEcho action=remove_ascii_echo_modern_help_menu input=0x%08X", static_cast<UInt32>(compositionLead));
 		}
 
 
@@ -967,6 +974,8 @@ namespace fonthook
 					return "dialogue_history";
 				case ImeCommitInputChannel::McmExtender:
 					return "mcm_extender";
+				case ImeCommitInputChannel::ModernHelpMenu:
+					return "modern_help_menu";
 				default:
 					return "unknown";
 				}

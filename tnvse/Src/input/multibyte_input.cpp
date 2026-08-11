@@ -85,6 +85,7 @@ namespace fonthook
 			if (s_hooksInstalled)
 			{
 				TryInstallJipKeyEventSuppressionHook();
+				InitializeModernHelpMenuInputBridge();
 				InitializeMcmExtenderInputBridge();
 				InitializeDialogueHistoryInputBridge();
 			}
@@ -110,6 +111,7 @@ namespace fonthook
 				TryInstallStewieTweaksInputHooks();
 				ProcessStewieTweaksInputTargetState();
 				ProcessStewieMenuSearchPendingStateSync();
+				ProcessModernHelpMenuInputTargetState();
 				ProcessMcmExtenderInputTargetState();
 				ProcessDialogueHistoryInputTargetState();
 				SynchronizeTextInputTarget("main_game_loop");
@@ -125,6 +127,7 @@ namespace fonthook
 			|| apMessage->type
 				== NVSEMessagingInterface::kMessage_ExitGame_Console)
 		{
+			ResetModernHelpMenuInputState();
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
 			ShutdownNativeTileOverlayHost();
@@ -132,6 +135,7 @@ namespace fonthook
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)
 		{
+			ResetModernHelpMenuInputState();
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
 			HideCandidateOverlay();

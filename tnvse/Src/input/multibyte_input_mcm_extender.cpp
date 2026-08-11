@@ -198,22 +198,6 @@ namespace fonthook::multibyte_input
 			return true;
 		}
 
-		UInt32 GetJipCompatibleTopVisibleMenuID(InterfaceManager* manager)
-		{
-			if (!manager || manager->uiCurrentMode < 2)
-				return 0;
-			if (manager->pActiveMenu)
-				return MenuID(manager->pActiveMenu);
-
-			// JIP 57.30 starts at menuStack[1], walks to the first zero, then
-			// returns the preceding entry.  The HUD-only special case is not a
-			// StartMenu target, so returning that stack value is sufficient here.
-			size_t index = 1;
-			while (index < _countof(manager->menuStack) && manager->menuStack[index])
-				++index;
-			return manager->menuStack[index - 1];
-		}
-
 		void QueueAction(PendingMcmAction action)
 		{
 			if (s_pendingActions.size() < 16)
@@ -495,7 +479,8 @@ namespace fonthook::multibyte_input
 			s_pendingActions.clear();
 			if (!GetCurrentTextEditMenuObject()
 				&& !GetOverlayStewieInputTarget().valid
-				&& !GetOverlayDialogueHistoryInputTarget().valid)
+				&& !GetOverlayDialogueHistoryInputTarget().valid
+				&& !GetOverlayModernHelpMenuInputTarget().valid)
 			{
 				EndStewieTextInputSession("mcm_extender_search_deactivate");
 			}

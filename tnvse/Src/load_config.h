@@ -30,6 +30,7 @@ extern bool g_bMultibyteInputUseTSFCandidates;
 extern bool g_bMultibyteInputStewieTweaks;
 extern bool g_bMultibyteInputMCMExtender;
 extern bool g_bMultibyteInputDialogueHistory;
+extern bool g_bMultibyteInputModernHelpMenu;
 extern bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
 extern bool g_bChangeJIPBigGunDesc;
 extern std::string g_sNewBigGunsDesc;

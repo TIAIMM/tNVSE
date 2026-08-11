@@ -872,6 +872,12 @@ namespace fonthook
 
 		bool HandleMenuSearchInput(Menu* menu, UInt32 input)
 		{
+			if (MenuID(menu) == Pause
+				&& HandleModernHelpMenuMenuInput(menu, input))
+			{
+				return true;
+			}
+
 			if (MenuID(menu) == Pause && HandleDialogueHistoryMenuInput(menu, input))
 				return true;
 

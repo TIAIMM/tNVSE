@@ -58,6 +58,7 @@ namespace fonthook
 			Stewie = 8,
 			McmExtender = 16,
 			DialogueHistory = 32,
+			ModernHelpMenu = 64,
 		};
 
 		extern HWND s_window;
@@ -102,6 +103,15 @@ namespace fonthook
 			bool valid = false;
 		};
 
+		struct ModernHelpMenuInputTarget
+		{
+			Menu* menu = nullptr;
+			Tile* root = nullptr;
+			Tile* modernHelpMenu = nullptr;
+			Tile* search = nullptr;
+			bool valid = false;
+		};
+
 		enum class TextInputTargetKind : UInt8
 		{
 			None,
@@ -110,6 +120,7 @@ namespace fonthook
 			Stewie,
 			DialogueHistory,
 			McmExtender,
+			ModernHelpMenu,
 		};
 
 		struct TextInputTargetToken
@@ -129,6 +140,7 @@ namespace fonthook
 			StewieInputTarget stewie;
 			DialogueHistoryInputTarget dialogueHistory;
 			McmExtenderInputTarget mcmExtender;
+			ModernHelpMenuInputTarget modernHelpMenu;
 		};
 
 		enum class GameInputFilterClass : UInt8
@@ -167,6 +179,7 @@ namespace fonthook
 		UInt32 MenuID(Menu* menu);
 		Menu* GetOpenMenu(UInt32 menuID);
 		Tile* FindTileByID(Tile* tile, UInt32 id);
+		UInt32 GetJipCompatibleTopVisibleMenuID(InterfaceManager* manager);
 		bool IsStewieTweaksAvailable();
 		StewieInputTarget MakeStewieTarget(StewieInputKind kind, Menu* menu, Tile* tile, bool inputField);
 		bool CallStewiePredecessorInput(Menu* menu, UInt32 input);
@@ -274,6 +287,26 @@ namespace fonthook
 		bool HandleDialogueHistoryMenuInput(Menu* menu, UInt32 input);
 		bool ShouldSuppressDialogueHistoryControlChar(WPARAM input);
 		bool RemovePreviousDialogueHistoryAsciiCompositionEcho(wchar_t compositionLead);
+
+		bool InitializeModernHelpMenuInputBridge();
+		ModernHelpMenuInputTarget GetActiveModernHelpMenuInputTarget();
+		ModernHelpMenuInputTarget GetOverlayModernHelpMenuInputTarget();
+		void ProcessModernHelpMenuInputTargetState();
+		void ResetModernHelpMenuInputState();
+		bool InsertWideTextModernHelpMenu(
+			const ModernHelpMenuInputTarget& target,
+			std::wstring_view text);
+		bool HandleModernHelpMenuWndProcChar(
+			const ModernHelpMenuInputTarget& target,
+			WPARAM input,
+			bool controlDown);
+		bool HandleModernHelpMenuKeyDown(
+			const ModernHelpMenuInputTarget& target,
+			WPARAM virtualKey,
+			bool controlDown);
+		bool HandleModernHelpMenuMenuInput(Menu* menu, UInt32 input);
+		bool ShouldSuppressModernHelpMenuControlChar(WPARAM input);
+		bool RemovePreviousModernHelpMenuAsciiCompositionEcho(wchar_t compositionLead);
 
 		TextInputTarget ResolveCurrentTextInputTarget();
 		void SynchronizeTextInputTarget(const char* reason);

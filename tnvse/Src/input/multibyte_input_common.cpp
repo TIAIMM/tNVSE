@@ -262,5 +262,21 @@ namespace fonthook
 			return (GetKeyState(VK_CONTROL) & 0x8000) != 0
 				|| (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 		}
+
+		UInt32 GetJipCompatibleTopVisibleMenuID(InterfaceManager* manager)
+		{
+			if (!manager || manager->uiCurrentMode < 2)
+				return 0;
+			if (manager->pActiveMenu)
+				return MenuID(manager->pActiveMenu);
+
+			// JIP 57.30 starts at menuStack[1], walks to the first zero, then
+			// returns the preceding entry. The HUD-only special case cannot own
+			// any of the StartMenu text targets handled by this input bridge.
+			size_t index = 1;
+			while (index < _countof(manager->menuStack) && manager->menuStack[index])
+				++index;
+			return manager->menuStack[index - 1];
+		}
 	}
 }

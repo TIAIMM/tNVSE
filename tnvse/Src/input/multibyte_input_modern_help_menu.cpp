@@ -1,21 +1,20 @@
 #include "multibyte_input_ime_internal.h"
 
-// Dialogue History search integration. The mod remains untouched: tNVSE owns
-// code-page editing while its search field is active and calls the original
-// UDFs from the main loop through private runtime events.
+// Modern Help Menu search integration. The mod files remain untouched: tNVSE
+// owns encoding-aware editing while the scripted search field is active, then
+// dispatches the mod's existing UDFs through private runtime events.
 
 namespace fonthook::multibyte_input
 {
-	namespace implementation::multibyte_input_dialogue_history {}
-	using namespace implementation::multibyte_input_dialogue_history;
+	namespace implementation::multibyte_input_modern_help_menu {}
+	using namespace implementation::multibyte_input_modern_help_menu;
 
-	namespace implementation::multibyte_input_dialogue_history
+	namespace implementation::multibyte_input_modern_help_menu
 	{
-		constexpr char kSearchChangedEvent[] = "tNVSE:DialogueHistorySearchChanged";
-		constexpr char kKeyDownEvent[] = "tNVSE:DialogueHistoryKeyDown";
-		constexpr char kSearchInputEvent[] = "tNVSE:DialogueHistorySearchInput";
+		constexpr char kSearchChangedEvent[] = "tNVSE:ModernHelpMenuSearchChanged";
+		constexpr char kKeyDownEvent[] = "tNVSE:ModernHelpMenuKeyDown";
+		constexpr char kSearchInputEvent[] = "tNVSE:ModernHelpMenuSearchInput";
 		constexpr UInt32 kMaxSearchBytes = 4095;
-		constexpr DWORD kSearchDebounceMs = 500;
 
 		enum class PendingAction : UInt8
 		{
@@ -26,13 +25,12 @@ namespace fonthook::multibyte_input
 
 		struct ShadowState
 		{
-			DialogueHistoryInputTarget target;
+			ModernHelpMenuInputTarget target;
 			std::string text;
 			size_t caret = 0;
 			bool initialized = false;
 			bool uiDirty = false;
 			bool searchDirty = false;
-			DWORD searchDueTick = 0;
 		};
 
 		bool s_bridgeInitializationAttempted = false;
@@ -66,17 +64,20 @@ namespace fonthook::multibyte_input
 
 		bool HasRequiredScripts()
 		{
-			return FileExists("Data\\NVSE\\user_defined_functions\\DialogueHistory\\Search.gek")
-				&& FileExists("Data\\NVSE\\user_defined_functions\\DialogueHistory\\SearchInput.gek")
-				&& FileExists("Data\\NVSE\\user_defined_functions\\DialogueHistory\\OnKeyDown.gek");
+			return FileExists(
+				"Data\\NVSE\\user_defined_functions\\ModernHelpMenu\\Search.gek")
+				&& FileExists(
+					"Data\\NVSE\\user_defined_functions\\ModernHelpMenu\\SearchInput.gek")
+				&& FileExists(
+					"Data\\NVSE\\user_defined_functions\\ModernHelpMenu\\OnKeyDown.gek");
 		}
 
 		void InitializeTraitIds()
 		{
 			if (!s_traitVisible)
-				s_traitVisible = Tile::TraitNameToID("_DiaHist+Visible");
+				s_traitVisible = Tile::TraitNameToID("_HelpMenu+Visible");
 			if (!s_traitSearchState)
-				s_traitSearchState = Tile::TraitNameToID("_DiaHist+Search");
+				s_traitSearchState = Tile::TraitNameToID("_HelpMenu+Search");
 			if (!s_traitSearchText)
 				s_traitSearchText = Tile::TraitNameToID("_search_text_1");
 			if (!s_traitCursor1)
@@ -103,64 +104,77 @@ namespace fonthook::multibyte_input
 		}
 
 		bool SameTarget(
-			const DialogueHistoryInputTarget& lhs,
-			const DialogueHistoryInputTarget& rhs)
+			const ModernHelpMenuInputTarget& lhs,
+			const ModernHelpMenuInputTarget& rhs)
 		{
 			return lhs.valid && rhs.valid
 				&& lhs.menu == rhs.menu
 				&& lhs.root == rhs.root
-				&& lhs.dialogueHistory == rhs.dialogueHistory
+				&& lhs.modernHelpMenu == rhs.modernHelpMenu
 				&& lhs.search == rhs.search;
 		}
 
 		size_t ReadCaretFromTiles(
-			const DialogueHistoryInputTarget& target,
+			const ModernHelpMenuInputTarget& target,
 			const std::string& text)
 		{
-			const std::string cursor1 = target.search->GetValueString(s_traitCursor1);
-			const std::string cursor2 = target.search->GetValueString(s_traitCursor2);
-			if (cursor1.size() != text.size() + 1 || cursor2.size() != cursor1.size())
+			if (!target.search || !s_traitCursor1 || !s_traitCursor2)
 				return text.size();
+
+			const std::string cursor1 =
+				target.search->GetValueString(s_traitCursor1);
+			const std::string cursor2 =
+				target.search->GetValueString(s_traitCursor2);
+			if (cursor1.size() != text.size() + 1
+				|| cursor2.size() != cursor1.size())
+			{
+				return text.size();
+			}
 
 			for (size_t index = 0; index < cursor1.size(); ++index)
 			{
 				if (cursor1[index] != '|' || cursor2[index] != ' ')
 					continue;
-				bool matches = true;
+
+				bool sameAroundCaret = true;
 				for (size_t other = 0; other < cursor1.size(); ++other)
 				{
 					if (other != index && cursor1[other] != cursor2[other])
 					{
-						matches = false;
+						sameAroundCaret = false;
 						break;
 					}
 				}
-				if (matches)
+				if (sameAroundCaret)
 					return ClampToPrevBoundary(text, index);
 			}
 			return text.size();
 		}
 
-		void LoadShadow(const DialogueHistoryInputTarget& target)
+		void LoadShadow(const ModernHelpMenuInputTarget& target)
 		{
 			s_shadow.target = target;
-			s_shadow.text = target.search->GetValueString(s_traitSearchText);
-			s_shadow.caret = ClampToPrevBoundary(
-				s_shadow.text, ReadCaretFromTiles(target, s_shadow.text));
+			s_shadow.text = target.search && s_traitSearchText
+				? target.search->GetValueString(s_traitSearchText)
+				: "";
+			s_shadow.caret = ReadCaretFromTiles(target, s_shadow.text);
+			s_shadow.caret =
+				ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
 			s_shadow.initialized = target.valid;
 			s_shadow.uiDirty = false;
 			s_shadow.searchDirty = false;
-			s_shadow.searchDueTick = 0;
 		}
 
-		void EnsureShadow(const DialogueHistoryInputTarget& target)
+		void EnsureShadow(const ModernHelpMenuInputTarget& target)
 		{
 			if (!s_shadow.initialized || !SameTarget(s_shadow.target, target))
 			{
 				LoadShadow(target);
 				return;
 			}
-			const std::string visible = target.search->GetValueString(s_traitSearchText);
+
+			const std::string visible =
+				target.search->GetValueString(s_traitSearchText);
 			if (!s_shadow.uiDirty && visible != s_shadow.text)
 				LoadShadow(target);
 		}
@@ -168,7 +182,8 @@ namespace fonthook::multibyte_input
 		bool DispatchStringEvent(const char* eventName, const std::string& value)
 		{
 			return g_eventInterface && g_eventInterface->DispatchEvent
-				&& g_eventInterface->DispatchEvent(eventName, nullptr, value.c_str());
+				&& g_eventInterface->DispatchEvent(
+					eventName, nullptr, value.c_str());
 		}
 
 		bool DispatchIntEvent(const char* eventName, int value)
@@ -178,25 +193,23 @@ namespace fonthook::multibyte_input
 		}
 
 		bool ApplyShadow(
-			const DialogueHistoryInputTarget& target,
+			const ModernHelpMenuInputTarget& target,
 			std::string text,
 			size_t caret,
 			bool updateSearch)
 		{
-			DialogueHistoryInputTarget active = GetActiveDialogueHistoryInputTarget();
+			ModernHelpMenuInputTarget active =
+				GetActiveModernHelpMenuInputTarget();
 			if (!SameTarget(target, active))
 				return false;
+
 			caret = ClampToPrevBoundary(text, std::min(caret, text.size()));
 			s_shadow.target = active;
 			s_shadow.text = std::move(text);
 			s_shadow.caret = caret;
 			s_shadow.initialized = true;
 			s_shadow.uiDirty = true;
-			if (updateSearch)
-			{
-				s_shadow.searchDirty = true;
-				s_shadow.searchDueTick = GetTickCount() + kSearchDebounceMs;
-			}
+			s_shadow.searchDirty = s_shadow.searchDirty || updateSearch;
 			return true;
 		}
 
@@ -206,7 +219,7 @@ namespace fonthook::multibyte_input
 				s_pendingActions.push_back(action);
 		}
 
-		void FlushPendingWork(const DialogueHistoryInputTarget& target)
+		void FlushPendingWork(const ModernHelpMenuInputTarget& target)
 		{
 			if (!SameTarget(target, s_shadow.target) || !s_shadow.initialized)
 				return;
@@ -214,94 +227,105 @@ namespace fonthook::multibyte_input
 			if (s_shadow.uiDirty)
 			{
 				const size_t caret = ClampToPrevBoundary(
-					s_shadow.text, std::min(s_shadow.caret, s_shadow.text.size()));
+					s_shadow.text,
+					std::min(s_shadow.caret, s_shadow.text.size()));
 				std::string cursor1 = s_shadow.text;
 				cursor1.insert(caret, 1, '|');
 				std::string cursor2 = cursor1;
 				cursor2[caret] = ' ';
-				target.search->SetValueString(s_traitSearchText, s_shadow.text.c_str(), true);
-				target.search->SetValueString(s_traitCursor1, cursor1.c_str(), true);
-				target.search->SetValueString(s_traitCursor2, cursor2.c_str(), true);
+
+				target.search->SetValueString(
+					s_traitSearchText, s_shadow.text.c_str(), true);
+				target.search->SetValueString(
+					s_traitCursor1, cursor1.c_str(), true);
+				target.search->SetValueString(
+					s_traitCursor2, cursor2.c_str(), true);
 				s_shadow.uiDirty = false;
 			}
 
-			const DWORD now = GetTickCount();
-			const bool forceSearch = !s_pendingActions.empty();
-			if (s_shadow.searchDirty
-				&& (forceSearch
-					|| static_cast<SInt32>(now - s_shadow.searchDueTick) >= 0))
+			if (s_shadow.searchDirty)
 			{
 				s_shadow.searchDirty = false;
-				s_shadow.searchDueTick = 0;
 				if (!DispatchStringEvent(kSearchChangedEvent, s_shadow.text))
-					gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History search event dispatch failed");
+				{
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: Modern Help Menu search event dispatch failed");
+				}
 			}
 
 			std::vector<PendingAction> actions;
 			actions.swap(s_pendingActions);
 			for (PendingAction action : actions)
 			{
-				bool dispatched = false;
 				switch (action)
 				{
 				case PendingAction::SearchInputEnter:
-					dispatched = DispatchIntEvent(kSearchInputEvent, 28);
+					DispatchIntEvent(kSearchInputEvent, 28);
 					break;
 				case PendingAction::KeyDownTab:
-					dispatched = DispatchIntEvent(kKeyDownEvent, 15);
+					DispatchIntEvent(kKeyDownEvent, 15);
 					break;
 				case PendingAction::KeyDownCtrlF:
-					dispatched = DispatchIntEvent(kKeyDownEvent, 33);
+					DispatchIntEvent(kKeyDownEvent, 33);
 					break;
 				}
-				if (!dispatched)
-					gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History control event dispatch failed");
 			}
 		}
 
 		bool InsertBytes(
-			const DialogueHistoryInputTarget& target,
+			const ModernHelpMenuInputTarget& target,
 			std::string_view bytes)
 		{
 			if (!target.valid || bytes.empty())
 				return false;
+
 			EnsureShadow(target);
 			if (!s_shadow.initialized
-				|| bytes.size() > kMaxSearchBytes - std::min<size_t>(s_shadow.text.size(), kMaxSearchBytes))
+				|| bytes.size() > kMaxSearchBytes
+					- std::min<size_t>(s_shadow.text.size(), kMaxSearchBytes))
 			{
 				return false;
 			}
-			const size_t caret = ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
+
+			const size_t caret =
+				ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
 			std::string candidate = s_shadow.text;
 			candidate.insert(caret, bytes.data(), bytes.size());
-			return ApplyShadow(target, std::move(candidate), caret + bytes.size(), true);
+			return ApplyShadow(
+				target, std::move(candidate), caret + bytes.size(), true);
 		}
 
-		bool DeletePrevious(const DialogueHistoryInputTarget& target)
+		bool DeletePrevious(const ModernHelpMenuInputTarget& target)
 		{
 			EnsureShadow(target);
-			const size_t caret = ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
+			const size_t caret =
+				ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
 			if (!caret)
 				return true;
+
 			const size_t previous = PrevCharBoundary(s_shadow.text, caret);
 			std::string candidate = s_shadow.text;
 			candidate.erase(previous, caret - previous);
 			return ApplyShadow(target, std::move(candidate), previous, true);
 		}
 
-		bool DeleteNext(const DialogueHistoryInputTarget& target)
+		bool DeleteNext(const ModernHelpMenuInputTarget& target)
 		{
 			EnsureShadow(target);
-			const size_t caret = ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
+			const size_t caret =
+				ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
 			if (caret >= s_shadow.text.size())
 				return true;
+
 			const size_t next = NextCharBoundary(s_shadow.text, caret);
 			std::string candidate = s_shadow.text;
 			candidate.erase(caret, next - caret);
 			return ApplyShadow(target, std::move(candidate), caret, true);
 		}
 
-		bool MoveCaret(const DialogueHistoryInputTarget& target, size_t caret)
+		bool MoveCaret(
+			const ModernHelpMenuInputTarget& target,
+			size_t caret)
 		{
 			EnsureShadow(target);
 			return ApplyShadow(target, s_shadow.text, caret, false);
@@ -314,26 +338,30 @@ namespace fonthook::multibyte_input
 		{
 			NVSEEventManagerInterface::ParamType* params =
 				paramType == NVSEEventManagerInterface::eParamType_String
-					? s_stringEventParam
-					: s_intEventParam;
+				? s_stringEventParam
+				: s_intEventParam;
 			if (!g_eventInterface->RegisterEvent(
-				eventName, 1, params, NVSEEventManagerInterface::kFlags_None))
+					eventName, 1, params,
+					NVSEEventManagerInterface::kFlags_None))
 			{
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: failed to register Dialogue History bridge event %s",
+					"tnvse_multibyte_input: failed to register Modern Help Menu bridge event %s",
 					eventName);
 				return false;
 			}
 
 			char command[384] = {};
 			_snprintf_s(
-				command, _countof(command), _TRUNCATE,
+				command,
+				_countof(command),
+				_TRUNCATE,
 				"SetEventHandler \"%s\" (CompileScript \"%s\")",
-				eventName, handlerScript);
+				eventName,
+				handlerScript);
 			if (!g_consoleInterface->RunScriptLine2(command, nullptr, true))
 			{
 				gLog.FormattedMessage(
-					"tnvse_multibyte_input: failed to attach Dialogue History UDF %s to event %s",
+					"tnvse_multibyte_input: failed to attach Modern Help Menu UDF %s to event %s",
 					handlerScript,
 					eventName);
 				return false;
@@ -342,17 +370,19 @@ namespace fonthook::multibyte_input
 		}
 	}
 
-	bool InitializeDialogueHistoryInputBridge()
+	bool InitializeModernHelpMenuInputBridge()
 	{
 		if (s_bridgeReady || s_bridgeInitializationAttempted)
 			return s_bridgeReady;
 		s_bridgeInitializationAttempted = true;
-		if (!g_bMultibyteInputDialogueHistory)
+
+		if (!g_bMultibyteInputModernHelpMenu)
 			return false;
 		if (!g_bSuppressJIPKeyEventsDuringMultibyteInput
 			|| !IsJipKeyEventSuppressionHookInstalled())
 		{
-			gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History adapter disabled because the JIP 57.30 key-event suppression hook is unavailable");
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: Modern Help Menu adapter disabled because the JIP 57.30 key-event suppression hook is unavailable");
 			return false;
 		}
 		if (!g_eventInterface || !g_eventInterface->RegisterEvent
@@ -361,36 +391,42 @@ namespace fonthook::multibyte_input
 			|| g_consoleInterface->version < NVSEConsoleInterface::kVersion
 			|| !g_consoleInterface->RunScriptLine2)
 		{
-			gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History adapter disabled because the xNVSE event/console interfaces are unavailable");
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: Modern Help Menu adapter disabled because the xNVSE event/console interfaces are unavailable");
 			return false;
 		}
 		if (!HasRequiredScripts())
 		{
-			gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History scripts not found; adapter not installed");
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: Modern Help Menu scripts not found; adapter not installed");
 			return false;
 		}
 
 		const bool searchRegistered = RegisterEvent(
 			kSearchChangedEvent,
 			NVSEEventManagerInterface::eParamType_String,
-			"DialogueHistory\\Search.gek");
+			"ModernHelpMenu\\Search.gek");
 		const bool keyRegistered = RegisterEvent(
 			kKeyDownEvent,
 			NVSEEventManagerInterface::eParamType_Int,
-			"DialogueHistory\\OnKeyDown.gek");
+			"ModernHelpMenu\\OnKeyDown.gek");
 		const bool inputRegistered = RegisterEvent(
 			kSearchInputEvent,
 			NVSEEventManagerInterface::eParamType_Int,
-			"DialogueHistory\\SearchInput.gek");
-		s_bridgeReady = searchRegistered && keyRegistered && inputRegistered;
+			"ModernHelpMenu\\SearchInput.gek");
+		s_bridgeReady =
+			searchRegistered && keyRegistered && inputRegistered;
 		if (s_bridgeReady)
-			gLog.FormattedMessage("tnvse_multibyte_input: Dialogue History runtime input bridge installed");
+		{
+			gLog.FormattedMessage(
+				"tnvse_multibyte_input: Modern Help Menu runtime input bridge installed");
+		}
 		return s_bridgeReady;
 	}
 
-	DialogueHistoryInputTarget GetActiveDialogueHistoryInputTarget()
+	ModernHelpMenuInputTarget GetActiveModernHelpMenuInputTarget()
 	{
-		DialogueHistoryInputTarget target;
+		ModernHelpMenuInputTarget target;
 		if (!s_bridgeReady || !IsJipKeyEventSuppressionHookInstalled())
 			return target;
 
@@ -405,9 +441,9 @@ namespace fonthook::multibyte_input
 
 		InitializeTraitIds();
 		Tile* root = MenuRoot(menu);
-		Tile* dialogueHistory = FindDirectChild(root, "DialogueHistory");
-		Tile* search = FindDirectChild(dialogueHistory, "Search");
-		if (!root || !dialogueHistory || !search
+		Tile* modernHelpMenu = FindDirectChild(root, "ModernHelpMenu");
+		Tile* search = FindDirectChild(modernHelpMenu, "Search");
+		if (!root || !modernHelpMenu || !search
 			|| !HasTrait(root, s_traitVisible)
 			|| !HasTrait(root, s_traitSearchState)
 			|| !HasTrait(search, s_traitSearchText)
@@ -421,22 +457,24 @@ namespace fonthook::multibyte_input
 
 		target.menu = menu;
 		target.root = root;
-		target.dialogueHistory = dialogueHistory;
+		target.modernHelpMenu = modernHelpMenu;
 		target.search = search;
 		target.valid = true;
 		return target;
 	}
 
-	DialogueHistoryInputTarget GetOverlayDialogueHistoryInputTarget()
+	ModernHelpMenuInputTarget GetOverlayModernHelpMenuInputTarget()
 	{
-		return GetActiveDialogueHistoryInputTarget();
+		return GetActiveModernHelpMenuInputTarget();
 	}
 
-	void ProcessDialogueHistoryInputTargetState()
+	void ProcessModernHelpMenuInputTargetState()
 	{
 		if (!s_bridgeReady)
 			return;
-		const DialogueHistoryInputTarget target = GetActiveDialogueHistoryInputTarget();
+
+		const ModernHelpMenuInputTarget target =
+			GetActiveModernHelpMenuInputTarget();
 		if (target.valid)
 		{
 			EnsureShadow(target);
@@ -444,12 +482,17 @@ namespace fonthook::multibyte_input
 			{
 				s_targetObserved = true;
 				if (!State().textInputSessionActive)
-					RefreshTextInputSessionForActiveTarget("dialogue_history_search_activate");
+				{
+					RefreshTextInputSessionForActiveTarget(
+						"modern_help_menu_search_activate");
+				}
 				DebugLog(
-					"tnvse_multibyte_input_event: source=MainLoop action=dialogue_history_activate menu=0x%08X search=0x%08X",
+					"tnvse_multibyte_input_event: source=MainLoop action=modern_help_menu_activate menu=0x%08X search=0x%08X",
 					reinterpret_cast<UInt32>(target.menu),
 					reinterpret_cast<UInt32>(target.search));
 			}
+			// Tile mutation and UDF dispatch stay on the game thread. WndProc
+			// processing only updates the shadow and queues work.
 			FlushPendingWork(target);
 			return;
 		}
@@ -458,21 +501,23 @@ namespace fonthook::multibyte_input
 		{
 			s_targetObserved = false;
 			s_shadow = {};
-			s_pendingActions.clear();
 			s_lastAscii = 0;
 			s_lastAsciiTick = 0;
+			s_pendingActions.clear();
 			if (!GetCurrentTextEditMenuObject()
 				&& !GetOverlayStewieInputTarget().valid
-				&& !GetOverlayMcmExtenderInputTarget().valid
-				&& !GetOverlayModernHelpMenuInputTarget().valid)
+				&& !GetOverlayDialogueHistoryInputTarget().valid
+				&& !GetOverlayMcmExtenderInputTarget().valid)
 			{
-				EndStewieTextInputSession("dialogue_history_search_deactivate");
+				EndStewieTextInputSession(
+					"modern_help_menu_search_deactivate");
 			}
-			DebugLog("tnvse_multibyte_input_event: source=MainLoop action=dialogue_history_deactivate");
+			DebugLog(
+				"tnvse_multibyte_input_event: source=MainLoop action=modern_help_menu_deactivate");
 		}
 	}
 
-	void ResetDialogueHistoryInputState()
+	void ResetModernHelpMenuInputState()
 	{
 		s_targetObserved = false;
 		s_lastAsciiTick = 0;
@@ -483,16 +528,16 @@ namespace fonthook::multibyte_input
 		s_shadow = {};
 	}
 
-	bool InsertWideTextDialogueHistory(
-		const DialogueHistoryInputTarget& target,
+	bool InsertWideTextModernHelpMenu(
+		const ModernHelpMenuInputTarget& target,
 		std::wstring_view text)
 	{
 		const std::string bytes = WideToCurrentCodePage(text);
 		return !bytes.empty() && InsertBytes(target, bytes);
 	}
 
-	bool HandleDialogueHistoryWndProcChar(
-		const DialogueHistoryInputTarget& target,
+	bool HandleModernHelpMenuWndProcChar(
+		const ModernHelpMenuInputTarget& target,
 		WPARAM input,
 		bool controlDown)
 	{
@@ -513,29 +558,35 @@ namespace fonthook::multibyte_input
 			{
 				return true;
 			}
-			if (ShouldSuppressInputLanguageSwitchAscii(static_cast<UInt8>(input)))
+			if (ShouldSuppressInputLanguageSwitchAscii(
+					static_cast<UInt8>(input)))
+			{
 				return true;
+			}
+
 			const char value = static_cast<char>(input);
-			InsertBytes(target, std::string_view(&value, 1));
+			if (!InsertBytes(target, std::string_view(&value, 1)))
+				return true;
 			s_lastAscii = static_cast<UInt8>(input);
 			s_lastAsciiTick = GetTickCount();
 			DebugLog(
-				"tnvse_multibyte_input_event: source=DialogueHistory.WM_CHAR action=insert_ascii input=0x%02X",
+				"tnvse_multibyte_input_event: source=ModernHelpMenu.WM_CHAR action=insert_ascii input=0x%02X",
 				static_cast<UInt32>(input));
 			return true;
 		}
 
 		const wchar_t value = static_cast<wchar_t>(input);
-		const bool inserted = InsertWideTextDialogueHistory(
+		const bool inserted = InsertWideTextModernHelpMenu(
 			target, std::wstring_view(&value, 1));
 		DebugLog(
-			"tnvse_multibyte_input_event: source=DialogueHistory.WM_CHAR action=insert_nonascii input=0x%04X inserted=%u",
-			static_cast<UInt32>(input), inserted ? 1 : 0);
+			"tnvse_multibyte_input_event: source=ModernHelpMenu.WM_CHAR action=insert_nonascii input=0x%04X inserted=%u",
+			static_cast<UInt32>(input),
+			inserted ? 1 : 0);
 		return true;
 	}
 
-	bool HandleDialogueHistoryKeyDown(
-		const DialogueHistoryInputTarget& target,
+	bool HandleModernHelpMenuKeyDown(
+		const ModernHelpMenuInputTarget& target,
 		WPARAM virtualKey,
 		bool controlDown)
 	{
@@ -549,62 +600,80 @@ namespace fonthook::multibyte_input
 			|| virtualKey == VK_HOME
 			|| virtualKey == VK_END
 			|| virtualKey == VK_RETURN
-			|| virtualKey == VK_ESCAPE
-			|| virtualKey == VK_TAB;
+			|| virtualKey == VK_TAB
+			|| (controlDown && virtualKey == 'F');
 		if (compositionControl
 			&& FilterGameInput(
-				static_cast<UInt32>(virtualKey),
-				ImeCommitInputChannel::DialogueHistory,
-				GameInputFilterClass::CompositionControl)
-			!= GameInputFilterResult::Pass)
+					static_cast<UInt32>(virtualKey),
+					ImeCommitInputChannel::ModernHelpMenu,
+					GameInputFilterClass::CompositionControl)
+				!= GameInputFilterResult::Pass)
 		{
 			return true;
 		}
+
 		EnsureShadow(target);
+		bool handled = true;
 		switch (virtualKey)
 		{
 		case VK_BACK:
-			return DeletePrevious(target);
+			handled = DeletePrevious(target);
+			break;
 		case VK_DELETE:
-			return DeleteNext(target);
+			handled = DeleteNext(target);
+			break;
 		case VK_LEFT:
-			return MoveCaret(target, PrevCharBoundary(s_shadow.text, s_shadow.caret));
+			handled = MoveCaret(
+				target,
+				PrevCharBoundary(s_shadow.text, s_shadow.caret));
+			break;
 		case VK_RIGHT:
-			return MoveCaret(target, NextCharBoundary(s_shadow.text, s_shadow.caret));
+			handled = MoveCaret(
+				target,
+				NextCharBoundary(s_shadow.text, s_shadow.caret));
+			break;
 		case VK_HOME:
-			return MoveCaret(target, 0);
+			handled = MoveCaret(target, 0);
+			break;
 		case VK_END:
-			return MoveCaret(target, s_shadow.text.size());
+			handled = MoveCaret(target, s_shadow.text.size());
+			break;
 		case VK_RETURN:
 			s_suppressedControlChar = '\r';
 			s_suppressedControlCharTick = GetTickCount();
 			QueueAction(PendingAction::SearchInputEnter);
-			return true;
+			break;
 		case VK_TAB:
 			s_suppressedControlChar = '\t';
 			s_suppressedControlCharTick = GetTickCount();
 			QueueAction(PendingAction::KeyDownTab);
-			return true;
+			break;
 		case 'F':
 			if (controlDown)
 			{
 				s_suppressedControlChar = 0x06;
 				s_suppressedControlCharTick = GetTickCount();
 				QueueAction(PendingAction::KeyDownCtrlF);
-				return true;
+				break;
 			}
+			handled = false;
 			break;
 		default:
+			handled = false;
 			break;
 		}
-		return false;
+		return handled;
 	}
 
-	bool HandleDialogueHistoryMenuInput(Menu* menu, UInt32 input)
+	bool HandleModernHelpMenuMenuInput(Menu* menu, UInt32 input)
 	{
-		const DialogueHistoryInputTarget target = GetActiveDialogueHistoryInputTarget();
+		const ModernHelpMenuInputTarget target =
+			GetActiveModernHelpMenuInputTarget();
 		if (!target.valid || target.menu != menu)
 			return false;
+
+		// Printable input is committed from WM_CHAR/IME. Consume the matching
+		// menu/DirectInput copy before the original per-key UDF sees it again.
 		if ((input >= 0x20 && input <= 0xFF)
 			|| input == '\b' || input == '\t' || input == '\r')
 		{
@@ -624,28 +693,33 @@ namespace fonthook::multibyte_input
 		default:
 			return false;
 		}
+
 		if (!(GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000))
 			return false;
+
 		DebugLog(
-			"tnvse_multibyte_input_event: source=DialogueHistory.MenuInput action=consume_keyboard_duplicate input=0x%08X",
+			"tnvse_multibyte_input_event: source=ModernHelpMenu.MenuInput action=consume_keyboard_duplicate input=0x%08X",
 			input);
 		return true;
 	}
 
-	bool ShouldSuppressDialogueHistoryControlChar(WPARAM input)
+	bool ShouldSuppressModernHelpMenuControlChar(WPARAM input)
 	{
 		if (!s_suppressedControlChar
 			|| input != s_suppressedControlChar
-			|| GetTickCount() - s_suppressedControlCharTick > kDuplicateAsciiSuppressMs)
+			|| GetTickCount() - s_suppressedControlCharTick
+				> kDuplicateAsciiSuppressMs)
 		{
 			return false;
 		}
+
 		s_suppressedControlChar = 0;
 		s_suppressedControlCharTick = 0;
 		return true;
 	}
 
-	bool RemovePreviousDialogueHistoryAsciiCompositionEcho(wchar_t compositionLead)
+	bool RemovePreviousModernHelpMenuAsciiCompositionEcho(
+		wchar_t compositionLead)
 	{
 		if (!s_lastAscii
 			|| GetTickCount() - s_lastAsciiTick > kDuplicateAsciiSuppressMs
@@ -654,17 +728,21 @@ namespace fonthook::multibyte_input
 			return false;
 		}
 
-		const DialogueHistoryInputTarget target = GetOverlayDialogueHistoryInputTarget();
+		const ModernHelpMenuInputTarget target =
+			GetOverlayModernHelpMenuInputTarget();
 		if (!target.valid)
 			return false;
 		EnsureShadow(target);
-		const size_t caret = ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
+		const size_t caret =
+			ClampToPrevBoundary(s_shadow.text, s_shadow.caret);
 		if (!caret)
 			return false;
+
 		const size_t previous = PrevCharBoundary(s_shadow.text, caret);
 		if (caret - previous != 1
 			|| !AsciiEqualsIgnoreCase(
-				static_cast<UInt8>(s_shadow.text[previous]), compositionLead))
+				static_cast<UInt8>(s_shadow.text[previous]),
+				compositionLead))
 		{
 			return false;
 		}

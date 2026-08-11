@@ -167,6 +167,8 @@ namespace fonthook
 
 		bool HandleCharFallback(WPARAM wParam, bool controlDown)
 		{
+			if (ShouldSuppressModernHelpMenuControlChar(wParam))
+				return true;
 			if (ShouldSuppressDialogueHistoryControlChar(wParam))
 				return true;
 			if (ShouldSuppressMcmExtenderControlChar(wParam))
@@ -197,6 +199,9 @@ namespace fonthook
 			}
 
 			const TextInputTarget target = GetCachedTextInputTarget();
+			if (target.token.kind == TextInputTargetKind::ModernHelpMenu)
+				return HandleModernHelpMenuWndProcChar(
+					target.modernHelpMenu, wParam, controlDown);
 			if (target.token.kind == TextInputTargetKind::DialogueHistory)
 				return HandleDialogueHistoryWndProcChar(
 					target.dialogueHistory, wParam, controlDown);
@@ -672,6 +677,10 @@ namespace fonthook
 					brokerTarget.token.kind == TextInputTargetKind::McmExtender
 						? brokerTarget.mcmExtender
 						: McmExtenderInputTarget();
+				const ModernHelpMenuInputTarget modernHelpMenuOverlayTarget =
+					brokerTarget.token.kind == TextInputTargetKind::ModernHelpMenu
+						? brokerTarget.modernHelpMenu
+						: ModernHelpMenuInputTarget();
 				const bool hasInputTarget =
 					brokerTarget.token.kind != TextInputTargetKind::None;
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
@@ -691,6 +700,16 @@ namespace fonthook
 				}
 
 				ObserveImeCommitKeyMessage(msg, wParam, lParam, hasInputTarget);
+
+				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+					&& modernHelpMenuOverlayTarget.valid
+					&& HandleModernHelpMenuKeyDown(
+						modernHelpMenuOverlayTarget,
+						wParam,
+						event.controlDown))
+				{
+					return 0;
+				}
 
 				if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 					&& dialogueHistoryOverlayTarget.valid
@@ -961,7 +980,7 @@ namespace fonthook
 					if (hasInputTarget)
 						HideSystemImeWindows(hwnd);
 					DebugLog(
-						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X overlay=0x%08X stewie=%u dialogueHistory=%u mcm=%u",
+						"tnvse_multibyte_input_event: source=WndProc.WM_IME_COMPOSITION lParam=0x%08X hasResult=%u hasComp=%u composingBefore=%u active=0x%08X overlay=0x%08X stewie=%u dialogueHistory=%u mcm=%u modernHelpMenu=%u",
 						static_cast<UInt32>(lParam),
 						(lParam & GCS_RESULTSTR) ? 1 : 0,
 						(lParam & GCS_COMPSTR) ? 1 : 0,
@@ -970,7 +989,8 @@ namespace fonthook
 						reinterpret_cast<UInt32>(overlayTarget),
 						stewieOverlayTarget.valid ? 1 : 0,
 						dialogueHistoryOverlayTarget.valid ? 1 : 0,
-						mcmOverlayTarget.valid ? 1 : 0);
+						mcmOverlayTarget.valid ? 1 : 0,
+						modernHelpMenuOverlayTarget.valid ? 1 : 0);
 
 					if (ApplyCapturedImeResult(event.result, lParam))
 					{

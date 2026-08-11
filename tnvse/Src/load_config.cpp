@@ -29,6 +29,7 @@ bool g_bMultibyteInputUseTSFCandidates;
 bool g_bMultibyteInputStewieTweaks;
 bool g_bMultibyteInputMCMExtender;
 bool g_bMultibyteInputDialogueHistory;
+bool g_bMultibyteInputModernHelpMenu;
 bool g_bSuppressJIPKeyEventsDuringMultibyteInput;
 bool g_bChangeJIPBigGunDesc;
 std::string g_sNewBigGunsDesc;
@@ -290,6 +291,12 @@ void LoadConfig()
 	gLog.FormattedMessage(
 		"g_bMultibyteInputDialogueHistory: %d",
 		g_bMultibyteInputDialogueHistory);
+
+	g_bMultibyteInputModernHelpMenu = ReadConfigInt(kMultibyteInputSection,
+		"bMultibyteInputModernHelpMenu", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bMultibyteInputModernHelpMenu: %d",
+		g_bMultibyteInputModernHelpMenu);
 
 	g_bSuppressJIPKeyEventsDuringMultibyteInput = ReadConfigInt(
 		kMultibyteInputSection,

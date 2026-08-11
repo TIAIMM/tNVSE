@@ -57,6 +57,8 @@ namespace fonthook
 				return "DialogueHistory";
 			case TextInputTargetKind::McmExtender:
 				return "McmExtender";
+			case TextInputTargetKind::ModernHelpMenu:
+				return "ModernHelpMenu";
 			default:
 				return "None";
 			}
@@ -106,6 +108,20 @@ namespace fonthook
 				target.token.writable = true;
 				target.token.active = true;
 				target.dialogueHistory = dialogueHistory;
+				return target;
+			}
+
+			const ModernHelpMenuInputTarget modernHelpMenu =
+				GetOverlayModernHelpMenuInputTarget();
+			if (modernHelpMenu.valid)
+			{
+				TextInputTarget target;
+				target.token.kind = TextInputTargetKind::ModernHelpMenu;
+				target.token.identity = modernHelpMenu.menu;
+				target.token.secondaryIdentity = modernHelpMenu.search;
+				target.token.writable = true;
+				target.token.active = true;
+				target.modernHelpMenu = modernHelpMenu;
 				return target;
 			}
 
@@ -224,6 +240,8 @@ namespace fonthook
 				return ImeCommitInputChannel::DialogueHistory;
 			case TextInputTargetKind::McmExtender:
 				return ImeCommitInputChannel::McmExtender;
+			case TextInputTargetKind::ModernHelpMenu:
+				return ImeCommitInputChannel::ModernHelpMenu;
 			default:
 				return ImeCommitInputChannel::WndProcChar;
 			}
@@ -254,6 +272,10 @@ namespace fonthook
 				return target.mcmExtender.valid
 					&& InsertWideTextMcmExtender(
 						target.mcmExtender, text);
+			case TextInputTargetKind::ModernHelpMenu:
+				return target.modernHelpMenu.valid
+					&& InsertWideTextModernHelpMenu(
+						target.modernHelpMenu, text);
 			default:
 				return false;
 			}
