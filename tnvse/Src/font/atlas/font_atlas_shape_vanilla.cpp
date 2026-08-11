@@ -58,7 +58,11 @@ namespace fonthook::vectorfont
 			const NiColorA& tileColor, const NiPoint3& origin,
 			bool prepareObject)
 		{
-			if (!g_bEnableFreeTypeFontVanillaLayout)
+			// Vanilla-layout owns an explicit renderer PrecacheGeometry request.
+			// LoadingMenu progress text is built while that menu owns renderer/UI
+			// locks, so use the direct native facade for this narrow route instead.
+			if (IsFreeTypeNoPrecacheRouteActive()
+				|| !g_bEnableFreeTypeFontVanillaLayout)
 				return nullptr;
 
 			const NativeFontPacketTemplate* packet = nullptr;
@@ -272,7 +276,12 @@ namespace fonthook::vectorfont
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::SingletonFacadeCreated);
 			if (prepareObject)
-				shape->PrepareObject();
+			{
+				if (IsFreeTypeNoPrecacheRouteActive())
+					shape->PrepareObject(false, true);
+				else
+					shape->PrepareObject();
+			}
 			NiTriShapeData* data = shape->GetModelData();
 			data->m_kBound = bound;
 			data->m_kBound.m_kCenter.x += origin.x;

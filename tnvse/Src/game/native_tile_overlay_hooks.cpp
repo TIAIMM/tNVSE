@@ -560,7 +560,7 @@ namespace fonthook
 		{
 			OverlayRuntime().loadingMenuUpdateHookInstalled = true;
 			gLog.FormattedMessage(
-				"tnvse_native_overlay: installed LoadingMenuThread prewarm consumer call=0x%08X chainedTarget=0x%08X vanillaUpdate=%u showChangesTarget=0x%08X vanillaShowChanges=%u policy=queued-snapshot legacyFontRoute=thread-local-fnt",
+				"tnvse_native_overlay: installed LoadingMenuThread prewarm consumer call=0x%08X chainedTarget=0x%08X vanillaUpdate=%u showChangesTarget=0x%08X vanillaShowChanges=%u policy=queued-snapshot fontRoute=freetype-native-no-precache",
 				static_cast<UInt32>(kLoadingMenuThreadUpdateCallSite),
 				static_cast<UInt32>(currentUpdateTarget),
 				currentUpdateTarget == kLoadingMenuUpdate ? 1u : 0u,

@@ -512,7 +512,7 @@ namespace fonthook
 				expectedThread, currentThread, std::memory_order_acq_rel))
 			{
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot legacyFontRoute=thread-local-fnt",
+					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot fontRoute=freetype-native-no-precache",
 					currentThread);
 			}
 			if (OverlayRuntime().prewarmConsumerDisabled.load(std::memory_order_acquire))
@@ -534,7 +534,7 @@ namespace fonthook
 				OverlayRuntime().prewarmConsumedSequence.store(
 					command.sequence, std::memory_order_release);
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: prewarm progress disabled because TileText::MakeNode legacy route is not the verified top-level owner; blocking font prewarm continues");
+					"tnvse_native_overlay: prewarm progress disabled because TileText::MakeNode no-precache route is not the verified top-level owner; blocking font prewarm continues");
 				return;
 			}
 
@@ -542,12 +542,12 @@ namespace fonthook
 			{
 				// Cell Offset Generator keeps generation on workers and limits its
 				// foreground path to LoadingMenu progress presentation. This path
-				// additionally confines every Tile mutation to LoadingMenuThread
-				// and routes synchronous presentation work through legacy FNT. The
+				// additionally confines every Tile mutation to LoadingMenuThread and
+				// keeps synchronous FreeType presentation off renderer precache. The
 				// TileText::MakeNode hook independently scopes the deferred geometry
 				// call reached later from LoadingMenu::ShowChanges; both boundaries are
 				// required because RebuildTextGeometry only marks the node dirty here.
-				ScopedLegacyFntRenderRoute legacyFntRoute;
+				ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
 				bool applied = true;
 				if (command.visible)
 					applied = ApplyPrewarmOverlayVisible(command);

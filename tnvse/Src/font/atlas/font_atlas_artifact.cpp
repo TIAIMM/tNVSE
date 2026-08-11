@@ -409,7 +409,17 @@ namespace fonthook::vectorfont
 			// PrepareObject establishes the engine-side submission state even when
 			// native rendering later replaces this facade with a shared proxy.
 			if (prepareObject)
-				shape->PrepareObject();
+			{
+				if (needsNativeRangeRouting
+					&& IsFreeTypeNoPrecacheRouteActive())
+				{
+					shape->PrepareObject(false, true);
+				}
+				else
+				{
+					shape->PrepareObject();
+				}
+			}
 			// The facade carries only one dummy quad on the native path. Restore the
 			// immutable artifact bound after vanilla preparation so culling never sees
 			// the dummy geometry's extent.

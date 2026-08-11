@@ -7,23 +7,23 @@ namespace fonthook
 {
 	namespace
 	{
-		thread_local UInt32 s_legacyFntRenderRouteDepth = 0;
+		thread_local UInt32 s_freeTypeNoPrecacheRouteDepth = 0;
 	}
 
-	ScopedLegacyFntRenderRoute::ScopedLegacyFntRenderRoute() noexcept
+	ScopedFreeTypeNoPrecacheRoute::ScopedFreeTypeNoPrecacheRoute() noexcept
 	{
-		++s_legacyFntRenderRouteDepth;
+		++s_freeTypeNoPrecacheRouteDepth;
 	}
 
-	ScopedLegacyFntRenderRoute::~ScopedLegacyFntRenderRoute() noexcept
+	ScopedFreeTypeNoPrecacheRoute::~ScopedFreeTypeNoPrecacheRoute() noexcept
 	{
-		if (s_legacyFntRenderRouteDepth)
-			--s_legacyFntRenderRouteDepth;
+		if (s_freeTypeNoPrecacheRouteDepth)
+			--s_freeTypeNoPrecacheRouteDepth;
 	}
 
-	bool IsLegacyFntRenderRouteActive() noexcept
+	bool IsFreeTypeNoPrecacheRouteActive() noexcept
 	{
-		return s_legacyFntRenderRouteDepth != 0;
+		return s_freeTypeNoPrecacheRouteDepth != 0;
 	}
 
 	void FlushFreeTypePersistentFontCache()
@@ -89,8 +89,6 @@ namespace fonthook
 
 	bool IsFreeTypeFontActive(const Font* apFont)
 	{
-		if (IsLegacyFntRenderRouteActive())
-			return false;
 		return vectorfont::FindActiveRuntime(apFont) != nullptr;
 	}
 

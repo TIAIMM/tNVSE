@@ -764,10 +764,10 @@ namespace fonthook
 		{
 			// LoadingMenu applies Tile changes during its locked traversal, but
 			// TileText::MakeNode is deferred until ShowChanges. Identify only the
-			// tNVSE prewarm subtree at that real geometry boundary so its text cannot
-			// enter the FreeType virtual PrecacheGeometry route while LoadingMenu owns
-			// the renderer/UI locks. The bounded walk also fails closed on a corrupt
-			// or cyclic parent chain.
+			// tNVSE prewarm subtree at that real geometry boundary. FreeType remains
+			// active, while native shape creation skips renderer precache until the
+			// normal sorted submission path. The bounded walk also fails closed on a
+			// corrupt or cyclic parent chain.
 			constexpr UInt32 kMaximumParentDepth = 32;
 			const Tile* current = tile;
 			for (UInt32 depth = 0;
@@ -824,17 +824,17 @@ namespace fonthook
 			const bool suppress = IsVuiEffectProxy(tile);
 			Font* font = suppress ? ResolveVuiEffectProxyFont(tile) : nullptr;
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
-			const bool useLegacyPrewarmRoute = IsPrewarmOverlayText(tile);
+			const bool useNoPrecachePrewarmRoute = IsPrewarmOverlayText(tile);
 
 			ScopedEffectSuppression scope(suppress);
 			ScopedVuiProxyMeasureOnly measureOnly(replaceProxy);
 			NiNode* node = nullptr;
-			if (useLegacyPrewarmRoute)
+			if (useNoPrecachePrewarmRoute)
 			{
 				// This scope must cover the actual deferred MakeNode call. A scope
 				// around SetText/RebuildTextGeometry ends before LoadingMenu reaches
 				// ShowChanges and therefore cannot protect this boundary.
-				ScopedLegacyFntRenderRoute legacyFntRoute;
+				ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
 				node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
 			}
 			else

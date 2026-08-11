@@ -282,7 +282,15 @@ namespace fonthook
 			ThisStdCall<void>(
 				0xA7EE30, &data->m_kBound, data->m_usVertices, data->m_pkVertex);
 			if (prepareObject)
-				shape->PrepareObject();
+			{
+				// This transparent fallback has no drawable payload. During LoadingMenu
+				// prewarm presentation it must not re-enter renderer precache after the
+				// native text route has already failed safely.
+				if (IsFreeTypeNoPrecacheRouteActive())
+					shape->PrepareObject(false, true);
+				else
+					shape->PrepareObject();
+			}
 			return shape;
 		}
 

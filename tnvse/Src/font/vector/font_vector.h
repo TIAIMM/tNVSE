@@ -152,22 +152,22 @@ namespace fonthook
 	bool InitializeFreeTypeVectorRenderer();
 	bool IsFreeTypeFontConfigured(UInt32 auiFontId);
 	bool ActivateFreeTypeFont(Font* apFont, bool abForce = false);
-	// LoadingMenu-owned utility text can be created while the vector-font cache
-	// itself is being rebuilt. Keep that narrow UI operation on the legacy FNT
-	// route so it cannot recursively request glyph generation from the prewarm
-	// transaction it is displaying. The override is thread-local and nestable.
-	class ScopedLegacyFntRenderRoute final
+	// LoadingMenu-owned progress text can be created while the vector-font cache
+	// itself is being rebuilt and while LoadingMenu owns renderer/UI locks. Keep
+	// FreeType active, but route native shapes around creation-time renderer
+	// precache. The override is thread-local and nestable.
+	class ScopedFreeTypeNoPrecacheRoute final
 	{
 	public:
-		ScopedLegacyFntRenderRoute() noexcept;
-		~ScopedLegacyFntRenderRoute() noexcept;
+		ScopedFreeTypeNoPrecacheRoute() noexcept;
+		~ScopedFreeTypeNoPrecacheRoute() noexcept;
 
-		ScopedLegacyFntRenderRoute(
-			const ScopedLegacyFntRenderRoute&) = delete;
-		ScopedLegacyFntRenderRoute& operator=(
-			const ScopedLegacyFntRenderRoute&) = delete;
+		ScopedFreeTypeNoPrecacheRoute(
+			const ScopedFreeTypeNoPrecacheRoute&) = delete;
+		ScopedFreeTypeNoPrecacheRoute& operator=(
+			const ScopedFreeTypeNoPrecacheRoute&) = delete;
 	};
-	bool IsLegacyFntRenderRouteActive() noexcept;
+	bool IsFreeTypeNoPrecacheRouteActive() noexcept;
 	bool IsFreeTypeFontActive(const Font* apFont);
 	bool HasEnabledFreeTypeFontEffects(const Font* apFont);
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);
