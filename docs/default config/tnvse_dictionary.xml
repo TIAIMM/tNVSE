@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<tNVSE>
+  <dictionary>
+    <!--
+      No dictionary source is registered by this file. Copy an example below,
+      remove its surrounding comment, and replace the paths and values.
+
+      priority controls registration order when sources overlap.
+    -->
+
+    <!--
+    <file
+      src="Data/NVSE/plugins/tnvse_dictionary/source.txt"
+      target="Data/NVSE/plugins/tnvse_dictionary/translation.txt"
+      type="2"
+      priority="5"/>
+    -->
+
+    <!--
+    <directory
+      src="Data/NVSE/plugins/tnvse_dictionary/source"
+      target="Data/NVSE/plugins/tnvse_dictionary/translation"
+      priority="5"/>
+    -->
+
+    <!--
+    <xml
+      path="Data/NVSE/plugins/tnvse_dictionary/example.xml"
+      priority="5"/>
+    -->
+
+    <!--
+    <json
+      path="Data/NVSE/plugins/tnvse_dictionary/example.json"
+      priority="5"/>
+    -->
+  </dictionary>
+
+  <!--
+  UI hint examples. [%] is a character or place name; [@] is a body part or
+  door name.
+
+  <uihint>
+    <bptd format="[%]'s [@] is crippled"/>
+    <door format="[@] to [%]"/>
+  </uihint>
+  -->
+
+  <!--
+  Perk-requirement label example.
+
+  <perkrequirements>
+    <req><![CDATA[Req]]></req>
+    <ranks><![CDATA[Ranks]]></ranks>
+    <source><![CDATA[Source]]></source>
+    <levelSuffix><![CDATA[Level]]></levelSuffix>
+    <and><![CDATA[and]]></and>
+    <or><![CDATA[or]]></or>
+    <not><![CDATA[not]]></not>
+  </perkrequirements>
+  -->
+
+  <!--
+  Regular-expression examples. CDATA is recommended when an expression uses
+  XML-sensitive characters.
+
+  <regularexpressions>
+    <config id="TrimPrefixRegularExpressions"><![CDATA[^( +)]]></config>
+    <config id="TrimSuffixRegularExpressions"><![CDATA[( +)$]]></config>
+    <config id="BypassPrefixRegularExpressions"><![CDATA[^<.+>]]></config>
+    <config id="BypassSuffixRegularExpressions"><![CDATA[(\+)$]]></config>
+    <regex from="^(.+) added$" to="Added $1"/>
+  </regularexpressions>
+  -->
+</tNVSE>

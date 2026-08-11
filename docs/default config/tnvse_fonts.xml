@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<tNVSE>
+  <fonts>
+    <!--
+      No font is configured by this file. Copy the example below, remove its
+      surrounding comment, and replace the paths and values as needed.
+
+      Only listed font IDs are configured. If an ID appears more than once,
+      the last entry wins.
+
+      Common game font slots:
+        1 = Glow_Monofonto_Large
+        2 = Monofonto_Large
+        3 = Glow_Monofonto_Medium
+        4 = Monofonto_VeryLarge02_Dialogs2
+        5 = Fixedsys_Comp_uniform_width
+        6 = Glow_Monofonto_VL_dialogs
+        7 = Baked-in_Monofonto_Large
+        8 = Glow_Futura_Caps_Large
+
+      With JIP LN NVSE, registered extended slots 10 through 89 are also
+      supported; slot 9 is invalid. Stewie Tweaks registers its menu font in
+      slot 42 through JIP's SetFontFile command.
+
+      <font> attributes:
+        id              Required positive game font slot.
+        pixelSize       Font size in pixels; must be greater than 0.
+        tracking        Extra character spacing in pixels. Default: 0.
+        fixedWidth      Logical cell width. 0 selects proportional advances.
+        scaleX/scaleY   Glyph scale; must be greater than 0. Default: 1.
+        embolden        Outline emboldening in pixels. Default: 0.
+        slant           Slant angle from -45 through 45 degrees. Default: 0.
+        baselineOffset  Per-glyph vertical adjustment. Default: 0.
+        verticalMetrics "freetype" or "vanilla". Default: "freetype".
+        baseline        Positive value overrides the derived line rise.
+        prewarmEncoding "gbk" or "gb2312" for CP936 startup coverage.
+        effectQuality   "fast", "balanced", or "high".
+        fontColor       Optional fill override in #RRGGBB format.
+        fontAlpha       Fill alpha from 0 through 1.
+
+      <singleByte> and <doubleByte> may override pixelSize, tracking,
+      fixedWidth, scaleX, scaleY, embolden, slant, and baselineOffset.
+      Unspecified values inherit from <font>.
+
+      <face path="..." index="0"/> selects the required primary face.
+      <fallback path="..." index="0"/> adds an optional fallback. Paths may
+      be absolute or relative to FalloutNV.exe. Multiple fallbacks are tried
+      in document order. A face chain directly under <font> is inherited by
+      both byte classes; a class-specific chain replaces the inherited chain.
+
+      Effect nodes are optional. A present effect defaults to enabled; an
+      absent effect is disabled. colorMode="fixed" uses the configured color,
+      while colorMode="fill" tracks the live Tile body color.
+
+      glow:    inner, outer, power, colorMode, color, alpha
+      outline: width, softness, colorMode, color, alpha
+      shadow:  x, y, blur, power, includeGlow, includeOutline,
+               colorMode, color, alpha
+    -->
+
+    <!--
+    <font id="1"
+          pixelSize="31"
+          tracking="0"
+          fixedWidth="0"
+          scaleX="1"
+          scaleY="1"
+          embolden="0"
+          slant="0"
+          baselineOffset="0"
+          verticalMetrics="vanilla"
+          baseline="0"
+          prewarmEncoding="gbk"
+          effectQuality="balanced"
+          fontColor="#FFFFFF"
+          fontAlpha="1">
+      <singleByte pixelSize="27" tracking="-0.5">
+        <face path="Data\NVSE\plugins\fonts\LatinFont.ttf" index="0"/>
+        <fallback path="Data\NVSE\plugins\fonts\FallbackFont.ttf" index="0"/>
+      </singleByte>
+      <doubleByte pixelSize="22" tracking="0">
+        <face path="Data\NVSE\plugins\fonts\CjkFont.ttf" index="0"/>
+        <fallback path="Data\NVSE\plugins\fonts\FallbackFont.ttf" index="0"/>
+      </doubleByte>
+      <glow enabled="1" inner="0" outer="2" power="2"
+            colorMode="fill" color="#FFFFFF" alpha="0.35"/>
+      <outline enabled="1" width="1" softness="0.5"
+               colorMode="fixed" color="#1A1A1A" alpha="1"/>
+      <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5"
+              includeGlow="1" includeOutline="0"
+              colorMode="fixed" color="#000000" alpha="0.75"/>
+    </font>
+    -->
+  </fonts>
+</tNVSE>
