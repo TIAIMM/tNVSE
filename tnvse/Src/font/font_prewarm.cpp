@@ -208,11 +208,9 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupFlush:
 		{
 			const ULONGLONG started = GetTickCount64();
-			if (PrewarmRuntime().rebuildProgressOverlayVisible)
-			{
-				HideNativePrewarmOverlay();
-				PrewarmRuntime().rebuildProgressOverlayVisible = false;
-			}
+			// A cache-writing cold transaction remains visibly active through final
+			// profile validation, physical atlas publication, and cleanup. A cache-hit
+			// startup never latches or starts progress reporting, so it stays UI-free.
 			StartRebuildProgressReporting();
 			ReportPrewarmTransactionProgress(
 				L"Finalizing generated font cache",
