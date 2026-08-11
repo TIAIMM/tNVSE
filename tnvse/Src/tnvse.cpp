@@ -345,7 +345,7 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 		return false;
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "tNVSE";
-	info->version = 75;
+	info->version = 63;
 
 	// Every game/renderer entry used by tNVSE is a fixed address in the retail
 	// 1.4.0.525 image. In particular, the NoGore 1.4.0.525 executable has a
