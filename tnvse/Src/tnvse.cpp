@@ -149,24 +149,6 @@ namespace
 	UInt32 s_configuredGameFontPrepareAttempts = 0;
 	constexpr UInt32 kMaximumConfiguredGameFontPrepareAttempts = 120;
 
-	const char* FontPrewarmPumpStatusName(
-		fonthook::FontPrewarmPumpStatus status)
-	{
-		switch (status)
-		{
-		case fonthook::FontPrewarmPumpStatus::Idle:
-			return "idle";
-		case fonthook::FontPrewarmPumpStatus::Active:
-			return "active";
-		case fonthook::FontPrewarmPumpStatus::Completed:
-			return "completed";
-		case fonthook::FontPrewarmPumpStatus::Failed:
-			return "failed";
-		default:
-			return "unknown";
-		}
-	}
-
 	void PrepareConfiguredGameFonts()
 	{
 		if (s_configuredGameFontsPrepared)
@@ -237,43 +219,6 @@ namespace
 				>= kMaximumConfiguredGameFontPrepareAttempts;
 	}
 
-	void RunConfiguredGameFontPrewarmLoadingBarrier()
-	{
-		const ULONGLONG started = GetTickCount64();
-		UInt32 steps = 0;
-		fonthook::FontPrewarmPumpStatus status =
-			fonthook::PumpFreeTypeFontPrewarm();
-		++steps;
-		if (status == fonthook::FontPrewarmPumpStatus::Idle)
-		{
-			gLog.FormattedMessage(
-				"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier skipped status=idle steps=%u",
-				steps);
-			return;
-		}
-
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier begin status=%s",
-			FontPrewarmPumpStatusName(status));
-		while (status == fonthook::FontPrewarmPumpStatus::Active)
-		{
-			// Keep the host window responsive while DeferredInit deliberately
-			// blocks gameplay until the cache transaction reaches a terminal state.
-			// The prewarm service dispatches only a bounded number of messages and
-			// rejects a re-entrant cache pump.
-			fonthook::ServiceFreeTypeFontPrewarmHostMessages();
-			Sleep(0);
-			status = fonthook::PumpFreeTypeFontPrewarm();
-			++steps;
-			if ((steps & 0x3F) == 0)
-				fonthook::FlushFreeTypeFontDebugLog();
-		}
-		gLog.FormattedMessage(
-			"tnvse_freetype_font: DeferredInit LoadingMenu prewarm barrier end status=%s steps=%u elapsedMs=%llu",
-			FontPrewarmPumpStatusName(status),
-			steps,
-			static_cast<unsigned long long>(GetTickCount64() - started));
-	}
 }
 
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
@@ -304,7 +249,7 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			fonthook::FinalizeFreeTypeNativeRendererDetection();
 			fonthook::InitializeFreeTypeDefaultPoolAtlas();
 			PrepareConfiguredGameFonts();
-			RunConfiguredGameFontPrewarmLoadingBarrier();
+			fonthook::RunFreeTypeFontPrewarmLoadingBarrier();
 		}
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)

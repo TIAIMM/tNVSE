@@ -161,7 +161,7 @@ namespace fonthook::vectorfont
 							1, std::memory_order_relaxed) < 16)
 					{
 						gLog.FormattedMessage(
-							"tnvse_freetype_font: prewarm atlas allocation paused for same-session retry size=%ux%u levels=%u bytesMiB=%.2f availableVirtualMiB=%.2f largestFreeMiB=%.2f reserveMiB=%.2f emergencyReleased=%u runtimeFallback=0",
+							"tnvse_freetype_font: prewarm atlas allocation paused for same-session retry size=%ux%u levels=%u bytesMiB=%.2f availableVirtualMiB=%.2f largestFreeMiB=%.2f reserveMiB=%.2f emergencyReleased=%u runtimeDemand=available",
 							width, height, mipLevels,
 							pendingBytes / (1024.0 * 1024.0),
 							headroom.availableBytes / (1024.0 * 1024.0),

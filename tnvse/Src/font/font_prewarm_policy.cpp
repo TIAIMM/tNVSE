@@ -470,6 +470,7 @@ namespace fonthook::vectorfont
 				return;
 			PrewarmRuntime().rebuildProgressTracked = true;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
+			PrewarmRuntime().rebuildProgressOverlayVisible = false;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			PrewarmRuntime().session.lastProgressUpdate = 0;
 			gLog.FormattedMessage(
@@ -482,7 +483,12 @@ namespace fonthook::vectorfont
 			if (!PrewarmRuntime().rebuildProgressTracked || PrewarmRuntime().rebuildProgressReportingStarted)
 				return;
 			PrewarmRuntime().rebuildProgressReportingStarted = true;
+			PrewarmRuntime().rebuildProgressOverlayVisible = true;
 			PrewarmRuntime().session.lastProgressUpdate = 0;
+			UpdateNativePrewarmOverlay(
+				L"Preparing configured fonts",
+				L"Preparing streamed glyph batches...",
+				PrewarmRuntime().rebuildProgress);
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: prewarm progress reporting started presentation=loading-thread-queued producerThread=%u",
 				GetCurrentThreadId());
@@ -506,10 +512,13 @@ namespace fonthook::vectorfont
 				return;
 			}
 			PrewarmRuntime().session.lastProgressUpdate = now;
-			UpdateNativePrewarmOverlay(
-				detail ? detail : L"",
-				stage ? stage : L"Preparing font cache...",
-				progress);
+			if (PrewarmRuntime().rebuildProgressOverlayVisible)
+			{
+				UpdateNativePrewarmOverlay(
+					detail ? detail : L"",
+					stage ? stage : L"Preparing font cache...",
+					progress);
+			}
 			if (force)
 			{
 				gLog.FormattedMessage(
@@ -548,8 +557,11 @@ namespace fonthook::vectorfont
 			const bool cacheWriteBoundary =
 				stage == FontAtlasPrewarmProgressStage::PublishPhysicalGroup
 				|| stage == FontAtlasPrewarmProgressStage::PublishPhysicalPool;
-			if (!cacheWriteBoundary && !PrewarmRuntime().rebuildProgressReportingStarted)
+			if (!cacheWriteBoundary
+				&& !PrewarmRuntime().rebuildProgressReportingStarted)
+			{
 				return;
+			}
 			wchar_t detail[160] = {};
 			const wchar_t* text = L"Finalizing shared font cache...";
 			float progress = 0.90f;

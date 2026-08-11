@@ -1283,10 +1283,10 @@ namespace fonthook::vectorfont
 			GetSystemInfo(&info);
 			processors = std::max<DWORD>(1, info.dwNumberOfProcessors);
 		}
-		// Leave one logical processor for game rendering, Tile progress, and
-		// system services while the main thread waits for this bounded batch.
+		// Leave one logical processor for game rendering, the window message loop,
+		// and system services while the below-normal-priority coordinator runs.
 		// The x86 process also caps worker-local FreeType heaps at a predictable level.
-		const UInt32 workers = processors > 2 ? processors - 1 : processors;
+		const UInt32 workers = processors > 1 ? processors - 1 : 1;
 		const size_t usefulWorkers = expensiveWork
 			? workCount
 			: (workCount + kFillPrewarmWorkChunk - 1u)
@@ -1413,13 +1413,15 @@ namespace fonthook::vectorfont
 				? 1u : kFillPrewarmWorkChunk;
 			auto worker = [&](UInt32 contextIndex)
 			{
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 				try
 				{
 					PrewarmRasterWorkerContext& context =
 						*s_prewarmRasterWorkerContexts[contextIndex];
 					if (!context.Prepare(&runtime))
 						return;
-					while (!abortWorkers.load(std::memory_order_relaxed))
+					while (!abortWorkers.load(std::memory_order_relaxed)
+						&& !IsFontPrewarmStopRequested())
 					{
 						const size_t first = nextWork.fetch_add(workChunk,
 							std::memory_order_relaxed);
@@ -1480,6 +1482,8 @@ namespace fonthook::vectorfont
 			worker(0);
 			for (std::thread& thread : workers)
 				thread.join();
+			if (IsFontPrewarmStopRequested())
+				return;
 			if (workerAllocationFailed.load(std::memory_order_relaxed))
 				throw std::bad_alloc();
 			if (workerUnexpectedFailure.load(std::memory_order_relaxed))

@@ -29,8 +29,8 @@ namespace fonthook::vectorfont
 		float afRasterScale, bool* apAllocationFailed = nullptr);
 
 	// Publish the completed snapshot transaction without entering D3D9. The
-	// LoadingMenu presentation thread restores DEFAULT-pool pages afterwards,
-	// then the host records and validates the completed transaction below.
+	// blocked DeferredInit main-thread service restores DEFAULT-pool pages
+	// afterwards, then the worker coordinator records and validates the transaction.
 	bool PrepareStreamingPrewarmAtlasFinalization(RuntimeFont& arRuntime,
 		float afRasterScale, StreamingPrewarmFinalization& arFinalization);
 	bool CompleteStreamingPrewarmAtlasFinalization(RuntimeFont& arRuntime,

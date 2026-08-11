@@ -41,12 +41,12 @@ namespace fonthook::vectorfont
 			bool snapshotReady = false;
 			bool snapshotMemoryPressure = false;
 			PrewarmAtlasRequestResult snapshotResult;
-			if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+			if (!ExecutePrewarmAtlasRequestOnMainThread(
 					PrewarmAtlasRequestKind::LoadSnapshot, job.fontId,
 					PrewarmRuntime().session.rasterScale, snapshotResult))
 			{
 				AbortPrewarmTransaction(
-					"loading-thread-snapshot-service-unavailable");
+					"main-thread-snapshot-service-unavailable");
 				RecordPrewarmStep(stepStarted);
 				return;
 			}
@@ -67,7 +67,7 @@ namespace fonthook::vectorfont
 					return;
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: snapshot restore memory pressure font=%u scale=%.3f snapshotPreserved=1 retryInSameBarrier=1",
+					"tnvse_freetype_font: snapshot restore memory pressure font=%u scale=%.3f snapshotPreserved=1 retryInSameSession=1",
 					job.fontId, PrewarmRuntime().session.rasterScale);
 				PrewarmRuntime().session.restoreJobs.push_front(std::move(job));
 				RecordPrewarmStep(stepStarted);
@@ -194,14 +194,14 @@ namespace fonthook::vectorfont
 			if (active.sharedDoubleAlias)
 			{
 				PrewarmAtlasRequestResult sharedRoleResult;
-				if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+				if (!ExecutePrewarmAtlasRequestOnMainThread(
 						PrewarmAtlasRequestKind::LoadSharedDoubleByteRole,
 						active.job.fontId,
 						PrewarmRuntime().session.rasterScale,
 						sharedRoleResult))
 				{
 					AbortPrewarmTransaction(
-						"loading-thread-shared-role-service-unavailable");
+						"main-thread-shared-role-service-unavailable");
 					return;
 				}
 				sharedRoleReady = sharedRoleResult.succeeded;
@@ -221,7 +221,7 @@ namespace fonthook::vectorfont
 					return;
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: shared double-byte role restore memory pressure font=%u owner=%u snapshotPreserved=1 retryInSameBarrier=1",
+					"tnvse_freetype_font: shared double-byte role restore memory pressure font=%u owner=%u snapshotPreserved=1 retryInSameSession=1",
 					active.job.fontId,
 					config->mtsdfDoubleByteOwnerFontId);
 				PrewarmRuntime().session.generationJobs.push_front(
@@ -306,7 +306,7 @@ namespace fonthook::vectorfont
 				active.metricsOnlyBatchGlyphLimit = 1;
 				active.constrainedMemory = true;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm font entered constrained same-session mode font=%u batchGlyphs=1 availableVirtualMiB=%.2f largestFreeMiB=%.2f runtimeFallback=0",
+					"tnvse_freetype_font: prewarm font entered constrained same-session mode font=%u batchGlyphs=1 availableVirtualMiB=%.2f largestFreeMiB=%.2f runtimeDemand=available",
 					active.job.fontId,
 					headroom.availableBytes / (1024.0 * 1024.0),
 					headroom.largestFreeRegionBytes / (1024.0 * 1024.0));
@@ -471,7 +471,7 @@ namespace fonthook::vectorfont
 				const bool retryAllowed = retryBatchAfterMemoryPressure(
 					"request-buffer");
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm request-buffer retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameBarrier=1",
+					"tnvse_freetype_font: prewarm request-buffer retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameSession=1",
 					active.job.fontId, previous,
 					selectedBatchLimit,
 					metricsOnlyDoubleByte ? 1u : 0u,
@@ -563,7 +563,7 @@ namespace fonthook::vectorfont
 				const bool retryAllowed =
 					retryBatchAfterMemoryPressure("glyph-scan");
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm scan allocation retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameBarrier=1",
+					"tnvse_freetype_font: prewarm scan allocation retry font=%u limit=%u->%u metricsOnly=%u retry=%u sameSession=1",
 					active.job.fontId, previous,
 					selectedBatchLimit,
 					metricsOnlyDoubleByte ? 1u : 0u,
@@ -611,7 +611,7 @@ namespace fonthook::vectorfont
 					retryMemoryBatch = retryBatchAfterMemoryPressure(
 						"glyph-raster");
 					gLog.FormattedMessage(
-						"tnvse_freetype_font: prewarm raster allocation retry font=%u scale=%.3f batchGlyphs=%u limit=%u->%u retry=%u sameBarrier=1",
+						"tnvse_freetype_font: prewarm raster allocation retry font=%u scale=%.3f batchGlyphs=%u limit=%u->%u retry=%u sameSession=1",
 						active.job.fontId,
 						PrewarmRuntime().session.rasterScale,
 						glyphCount, previous,
@@ -653,7 +653,7 @@ namespace fonthook::vectorfont
 						retryMemoryBatch = retryBatchAfterMemoryPressure(
 							"stream-append");
 						gLog.FormattedMessage(
-							"tnvse_freetype_font: prewarm stream append allocation retry font=%u batchGlyphs=%u limit=%u->%u retry=%u statePreserved=1 sameBarrier=1",
+							"tnvse_freetype_font: prewarm stream append allocation retry font=%u batchGlyphs=%u limit=%u->%u retry=%u statePreserved=1 sameSession=1",
 							active.job.fontId, glyphCount, previous,
 							selectedBatchLimit,
 							active.allocationRetries);
@@ -771,7 +771,7 @@ namespace fonthook::vectorfont
 				PreparePrewarmScanForGeneration(active.job, *config,
 					PrewarmRuntime().session.rasterScaleMilli);
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: streamed batch failure font=%u atlas=%s generationRestart=%u retryInSameBarrier=1 runtimeFallback=0",
+					"tnvse_freetype_font: streamed batch failure font=%u atlas=%s generationRestart=%u retryInSameSession=1 runtimeDemand=available",
 					active.job.fontId,
 					discarded ? "discarded" : "delete-failed",
 					active.job.generationRestarts);
@@ -820,14 +820,14 @@ namespace fonthook::vectorfont
 				&& finalization.repacked && !finalizationMemoryPressure)
 			{
 				PrewarmAtlasRequestResult restoreResult;
-				if (!ExecutePrewarmAtlasRequestOnLoadingThread(
+				if (!ExecutePrewarmAtlasRequestOnMainThread(
 						PrewarmAtlasRequestKind::RebuildPublishedSnapshot,
 						active.job.fontId,
 						PrewarmRuntime().session.rasterScale,
 						restoreResult))
 				{
 					AbortPrewarmTransaction(
-						"loading-thread-finalize-service-unavailable");
+						"main-thread-finalize-service-unavailable");
 					RecordPrewarmStep(stepStarted);
 					return;
 				}
@@ -889,7 +889,7 @@ namespace fonthook::vectorfont
 					return;
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: streamed finalization memory pressure font=%u scale=%.3f snapshotPreserved=1 restoreRetryInSameBarrier=1 runtimeFallback=0",
+					"tnvse_freetype_font: streamed finalization memory pressure font=%u scale=%.3f snapshotPreserved=1 restoreRetryInSameSession=1 runtimeDemand=available",
 					active.job.fontId, PrewarmRuntime().session.rasterScale);
 				PrewarmJob retryJob = std::move(active.job);
 				PrewarmRuntime().session.activeFont.reset();
@@ -917,7 +917,7 @@ namespace fonthook::vectorfont
 					return;
 				}
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: streamed finalization validation retry font=%u finalized=%u directReady=%u generationRestart=%u snapshotPreserved=1 sameBarrier=1",
+					"tnvse_freetype_font: streamed finalization validation retry font=%u finalized=%u directReady=%u generationRestart=%u snapshotPreserved=1 sameSession=1",
 					active.job.fontId, finalized ? 1u : 0u,
 					directReady ? 1u : 0u,
 					active.job.generationRestarts);
@@ -1005,7 +1005,7 @@ namespace fonthook::vectorfont
 				PrewarmRuntime().session.everyConfiguredJobCompleted
 				&& PrewarmRuntime().session.everyConfiguredProfileVerified;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressReporting=%s progressOverlay=loading-thread-queued runtimeFallback=0",
+				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressReporting=%s presentation=loading-thread-queued runtimeDemandFallback=available",
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.completedFonts,
 				PrewarmRuntime().session.streamFailedFonts,

@@ -76,6 +76,22 @@ namespace fonthook::vectorfont
 
 		void PruneRetiredPrewarmAtlasGenerations()
 		{
+			const DWORD workerThreadId =
+				PrewarmRuntime().prewarmWorkerThreadId.load(
+					std::memory_order_acquire);
+			if (PrewarmRuntime().prewarmActive.load(std::memory_order_acquire)
+				&& workerThreadId && GetCurrentThreadId() == workerThreadId)
+			{
+				PrewarmAtlasRequestResult requestResult;
+				if (ExecutePrewarmAtlasRequestOnMainThread(
+						PrewarmAtlasRequestKind::PruneRetiredGenerations,
+						0, PrewarmRuntime().session.rasterScale, requestResult)
+					&& requestResult.memoryPressure)
+				{
+					MarkAtlasAllocationMemoryPressure();
+				}
+				return;
+			}
 			PruneRetiredAtlasGenerationsSafely();
 		}
 
@@ -159,17 +175,25 @@ namespace fonthook::vectorfont
 			PrewarmRuntime().terminalPrewarmFailure = true;
 			PrewarmRuntime().prewarmActive.store(
 				false, std::memory_order_release);
-			PrewarmRuntime().prewarmHostThreadId.store(
+			PrewarmRuntime().prewarmWorkerThreadId.store(
 				0, std::memory_order_release);
-			try { HideNativePrewarmOverlay(); }
+			try
+			{
+				if (!QuiesceNativePrewarmOverlay(2000))
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: terminal prewarm failure overlay hide acknowledgement timed out; LoadingMenu owns remaining Tile teardown");
+				}
+			}
 			catch (...) {}
 			PrewarmRuntime().rebuildProgressTracked = false;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
+			PrewarmRuntime().rebuildProgressOverlayVisible = false;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			try
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm terminal failure reason=%s queued=%u complete=%u memoryRetries=%u transactionRestarts=%u policy=retain-valid-partial-caches-and-continue-loading runtimeFallback=1",
+					"tnvse_freetype_font: prewarm terminal failure reason=%s queued=%u complete=%u memoryRetries=%u transactionRestarts=%u policy=retain-valid-partial-caches-and-continue-game runtimeFallback=1",
 					reason ? reason : "unknown", queuedFonts, completedFonts,
 					memoryRetries, transactionRestarts);
 			}
@@ -199,12 +223,8 @@ namespace fonthook::vectorfont
 			{
 				ReportPrewarmTransactionProgress(
 					L"Font cache rebuild",
-					L"Restarting cache transaction inside LoadingMenu...",
+					L"Restarting pre-entry cache transaction...",
 					PrewarmRuntime().rebuildProgress, true);
-			}
-			else
-			{
-				HideNativePrewarmOverlay();
 			}
 			PrewarmRuntime().session = {};
 			PrewarmRuntime().jobs.clear();
@@ -215,7 +235,7 @@ namespace fonthook::vectorfont
 			IncrementSaturating(PrewarmRuntime().transactionRestartCount);
 			SetBitmapCacheReducedAfterPrewarm(false);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm transaction retry reason=%s restart=%u policy=same-loading-barrier no-runtime-demand-fallback=1",
+				"tnvse_freetype_font: prewarm transaction retry reason=%s restart=%u policy=same-pre-entry-barrier runtime-demand-fallback=1",
 				reason ? reason : "unknown", PrewarmRuntime().transactionRestartCount);
 			if (PrewarmRuntime().transactionRestartCount >= 4)
 			{
@@ -254,12 +274,8 @@ namespace fonthook::vectorfont
 				{
 					ReportPrewarmTransactionProgress(
 						L"Font cache rebuild",
-						L"Restarting cache transaction inside LoadingMenu...",
+						L"Restarting pre-entry cache transaction...",
 						PrewarmRuntime().rebuildProgress, true);
-				}
-				else
-				{
-					HideNativePrewarmOverlay();
 				}
 			}
 			catch (...) {}
@@ -314,7 +330,7 @@ namespace fonthook::vectorfont
 		{
 			PrewarmRuntime().prewarmActive.store(
 				true, std::memory_order_release);
-			PrewarmRuntime().prewarmHostThreadId.store(
+			PrewarmRuntime().prewarmWorkerThreadId.store(
 				GetCurrentThreadId(), std::memory_order_release);
 			PrewarmRuntime().transactionRestartPending = false;
 			PrewarmRuntime().session.transactionRestarts = PrewarmRuntime().transactionRestartCount;
@@ -370,9 +386,9 @@ namespace fonthook::vectorfont
 				if (g_configs.empty())
 				{
 					EndAtlasOnlyPrewarmPolicy();
-					HideNativePrewarmOverlay();
 					PrewarmRuntime().rebuildProgressTracked = false;
 					PrewarmRuntime().rebuildProgressReportingStarted = false;
+					PrewarmRuntime().rebuildProgressOverlayVisible = false;
 					PrewarmRuntime().rebuildProgress = 0.0f;
 					TransitionPrewarmPhase(PrewarmPhase::Idle);
 				}

@@ -2,6 +2,18 @@
 #include <share.h>
 #include <shlobj.h>
 #include <filesystem>
+#include <mutex>
+
+namespace
+{
+	std::recursive_mutex& DebugLogMutex()
+	{
+		// The logger is used by process-lifetime plugin globals. Keep the lock alive
+		// through static teardown instead of depending on cross-TU destruction order.
+		static std::recursive_mutex* mutex = new std::recursive_mutex;
+		return *mutex;
+	}
+}
 
 std::FILE* IDebugLog::logFile = NULL;
 char				IDebugLog::sourceBuf[16] = { 0 };
@@ -27,12 +39,15 @@ IDebugLog::IDebugLog(const char* name)
 
 IDebugLog::~IDebugLog()
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	if (logFile)
 		fclose(logFile);
+	logFile = nullptr;
 }
 
 void IDebugLog::Open(const char* path)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	logFile = _fsopen(path, "w", _SH_DENYWR);
 
 	if (!logFile)
@@ -53,6 +68,7 @@ void IDebugLog::Open(const char* path)
 
 void IDebugLog::OpenRelative(int folderID, const char* relPath)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	char path[MAX_PATH];
 
 	// Wtf even is this
@@ -73,6 +89,7 @@ void IDebugLog::OpenRelative(int folderID, const char* relPath)
  */
 void IDebugLog::Message(const char* message, const char* source)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	if (source)
 		SetSource(source);
 
@@ -99,6 +116,7 @@ void IDebugLog::Message(const char* message, const char* source)
  */
 void IDebugLog::FormattedMessage(const char* fmt, ...)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	va_list	argList;
 
 	va_start(argList, fmt);
@@ -115,12 +133,14 @@ void IDebugLog::FormattedMessage(const char* fmt, ...)
  */
 void IDebugLog::FormattedMessage(const char* fmt, va_list args)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	vsprintf_s(formatBuf, sizeof(formatBuf), fmt, args);
 	Message(formatBuf);
 }
 
 void IDebugLog::Log(LogLevel level, const char* fmt, va_list args)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	bool	log = (level <= logLevel);
 	bool	print = (level <= printLevel);
 
@@ -139,6 +159,7 @@ void IDebugLog::Log(LogLevel level, const char* fmt, va_list args)
  */
 void IDebugLog::SetSource(const char* source)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	strcpy_s(sourceBuf, sizeof(sourceBuf), source);
 	strcpy_s(headerText, sizeof(headerText), "[        ]\t");
 
@@ -154,6 +175,7 @@ void IDebugLog::SetSource(const char* source)
  */
 void IDebugLog::ClearSource(void)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	sourceBuf[0] = 0;
 }
 
@@ -162,6 +184,7 @@ void IDebugLog::ClearSource(void)
  */
 void IDebugLog::Indent(void)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	indentLevel++;
 }
 
@@ -170,6 +193,7 @@ void IDebugLog::Indent(void)
  */
 void IDebugLog::Outdent(void)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	if (indentLevel)
 		indentLevel--;
 }
@@ -179,6 +203,7 @@ void IDebugLog::Outdent(void)
  */
 void IDebugLog::OpenBlock(void)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	SeekCursor(indentLevel * 4);
 
 	PrintText(headerText);
@@ -191,6 +216,7 @@ void IDebugLog::OpenBlock(void)
  */
 void IDebugLog::CloseBlock(void)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	inBlock = 0;
 }
 
@@ -201,6 +227,7 @@ void IDebugLog::CloseBlock(void)
  */
 void IDebugLog::SetAutoFlush(bool inAutoFlush)
 {
+	std::lock_guard<std::recursive_mutex> lock(DebugLogMutex());
 	autoFlush = inAutoFlush;
 }
 

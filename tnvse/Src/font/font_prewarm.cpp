@@ -7,56 +7,6 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_prewarm
 	{
-		enum class LoadingThreadAtlasRequestState : UInt8
-		{
-			Idle,
-			Queued,
-			Executing,
-			Completed,
-		};
-
-		struct LoadingThreadAtlasRequest
-		{
-			std::mutex mutex;
-			LoadingThreadAtlasRequestState state =
-				LoadingThreadAtlasRequestState::Idle;
-			PrewarmAtlasRequestKind kind =
-				PrewarmAtlasRequestKind::LoadSnapshot;
-			UInt64 nextToken = 1;
-			UInt64 token = 0;
-			UInt32 fontId = 0;
-			float rasterScale = 1.0f;
-			DWORD loadingThreadId = 0;
-			ULONGLONG queuedAt = 0;
-			ULONGLONG executingAt = 0;
-			ULONGLONG completedAt = 0;
-			bool succeeded = false;
-			bool memoryPressure = false;
-			std::array<char, 160> error{};
-		};
-		thread_local bool s_servicingLoadingThreadAtlasRequest = false;
-
-		LoadingThreadAtlasRequest& AtlasRequest()
-		{
-			static LoadingThreadAtlasRequest request;
-			return request;
-		}
-
-		const char* PrewarmAtlasRequestKindName(PrewarmAtlasRequestKind kind)
-		{
-			switch (kind)
-			{
-			case PrewarmAtlasRequestKind::LoadSnapshot:
-				return "load-snapshot";
-			case PrewarmAtlasRequestKind::LoadSharedDoubleByteRole:
-				return "load-shared-double-byte-role";
-			case PrewarmAtlasRequestKind::RebuildPublishedSnapshot:
-				return "rebuild-published-snapshot";
-			default:
-				return "unknown";
-			}
-		}
-
 		PrewarmRuntimeState& PrewarmRuntime()
 		{
 			static PrewarmRuntimeState state;
@@ -68,238 +18,34 @@ namespace fonthook::vectorfont
 			thread_local PrewarmThreadState state;
 			return state;
 		}
-
-		bool ExecutePrewarmAtlasRequestOnLoadingThread(
-			PrewarmAtlasRequestKind kind, UInt32 fontId, float rasterScale,
-			PrewarmAtlasRequestResult& result)
-		{
-			result = {};
-			if (!InstallNativePrewarmOverlayLoadingThreadHook())
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: LoadingMenu atlas service unavailable operation=%s font=%u reason=hook-unavailable policy=abort-prewarm-and-continue-loading",
-					PrewarmAtlasRequestKindName(kind), fontId);
-				return false;
-			}
-
-			LoadingThreadAtlasRequest& request = AtlasRequest();
-			UInt64 token = 0;
-			const ULONGLONG queuedAt = GetTickCount64();
-			{
-				std::lock_guard<std::mutex> lock(request.mutex);
-				if (request.state != LoadingThreadAtlasRequestState::Idle)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: LoadingMenu atlas service unavailable operation=%s font=%u reason=request-already-active state=%u policy=abort-prewarm-and-continue-loading",
-						PrewarmAtlasRequestKindName(kind), fontId,
-						static_cast<UInt32>(request.state));
-					return false;
-				}
-				token = request.nextToken++;
-				if (!request.nextToken)
-					request.nextToken = 1;
-				request.token = token;
-				request.kind = kind;
-				request.fontId = fontId;
-				request.rasterScale = rasterScale;
-				request.loadingThreadId = 0;
-				request.queuedAt = queuedAt;
-				request.executingAt = 0;
-				request.completedAt = 0;
-				request.succeeded = false;
-				request.memoryPressure = false;
-				request.error.fill('\0');
-				request.state = LoadingThreadAtlasRequestState::Queued;
-			}
-
-			for (;;)
-			{
-				bool completed = false;
-				bool dispatchTimedOut = false;
-				DWORD loadingThreadId = 0;
-				std::array<char, 160> error{};
-				{
-					std::lock_guard<std::mutex> lock(request.mutex);
-					if (request.token != token)
-						return false;
-					const ULONGLONG now = GetTickCount64();
-					if (request.state == LoadingThreadAtlasRequestState::Completed)
-					{
-						result.succeeded = request.succeeded;
-						result.memoryPressure = request.memoryPressure;
-						result.queueMs = request.executingAt >= request.queuedAt
-							? request.executingAt - request.queuedAt : 0;
-						result.executionMs = request.completedAt >= request.executingAt
-							? request.completedAt - request.executingAt : 0;
-						loadingThreadId = request.loadingThreadId;
-						error = request.error;
-						request.state = LoadingThreadAtlasRequestState::Idle;
-						completed = true;
-					}
-					else if (request.state == LoadingThreadAtlasRequestState::Queued
-						&& now - request.queuedAt
-							>= kLoadingThreadAtlasDispatchTimeoutMs)
-					{
-						request.state = LoadingThreadAtlasRequestState::Idle;
-						dispatchTimedOut = true;
-					}
-				}
-
-				if (completed)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: LoadingMenu atlas service completed operation=%s font=%u hostThread=%lu loadingThread=%lu queueMs=%llu executeMs=%llu result=%s memoryPressure=%u error=%s",
-						PrewarmAtlasRequestKindName(kind), fontId,
-						static_cast<unsigned long>(GetCurrentThreadId()),
-						static_cast<unsigned long>(loadingThreadId),
-						static_cast<unsigned long long>(result.queueMs),
-						static_cast<unsigned long long>(result.executionMs),
-						result.succeeded ? "complete" : "failed",
-						result.memoryPressure ? 1u : 0u,
-						error[0] ? error.data() : "none");
-					return true;
-				}
-				if (dispatchTimedOut)
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: LoadingMenu atlas service dispatch timed out operation=%s font=%u waitMs=%llu policy=cancel-unstarted-request-and-continue-loading",
-						PrewarmAtlasRequestKindName(kind), fontId,
-						static_cast<unsigned long long>(
-							GetTickCount64() - queuedAt));
-					return false;
-				}
-
-				ServiceFontPrewarmHostMessages();
-				Sleep(1);
-			}
-		}
-
-		bool TryDispatchPrewarmAtlasRebuildToLoadingThread(
-			RuntimeFont& runtime, float rasterScale, bool& result)
-		{
-			result = false;
-			const DWORD hostThreadId = PrewarmRuntime().prewarmHostThreadId.load(
-				std::memory_order_acquire);
-			if (!PrewarmRuntime().prewarmActive.load(std::memory_order_acquire)
-				|| !hostThreadId || GetCurrentThreadId() != hostThreadId
-				|| s_servicingLoadingThreadAtlasRequest)
-			{
-				return false;
-			}
-			PrewarmAtlasRequestResult requestResult;
-			const UInt32 fontId = GetRuntimeConfig(runtime).fontId;
-			if (!ExecutePrewarmAtlasRequestOnLoadingThread(
-					PrewarmAtlasRequestKind::RebuildPublishedSnapshot,
-					fontId, rasterScale, requestResult))
-			{
-				return true;
-			}
-			if (requestResult.memoryPressure)
-				MarkAtlasAllocationMemoryPressure();
-			result = requestResult.succeeded;
-			return true;
-		}
-
-		void ServiceFontPrewarmLoadingThread()
-		{
-			if (s_servicingLoadingThreadAtlasRequest)
-				return;
-			LoadingThreadAtlasRequest& request = AtlasRequest();
-			PrewarmAtlasRequestKind kind = PrewarmAtlasRequestKind::LoadSnapshot;
-			UInt64 token = 0;
-			UInt32 fontId = 0;
-			float rasterScale = 1.0f;
-			{
-				std::lock_guard<std::mutex> lock(request.mutex);
-				if (request.state != LoadingThreadAtlasRequestState::Queued)
-					return;
-				request.state = LoadingThreadAtlasRequestState::Executing;
-				request.loadingThreadId = GetCurrentThreadId();
-				request.executingAt = GetTickCount64();
-				kind = request.kind;
-				token = request.token;
-				fontId = request.fontId;
-				rasterScale = request.rasterScale;
-			}
-
-			s_servicingLoadingThreadAtlasRequest = true;
-			struct ResetServiceFlag
-			{
-				bool& flag;
-				~ResetServiceFlag() { flag = false; }
-			} resetServiceFlag{ s_servicingLoadingThreadAtlasRequest };
-			bool succeeded = false;
-			bool memoryPressure = false;
-			std::array<char, 160> error{};
-			ResetAtlasAllocationMemoryPressure();
-			try
-			{
-				RuntimeFont* runtime = FindRuntimeFont(fontId);
-				if (!runtime)
-				{
-					strcpy_s(error.data(), error.size(), "runtime-unavailable");
-				}
-				else
-				{
-					switch (kind)
-					{
-					case PrewarmAtlasRequestKind::LoadSnapshot:
-						succeeded = TryLoadGloballyRepackedGlyphAtlasSnapshot(
-							*runtime, rasterScale);
-						break;
-					case PrewarmAtlasRequestKind::LoadSharedDoubleByteRole:
-						succeeded = TryLoadGloballyRepackedGlyphAtlasSnapshotRole(
-							*runtime, VectorFontByteClass::DoubleByte, rasterScale);
-						break;
-					case PrewarmAtlasRequestKind::RebuildPublishedSnapshot:
-						succeeded = RebuildGlyphAtlasFromSnapshot(
-							*runtime, rasterScale);
-						break;
-					}
-				}
-			}
-			catch (const std::bad_alloc&)
-			{
-				memoryPressure = true;
-				strcpy_s(error.data(), error.size(), "bad-alloc");
-			}
-			catch (const std::exception& exception)
-			{
-				strncpy_s(error.data(), error.size(), exception.what(), _TRUNCATE);
-			}
-			catch (...)
-			{
-				strcpy_s(error.data(), error.size(), "unknown-exception");
-			}
-			memoryPressure = ConsumeAtlasAllocationMemoryPressure()
-				|| memoryPressure;
-
-			{
-				std::lock_guard<std::mutex> lock(request.mutex);
-				if (request.state != LoadingThreadAtlasRequestState::Executing
-					|| request.token != token)
-				{
-					return;
-				}
-				request.succeeded = succeeded;
-				request.memoryPressure = memoryPressure;
-				request.error = error;
-				request.completedAt = GetTickCount64();
-				request.state = LoadingThreadAtlasRequestState::Completed;
-			}
-		}
-
 	}
 
-	bool TryDispatchPrewarmAtlasRebuildToLoadingThread(
+	bool TryDispatchPrewarmAtlasRebuildToMainThread(
 		RuntimeFont& runtime, float rasterScale, bool& result)
 	{
-		return implementation::font_prewarm::
-			TryDispatchPrewarmAtlasRebuildToLoadingThread(
-				runtime, rasterScale, result);
+		result = false;
+		const DWORD workerThreadId = PrewarmRuntime().prewarmWorkerThreadId.load(
+			std::memory_order_acquire);
+		if (!PrewarmRuntime().prewarmActive.load(std::memory_order_acquire)
+			|| !workerThreadId || GetCurrentThreadId() != workerThreadId)
+		{
+			return false;
+		}
+		PrewarmAtlasRequestResult requestResult;
+		const UInt32 fontId = GetRuntimeConfig(runtime).fontId;
+		if (!ExecutePrewarmAtlasRequestOnMainThread(
+				PrewarmAtlasRequestKind::RebuildPublishedSnapshot,
+				fontId, rasterScale, requestResult))
+		{
+			return true;
+		}
+		if (requestResult.memoryPressure)
+			MarkAtlasAllocationMemoryPressure();
+		result = requestResult.succeeded;
+		return true;
 	}
 
-	void QueueFontPrewarm(UInt32 fontId)
+	void implementation::font_prewarm::QueueFontPrewarmOwned(UInt32 fontId)
 	{
 		const FontConfig* config = FindConfig(fontId);
 		if (!config)
@@ -354,6 +100,11 @@ namespace fonthook::vectorfont
 			GetFontPrewarmRangeName(prewarmRange, codePage));
 	}
 
+	void QueueFontPrewarm(UInt32 fontId)
+	{
+		QueuePendingFontPrewarm(fontId);
+	}
+
 	void QueueConfiguredFontPrewarms()
 	{
 		if (PrewarmRuntime().configuredFontsQueued)
@@ -376,39 +127,16 @@ namespace fonthook::vectorfont
 					? !leftAlias : leftId < rightId;
 			});
 		for (UInt32 fontId : fontIds)
-			QueueFontPrewarm(fontId);
+			QueueFontPrewarmOwned(fontId);
 	}
 
 
 	void ServiceFontPrewarmHostMessages()
 	{
-		const DWORD hostThreadId = PrewarmRuntime().prewarmHostThreadId.load(
-			std::memory_order_acquire);
-		if (!hostThreadId
-			|| GetCurrentThreadId() != hostThreadId
-			|| PrewarmThread().servicingPrewarmMessages)
-		{
-			return;
-		}
-		PrewarmThread().servicingPrewarmMessages = true;
-		struct ResetFlag
-		{
-			bool& flag;
-			~ResetFlag() { flag = false; }
-		} reset{ PrewarmThread().servicingPrewarmMessages };
-		MSG windowMessage = {};
-		for (UInt32 count = 0; count < kMaximumHostMessagesPerService; ++count)
-		{
-			if (!PeekMessageW(&windowMessage, nullptr, 0, 0, PM_REMOVE))
-				break;
-			if (windowMessage.message == WM_QUIT)
-			{
-				PostQuitMessage(static_cast<int>(windowMessage.wParam));
-				break;
-			}
-			TranslateMessage(&windowMessage);
-			DispatchMessageW(&windowMessage);
-		}
+		// Long CPU/disk loops run on the below-normal-priority prewarm worker.
+		// Yield here so the blocked DeferredInit thread can continue pumping the
+		// native window queue and servicing serialized engine/D3D requests.
+		SwitchToThread();
 	}
 
 	FontPrewarmPumpStatus PumpFontPrewarmStep()
@@ -436,9 +164,9 @@ namespace fonthook::vectorfont
 					PrewarmRuntime().prewarmActive.store(
 						false, std::memory_order_release);
 					PrewarmRuntime().transactionRestartPending = false;
-					HideNativePrewarmOverlay();
 					PrewarmRuntime().rebuildProgressTracked = false;
 					PrewarmRuntime().rebuildProgressReportingStarted = false;
+					PrewarmRuntime().rebuildProgressOverlayVisible = false;
 					PrewarmRuntime().rebuildProgress = 0.0f;
 					return FontPrewarmPumpStatus::Idle;
 				}
@@ -480,6 +208,11 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupFlush:
 		{
 			const ULONGLONG started = GetTickCount64();
+			if (PrewarmRuntime().rebuildProgressOverlayVisible)
+			{
+				HideNativePrewarmOverlay();
+				PrewarmRuntime().rebuildProgressOverlayVisible = false;
+			}
 			StartRebuildProgressReporting();
 			ReportPrewarmTransactionProgress(
 				L"Finalizing generated font cache",
@@ -702,6 +435,7 @@ namespace fonthook::vectorfont
 			PruneRetiredPrewarmAtlasGenerations();
 			PrewarmRuntime().rebuildProgressTracked = false;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
+			PrewarmRuntime().rebuildProgressOverlayVisible = false;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			ReleaseFontPrewarmEmergencyAddressSpace();
 			PrewarmRuntime().configuredFontsPrewarmed = true;
@@ -709,7 +443,7 @@ namespace fonthook::vectorfont
 			PrewarmRuntime().transactionRestartPending = false;
 			PrewarmRuntime().transactionRestartCount = 0;
 			PrewarmRuntime().totalMemoryRetryCount = 0;
-			PrewarmRuntime().prewarmHostThreadId.store(
+			PrewarmRuntime().prewarmWorkerThreadId.store(
 				0, std::memory_order_release);
 			PrewarmRuntime().prewarmActive.store(
 				false, std::memory_order_release);
@@ -731,7 +465,7 @@ namespace fonthook::vectorfont
 
 	FontPrewarmPumpStatus PumpFontPrewarm()
 	{
-		if (PrewarmThread().prewarmPumpExecuting || PrewarmThread().servicingPrewarmMessages)
+		if (PrewarmThread().prewarmPumpExecuting)
 			return PrewarmRuntime().terminalPrewarmFailure
 				? FontPrewarmPumpStatus::Failed
 				: FontPrewarmPumpStatus::Active;
@@ -742,6 +476,11 @@ namespace fonthook::vectorfont
 		} resetPumpFlag;
 		try
 		{
+			// Runtime initialization can enqueue a font before the coordinator starts.
+			// Drain those requests inside the pump's exception boundary so allocation
+			// failures use the same bounded transaction-retry policy as every other
+			// prewarm state mutation.
+			DrainPendingFontPrewarms();
 			return PumpFontPrewarmStep();
 		}
 		catch (const std::bad_alloc&)
@@ -754,7 +493,7 @@ namespace fonthook::vectorfont
 				IncrementSaturating(PrewarmRuntime().totalMemoryRetryCount);
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm pump allocation exception intercepted; restarting inside the same loading barrier");
+				"tnvse_freetype_font: prewarm pump allocation exception intercepted; restarting on the worker coordinator inside the pre-entry barrier");
 			RetryPrewarmAfterPumpException(
 				"unhandled-allocation-exception");
 			return PrewarmRuntime().terminalPrewarmFailure
@@ -764,7 +503,7 @@ namespace fonthook::vectorfont
 		catch (const std::exception& error)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm pump exception intercepted type=std reason=%s; restarting inside the same loading barrier",
+				"tnvse_freetype_font: prewarm pump exception intercepted type=std reason=%s; restarting on the worker coordinator inside the pre-entry barrier",
 				error.what());
 			RetryPrewarmAfterPumpException(
 				"unhandled-standard-exception");
@@ -775,7 +514,7 @@ namespace fonthook::vectorfont
 		catch (...)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm pump unknown C++ exception intercepted; restarting inside the same loading barrier");
+				"tnvse_freetype_font: prewarm pump unknown C++ exception intercepted; restarting on the worker coordinator inside the pre-entry barrier");
 			RetryPrewarmAfterPumpException(
 				"unhandled-cpp-exception");
 			return PrewarmRuntime().terminalPrewarmFailure
@@ -820,25 +559,21 @@ namespace fonthook::vectorfont
 		PrewarmRuntime().totalMemoryRetryCount = 0;
 		PrewarmRuntime().terminalPrewarmFailure = false;
 		PrewarmRuntime().prewarmActive.store(false, std::memory_order_release);
-		PrewarmRuntime().prewarmHostThreadId.store(
+		PrewarmRuntime().prewarmWorkerThreadId.store(
 			0, std::memory_order_release);
 		HideNativePrewarmOverlay();
 		PrewarmRuntime().rebuildProgressTracked = false;
 		PrewarmRuntime().rebuildProgressReportingStarted = false;
+		PrewarmRuntime().rebuildProgressOverlayVisible = false;
 		PrewarmRuntime().rebuildProgress = 0.0f;
 	}
 }
 
 namespace fonthook
 {
-	void ServiceFreeTypeFontPrewarmHostMessages()
+	FontPrewarmPumpStatus RunFreeTypeFontPrewarmLoadingBarrier()
 	{
-		vectorfont::ServiceFontPrewarmHostMessages();
-	}
-
-	void ServiceFreeTypeFontPrewarmLoadingThread()
-	{
-		vectorfont::ServiceFontPrewarmLoadingThread();
+		return vectorfont::RunFontPrewarmLoadingBarrier();
 	}
 
 	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm()
@@ -853,6 +588,6 @@ namespace fonthook
 
 	void ShutdownFreeTypeFontPrewarm()
 	{
-		vectorfont::ShutdownFontPrewarm();
+		vectorfont::ShutdownFontPrewarmWorker();
 	}
 }

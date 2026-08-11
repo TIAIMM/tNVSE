@@ -84,7 +84,10 @@ namespace fonthook::vectorfont
 	// more of their available cores. ResolvePrewarmWorkerCount still leaves one
 	// logical processor free, and ResolveMemoryBoundedWorkerLimit may select fewer
 	// workers without relaxing the 24 MiB batch ceiling.
-	constexpr UInt32 kMaximumPrewarmRasterWorkers = 16;
+	// Background prewarm must not saturate every logical processor while the
+	// game and window message loop continue. Worker threads also run below normal
+	// priority; the coordinator itself consumes one of these slots.
+	constexpr UInt32 kMaximumPrewarmRasterWorkers = 4;
 	constexpr UInt32 kExpensivePrewarmParallelThreshold = 8;
 	constexpr UInt32 kFillPrewarmParallelThreshold = 64;
 	constexpr UInt32 kFillPrewarmWorkChunk = 8;
@@ -1115,8 +1118,11 @@ namespace fonthook::vectorfont
 	FontPrewarmPumpStatus PumpFontPrewarm();
 	void ServiceFontPrewarmHostMessages();
 	bool IsFontPrewarmActive();
-	bool TryDispatchPrewarmAtlasRebuildToLoadingThread(
+	bool TryDispatchPrewarmAtlasRebuildToMainThread(
 		RuntimeFont& arRuntime, float afRasterScale, bool& arResult);
+	FontPrewarmPumpStatus RunFontPrewarmLoadingBarrier();
+	bool IsFontPrewarmStopRequested();
+	void ShutdownFontPrewarmWorker();
 	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
 		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,

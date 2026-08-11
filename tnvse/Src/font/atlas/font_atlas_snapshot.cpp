@@ -905,7 +905,7 @@ namespace fonthook::vectorfont
 	bool RebuildGlyphAtlasFromSnapshot(RuntimeFont& runtime, float rasterScale)
 	{
 		bool dispatchedResult = false;
-		if (TryDispatchPrewarmAtlasRebuildToLoadingThread(
+		if (TryDispatchPrewarmAtlasRebuildToMainThread(
 				runtime, rasterScale, dispatchedResult))
 		{
 			return dispatchedResult;

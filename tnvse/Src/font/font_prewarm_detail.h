@@ -3,19 +3,21 @@
 #include "font_vector_internal.h"
 #include "font_render_route.h"
 #include "font_atlas_stream.h"
+#include "native_tile_overlay.h"
 
 #include "encoding.h"
 #include "load_config.h"
-#include "native_tile_overlay.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <condition_variable>
 #include <deque>
 #include <exception>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -28,10 +30,10 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		constexpr UInt32 kInitialIncrementalGlyphsPerBatch = 256;
 		constexpr UInt32 kParallelGlyphBatchFloor =
 			kFillPrewarmParallelThreshold;
-		// LoadingMenu consumes overlay snapshots independently at 10 Hz, so a
-		// longer raster batch does not stall presentation. Target roughly one
-		// second to amortize worker/FreeType setup and persistent-cache appends;
-		// the existing byte/headroom limits remain the authoritative ceiling.
+		// The coordinator runs below normal priority and yields between batches.
+		// Target roughly one second to amortize worker/FreeType setup and
+		// persistent-cache appends; the existing byte/headroom limits remain the
+		// authoritative ceiling.
 		constexpr ULONGLONG kTargetPrewarmBatchMs = 1000;
 		constexpr ULONGLONG kMinimumProgressUpdateIntervalMs = 100;
 		constexpr float kPrewarmFontWorkProgressShare = 0.86f;
@@ -50,8 +52,6 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		constexpr UInt32 kMaximumFontMemoryFailures = 12;
 		constexpr UInt32 kMaximumFontGenerationRestarts = 2;
 		constexpr UInt32 kMaximumTransactionRestarts = 2;
-		constexpr UInt32 kMaximumHostMessagesPerService = 32;
-		constexpr ULONGLONG kLoadingThreadAtlasDispatchTimeoutMs = 5000;
 		constexpr bool CanRetryAfterMemoryFailure(UInt32 failureCount,
 			UInt32 maximumFailures)
 		{
@@ -100,6 +100,7 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 			LoadSnapshot,
 			LoadSharedDoubleByteRole,
 			RebuildPublishedSnapshot,
+			PruneRetiredGenerations,
 		};
 
 		struct PrewarmAtlasRequestResult
@@ -217,16 +218,16 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		bool transactionRestartPending = false;
 		bool terminalPrewarmFailure = false;
 		std::atomic_bool prewarmActive{ false };
-		std::atomic<DWORD> prewarmHostThreadId{ 0 };
+		std::atomic<DWORD> prewarmWorkerThreadId{ 0 };
 		bool rebuildProgressTracked = false;
 		bool rebuildProgressReportingStarted = false;
+		bool rebuildProgressOverlayVisible = false;
 		float rebuildProgress = 0.0f;
 	};
 
 	struct PrewarmThreadState
 	{
 		bool prewarmPumpExecuting = false;
-		bool servicingPrewarmMessages = false;
 	};
 
 	PrewarmRuntimeState& PrewarmRuntime();
@@ -257,7 +258,7 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		UInt32 fontCount, UInt32 finishedFonts, const wchar_t* stage,
 		float stageProgress, bool force);
 	void ReportAtlasPrewarmProgress(FontAtlasPrewarmProgressStage stage,
-		UInt32 item, UInt32 total, void*);
+		UInt32 item, UInt32 total, void* context);
 	void FinishJob(const PrewarmJob& job, const char* status);
 	bool PublishSealedProfileAliases(UInt32 ownerFontId, float rasterScale);
 
@@ -280,10 +281,17 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 	void RecordPrewarmStep(ULONGLONG started);
 	void ReportPrewarmProcessMemoryState(const char* phase);
 	void PrepareIncrementalSession();
-	bool ExecutePrewarmAtlasRequestOnLoadingThread(
+	bool ExecutePrewarmAtlasRequestOnMainThread(
 		PrewarmAtlasRequestKind kind, UInt32 fontId, float rasterScale,
 		PrewarmAtlasRequestResult& result);
-	void ServiceFontPrewarmLoadingThread();
+	void QueueFontPrewarmOwned(UInt32 fontId);
+	void QueuePendingFontPrewarm(UInt32 fontId);
+	void DrainPendingFontPrewarms();
+	bool IsFontPrewarmStopRequested();
+	void StartFontPrewarmWorker();
+	void ServiceFontPrewarmMainThread();
+	FontPrewarmPumpStatus RunFontPrewarmLoadingBarrier();
+	void ShutdownFontPrewarmWorker();
 
 	void RestoreOnePrewarmSnapshot();
 	void BeginNextPrewarmFont();

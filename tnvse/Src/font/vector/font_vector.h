@@ -137,10 +137,10 @@ namespace fonthook
 		Failed,
 	};
 	FontPrewarmPumpStatus PumpFreeTypeFontPrewarm();
-	void ServiceFreeTypeFontPrewarmHostMessages();
-	// Called only by the verified LoadingMenu::Update call-site hook, after the
-	// original update and before LoadingMenu::ShowChanges.
-	void ServiceFreeTypeFontPrewarmLoadingThread();
+	// DeferredInit owns the pre-entry barrier. CPU and disk work stays on a
+	// below-normal-priority coordinator while the blocked game thread services
+	// engine/D3D publication and its window message queue.
+	FontPrewarmPumpStatus RunFreeTypeFontPrewarmLoadingBarrier();
 	bool IsFreeTypeFontPrewarmActive();
 	void ShutdownFreeTypeFontPrewarm();
 	void PumpFreeTypeFontPerformance();
