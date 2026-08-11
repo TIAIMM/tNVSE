@@ -1,5 +1,7 @@
 #include "native_tile_overlay_detail.h"
 
+#include "game_hooks.h"
+
 namespace fonthook
 {
 	namespace implementation::native_tile_overlay {}
@@ -520,15 +522,31 @@ namespace fonthook
 					command.sequence, std::memory_order_release);
 				return;
 			}
+			if (command.visible && !IsPrewarmOverlayMakeNodeRouteInstalled())
+			{
+				// Without ownership of the real deferred TileText::MakeNode boundary,
+				// displaying this overlay could re-enter virtual PrecacheGeometry while
+				// LoadingMenu owns the renderer/UI locks. Keep the blocking prewarm
+				// functional and fail closed only for its optional progress UI.
+				OverlayRuntime().prewarmConsumerDisabled.store(
+					true, std::memory_order_release);
+				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+				OverlayRuntime().prewarmConsumedSequence.store(
+					command.sequence, std::memory_order_release);
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: prewarm progress disabled because TileText::MakeNode legacy route is not the verified top-level owner; blocking font prewarm continues");
+				return;
+			}
 
 			try
 			{
 				// Cell Offset Generator keeps generation on workers and limits its
 				// foreground path to LoadingMenu progress presentation. This path
 				// additionally confines every Tile mutation to LoadingMenuThread
-				// and routes only that presentation through legacy FNT geometry.
-				// Prefab import and text refresh therefore cannot recursively enter
-				// the MTSDF transaction that produced this command.
+				// and routes synchronous presentation work through legacy FNT. The
+				// TileText::MakeNode hook independently scopes the deferred geometry
+				// call reached later from LoadingMenu::ShowChanges; both boundaries are
+				// required because RebuildTextGeometry only marks the node dirty here.
 				ScopedLegacyFntRenderRoute legacyFntRoute;
 				bool applied = true;
 				if (command.visible)

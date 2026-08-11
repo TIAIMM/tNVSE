@@ -4,9 +4,8 @@
 #include "load_config.h"
 #include "native_calls.h"
 
+#include "BSMemory.hpp"
 #include "NiDX9Renderer.hpp"
-#include "NiFixedString.hpp"
-#include "NiGlobalStringTable.hpp"
 #include "NiDX9TextureData.hpp"
 #include "NiTriShapeData.hpp"
 #include "Utils/SafeWrite.h"
@@ -27,6 +26,10 @@ namespace fonthook::vectorfont
 
 	namespace implementation::font_atlas_resource
 	{
+		inline constexpr SIZE_T kNiTexturingPropertyDefaultConstructor = 0xA6AA40;
+		inline constexpr SIZE_T kNiTexturingPropertyMapConstructor = 0xA69E00;
+		inline constexpr SIZE_T kSetBaseTextureEnabled = 0x60AEB0;
+
 		thread_local bool s_atlasAllocationMemoryPressure = false;
 		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
 	}
@@ -293,29 +296,55 @@ namespace fonthook::vectorfont
 		NiTexturingProperty* CreateDefaultTextureProperty(
 			IDirect3DTexture9*& d3dTexture, AtlasPixelMode mode)
 		{
-			DefaultAtlasTexture* texture = DefaultAtlasTexture::Create(d3dTexture, mode);
-			if (!texture)
+			if (!d3dTexture)
 				return nullptr;
-			d3dTexture = nullptr;
-			std::vector<UInt8> bootstrapPixels(4, 0u);
-			NiPixelDataPtr bootstrapData;
-			NiTexturingProperty* property = CreateManagedAtlasProperty(
-				1, 1, AtlasPixelMode::Argb32, 1, bootstrapPixels, bootstrapData);
-			if (!property || !property->m_kMaps.GetSize() || !property->m_kMaps[0])
+
+			// Reserve both raw shells before constructing any Gamebryo object. This
+			// makes every allocation failure recoverable without invoking a
+			// NiObjectNET destructor while LoadingMenu may own the UI/ref-array lock.
+			auto* propertyStorage = static_cast<NiTexturingProperty*>(
+				NiMemObject::operator new(sizeof(NiTexturingProperty)));
+			if (!propertyStorage)
+				return nullptr;
+			auto* mapStorage = static_cast<NiTexturingProperty::Map*>(
+				BSNew(sizeof(NiTexturingProperty::Map)));
+			if (!mapStorage)
 			{
-				texture->DeleteThis();
+				NiMemObject::operator delete(
+					propertyStorage, sizeof(NiTexturingProperty));
 				return nullptr;
 			}
-			NiTexturingProperty::Map* map = property->m_kMaps[0];
-			texture->IncRefCount();
-			NiTexture* oldTexture = map->m_spTexture;
-			map->m_spTexture = texture;
-			if (oldTexture)
-				oldTexture->DecRefCount();
+
+			DefaultAtlasTexture* texture = DefaultAtlasTexture::Create(d3dTexture, mode);
+			if (!texture)
+			{
+				BSFree(mapStorage);
+				NiMemObject::operator delete(
+					propertyStorage, sizeof(NiTexturingProperty));
+				return nullptr;
+			}
+			d3dTexture = nullptr;
+
+			// Retail NiTexturingProperty::NiTexturingProperty at 0xA6AA40 creates
+			// the nine-slot map array without a texture/pixel-data graph. Retail
+			// NiTexturingProperty::Map::Map at 0xA69E00 receives
+			// (texture, lowFlags=0, maxAnisotropy=3, mapType=1, transform=null) and
+			// takes the sole NiTexture reference. Publishing this direct shell avoids
+			// the former 1x1 managed-bootstrap texture swap and its synchronous
+			// temporary NiObjectNET destruction.
+			ThisStdCall<void>(kNiTexturingPropertyDefaultConstructor,
+				propertyStorage);
+			ThisStdCall<void>(kNiTexturingPropertyMapConstructor,
+				mapStorage, static_cast<NiTexture*>(texture), 0, 3, 1,
+				static_cast<NiTextureTransform*>(nullptr));
+			propertyStorage->m_kMaps.SetAt(0, mapStorage);
+			ThisStdCall<void>(kSetBaseTextureEnabled, propertyStorage, 1);
+
+			NiTexturingProperty::Map* map = mapStorage;
 			map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
 				| (NiTexturingProperty::FILTER_TRILERP << 2)
 				| NiTexturingProperty::CLAMP_S_CLAMP_T);
-			return property;
+			return propertyStorage;
 		}
 
 		bool CreateDefaultPoolAtlas(AtlasResource& resource, AtlasPixelMode requestedMode)

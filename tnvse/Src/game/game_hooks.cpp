@@ -760,6 +760,27 @@ namespace fonthook
 				|| _stricmp(name, "VUI+Outline") == 0;
 		}
 
+		bool IsPrewarmOverlayText(const TileText* tile)
+		{
+			// LoadingMenu applies Tile changes during its locked traversal, but
+			// TileText::MakeNode is deferred until ShowChanges. Identify only the
+			// tNVSE prewarm subtree at that real geometry boundary so its text cannot
+			// enter the FreeType virtual PrecacheGeometry route while LoadingMenu owns
+			// the renderer/UI locks. The bounded walk also fails closed on a corrupt
+			// or cyclic parent chain.
+			constexpr UInt32 kMaximumParentDepth = 32;
+			const Tile* current = tile;
+			for (UInt32 depth = 0;
+				current && depth < kMaximumParentDepth;
+				++depth, current = current->pParent)
+			{
+				const char* name = current->strName.c_str();
+				if (name && _stricmp(name, "tNVSE_Prewarm") == 0)
+					return true;
+			}
+			return false;
+		}
+
 		class ScopedEffectSuppression
 		{
 		public:
@@ -803,10 +824,23 @@ namespace fonthook
 			const bool suppress = IsVuiEffectProxy(tile);
 			Font* font = suppress ? ResolveVuiEffectProxyFont(tile) : nullptr;
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
+			const bool useLegacyPrewarmRoute = IsPrewarmOverlayText(tile);
 
 			ScopedEffectSuppression scope(suppress);
 			ScopedVuiProxyMeasureOnly measureOnly(replaceProxy);
-			NiNode* node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+			NiNode* node = nullptr;
+			if (useLegacyPrewarmRoute)
+			{
+				// This scope must cover the actual deferred MakeNode call. A scope
+				// around SetText/RebuildTextGeometry ends before LoadingMenu reaches
+				// ShowChanges and therefore cannot protect this boundary.
+				ScopedLegacyFntRenderRoute legacyFntRoute;
+				node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+			}
+			else
+			{
+				node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+			}
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);
@@ -1025,6 +1059,23 @@ namespace fonthook
 	{
 		return s_fontHookInstallState.freeType
 			&& IsPublishedFontHookGraphCurrent();
+	}
+
+	bool IsPrewarmOverlayMakeNodeRouteInstalled()
+	{
+		if (!hook_identity::IsAccessibleRegion(
+			kTileTextMakeNodeVTableEntry, sizeof(SIZE_T), false))
+		{
+			return false;
+		}
+		const SIZE_T adapterHandler =
+			reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
+		return *reinterpret_cast<const SIZE_T*>(kTileTextMakeNodeVTableEntry)
+				== adapterHandler
+			&& s_tileTextMakeNode
+			&& reinterpret_cast<SIZE_T>(s_tileTextMakeNode) != adapterHandler
+			&& hook_identity::IsExecutableTarget(
+				reinterpret_cast<SIZE_T>(s_tileTextMakeNode));
 	}
 
 	bool IsFreeTypeEffectSuppressionActive()
