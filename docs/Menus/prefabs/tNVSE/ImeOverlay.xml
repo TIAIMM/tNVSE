@@ -1,12 +1,3 @@
-<!--
-	tNVSE native IME display menu.
-
-	Class 1079 is the high unused gap in the engine's valid 1001-1084 Menu
-	table and is supplied by tNVSE's chained Menu factory while this XML is
-	being parsed.  The non-stacking, non-targetable Menu keeps native
-	TileMenu ownership; tNVSE excludes its scene node only from the Pip-Boy
-	render-to-texture pass and restores it for normal screen composition.
--->
 <menu name="tNVSE_IME">
 	<class> 1079 </class>
 	<stackingtype> &does_not_stack; </stackingtype>
@@ -17,17 +8,17 @@
 	<width> 620 </width>
 	<height> 284 </height>
 	<x>
-		<copy src="screen" trait="width"/>
-		<sub src="me" trait="width"/>
+		<copy src="screen" trait="width" />
+		<sub src="me" trait="width" />
 		<div> 2 </div>
 		<max> 12 </max>
 	</x>
 	<y>
-		<copy src="screen" trait="height"/>
+		<copy src="screen" trait="height" />
 		<mul> 0.58 </mul>
 		<min>
-			<copy src="screen" trait="height"/>
-			<sub src="me" trait="height"/>
+			<copy src="screen" trait="height" />
+			<sub src="me" trait="height" />
 			<sub> 12 </sub>
 		</min>
 	</y>
@@ -51,29 +42,473 @@
 		<depth> 0 </depth>
 	</image>
 
-	<image name="tNVSE_IME_Highlight00"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>10</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight01"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>34</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight02"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>58</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight03"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>82</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight04"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>106</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight05"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>130</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight06"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>154</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight07"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>178</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
-	<image name="tNVSE_IME_Highlight08"><filename>Interface\Shared\solid.dds</filename><texatlas>Interface\InterfaceShared.tai</texatlas><zoom>&scale;</zoom><visible>&false;</visible><target>&false;</target><x>8</x><y>202</y><width>604</width><height>24</height><red>58</red><green>84</green><blue>126</blue><alpha>232</alpha><systemcolor>&nosystemcolor;</systemcolor><depth>1</depth></image>
+	<image name="tNVSE_IME_Highlight00">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>10</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
 
-	<!-- UIO applies numeric TileText zoom. The host writes row top, row height,
-	     visible-glyph top and visible-glyph height to user0..user3. XML centers
-	     the actual glyph ink rather than TileText's asymmetric line box:
-	     y = user0 + (user1 - user3) / 2 - user2. -->
-	<text name="tNVSE_IME_Line00"><visible>&false;</visible><target>&false;</target><x>10</x><user0>10</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line01"><visible>&false;</visible><target>&false;</target><x>10</x><user0>34</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line02"><visible>&false;</visible><target>&false;</target><x>10</x><user0>58</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line03"><visible>&false;</visible><target>&false;</target><x>10</x><user0>82</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line04"><visible>&false;</visible><target>&false;</target><x>10</x><user0>106</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line05"><visible>&false;</visible><target>&false;</target><x>10</x><user0>130</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line06"><visible>&false;</visible><target>&false;</target><x>10</x><user0>154</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line07"><visible>&false;</visible><target>&false;</target><x>10</x><user0>178</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line08"><visible>&false;</visible><target>&false;</target><x>10</x><user0>202</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line09"><visible>&false;</visible><target>&false;</target><x>10</x><user0>226</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
-	<text name="tNVSE_IME_Line10"><visible>&false;</visible><target>&false;</target><x>10</x><user0>250</user0><user1>24</user1><user2>0</user2><user3>24</user3><y><copy src="me" trait="user1"/><sub src="me" trait="user3"/><div>2</div><sub src="me" trait="user2"/><add src="me" trait="user0"/></y><font>1</font><zoom>80</zoom><string></string><wrapwidth>600</wrapwidth><justify>&left;</justify><systemcolor>&nosystemcolor;</systemcolor><red>230</red><green>230</green><blue>230</blue><alpha>255</alpha><depth>2</depth></text>
+	<image name="tNVSE_IME_Highlight01">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>34</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight02">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>58</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight03">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>82</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight04">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>106</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight05">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>130</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight06">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>154</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight07">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>178</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<image name="tNVSE_IME_Highlight08">
+		<filename>Interface\Shared\solid.dds</filename>
+		<texatlas>Interface\InterfaceShared.tai</texatlas>
+		<zoom>&scale;</zoom>
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>8</x>
+		<y>202</y>
+		<width>604</width>
+		<height>24</height>
+		<red>58</red>
+		<green>84</green>
+		<blue>126</blue>
+		<alpha>232</alpha>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<depth>1</depth>
+	</image>
+
+	<text name="tNVSE_IME_Line00">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>10</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line01">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>34</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line02">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>58</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line03">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>82</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line04">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>106</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line05">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>130</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line06">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>154</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line07">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>178</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line08">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>202</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line09">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>226</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
+
+	<text name="tNVSE_IME_Line10">
+		<visible>&false;</visible>
+		<target>&false;</target>
+		<x>10</x>
+		<user0>250</user0>
+		<user1>24</user1>
+		<user2>0</user2>
+		<user3>24</user3>
+		<y>
+			<copy src="me" trait="user1" />
+			<sub src="me" trait="user3" />
+			<div>2</div>
+			<sub src="me" trait="user2" />
+			<add src="me" trait="user0" />
+		</y>
+		<font>1</font>
+		<zoom>80</zoom>
+		<string></string>
+		<wrapwidth>600</wrapwidth>
+		<justify>&left;</justify>
+		<systemcolor>&nosystemcolor;</systemcolor>
+		<red>230</red>
+		<green>230</green>
+		<blue>230</blue>
+		<alpha>255</alpha>
+		<depth>2</depth>
+	</text>
 </menu>
