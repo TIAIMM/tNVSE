@@ -32,6 +32,16 @@ namespace fonthook::vectorfont
 
 		thread_local bool s_atlasAllocationMemoryPressure = false;
 		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
+
+		struct DefaultPoolPublicationThreadState
+		{
+			UInt32 depth = 0;
+			UInt64 deviceEpoch = 0;
+			IDirect3DDevice9* device = nullptr;
+			bool deviceMultithreaded = false;
+		};
+		thread_local DefaultPoolPublicationThreadState
+			s_defaultPoolPublicationThread;
 	}
 
 	void ResetAtlasAllocationMemoryPressure()
@@ -49,6 +59,176 @@ namespace fonthook::vectorfont
 		const bool result = s_atlasAllocationMemoryPressure;
 		s_atlasAllocationMemoryPressure = false;
 		return result;
+	}
+
+	DefaultPoolPublicationScope::DefaultPoolPublicationScope(bool enabled)
+		: m_enabled(enabled)
+	{
+		if (!enabled)
+		{
+			m_ready = true;
+			m_failureReason = "none";
+			return;
+		}
+
+		DefaultPoolPublicationThreadState& thread =
+			s_defaultPoolPublicationThread;
+		if (thread.depth)
+		{
+			++thread.depth;
+			m_ready = true;
+			m_deviceMultithreaded = thread.deviceMultithreaded;
+			m_deviceEpoch = thread.deviceEpoch;
+			m_device = thread.device;
+			m_failureReason = "none";
+			return;
+		}
+
+		AtlasState& state = State();
+		std::unique_lock<std::mutex> lock(
+			state.defaultPoolPublicationMutex);
+		if (state.defaultPoolResetInProgress
+			&& !state.defaultPoolPublicationCondition.wait_for(
+				lock, std::chrono::seconds(2), [&]
+				{
+					return !state.defaultPoolResetInProgress
+						|| state.defaultPoolShutdown;
+				}))
+		{
+			m_failureReason = "reset-in-progress";
+			return;
+		}
+		if (state.defaultPoolShutdown)
+		{
+			m_failureReason = "shutdown";
+			return;
+		}
+
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		m_device = renderer ? renderer->GetD3DDevice() : nullptr;
+		if (!m_device)
+		{
+			m_failureReason = "device-unavailable";
+			return;
+		}
+		D3DDEVICE_CREATION_PARAMETERS creation = {};
+		if (SUCCEEDED(m_device->GetCreationParameters(&creation)))
+		{
+			m_deviceMultithreaded =
+				(creation.BehaviorFlags & D3DCREATE_MULTITHREADED) != 0;
+		}
+
+		m_deviceEpoch = state.defaultPoolDeviceEpoch;
+		++state.defaultPoolActivePublications;
+		m_outermost = true;
+		m_ready = true;
+		m_failureReason = "none";
+		thread.depth = 1;
+		thread.deviceEpoch = m_deviceEpoch;
+		thread.device = m_device;
+		thread.deviceMultithreaded = m_deviceMultithreaded;
+	}
+
+	DefaultPoolPublicationScope::~DefaultPoolPublicationScope()
+	{
+		if (!m_enabled || !m_ready)
+			return;
+		DefaultPoolPublicationThreadState& thread =
+			s_defaultPoolPublicationThread;
+		if (!thread.depth)
+			return;
+		--thread.depth;
+		if (!m_outermost)
+			return;
+
+		AtlasState& state = State();
+		{
+			std::lock_guard<std::mutex> lock(
+				state.defaultPoolPublicationMutex);
+			if (state.defaultPoolActivePublications)
+				--state.defaultPoolActivePublications;
+		}
+		thread.deviceEpoch = 0;
+		thread.device = nullptr;
+		thread.deviceMultithreaded = false;
+		state.defaultPoolPublicationCondition.notify_all();
+	}
+
+	bool DefaultPoolPublicationScope::IsCurrent() const
+	{
+		if (!m_enabled)
+			return true;
+		if (!m_ready || !m_device)
+			return false;
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(
+			state.defaultPoolPublicationMutex);
+		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
+		return !state.defaultPoolShutdown
+			&& state.defaultPoolDeviceEpoch == m_deviceEpoch
+			&& renderer && renderer->GetD3DDevice() == m_device;
+	}
+
+	bool EnterDefaultPoolResetBarrier(bool beforeReset,
+		UInt32& waitedPublications, UInt64& deviceEpoch)
+	{
+		AtlasState& state = State();
+		std::unique_lock<std::mutex> lock(
+			state.defaultPoolPublicationMutex);
+		waitedPublications = 0;
+		if (state.defaultPoolShutdown)
+		{
+			deviceEpoch = state.defaultPoolDeviceEpoch;
+			return false;
+		}
+		if (beforeReset)
+		{
+			state.defaultPoolResetInProgress = true;
+			waitedPublications = state.defaultPoolActivePublications;
+			state.defaultPoolPublicationCondition.wait(lock, [&]
+			{
+				return !state.defaultPoolActivePublications
+					|| state.defaultPoolShutdown;
+			});
+			if (!state.defaultPoolShutdown)
+				++state.defaultPoolDeviceEpoch;
+		}
+		else if (!state.defaultPoolResetInProgress)
+		{
+			// Fail closed if a foreign reset route skipped the registered before
+			// callback. No publisher may enter until this rebuild phase completes.
+			state.defaultPoolResetInProgress = true;
+			++state.defaultPoolDeviceEpoch;
+		}
+		deviceEpoch = state.defaultPoolDeviceEpoch;
+		return !state.defaultPoolShutdown;
+	}
+
+	void LeaveDefaultPoolResetBarrier(bool beforeReset)
+	{
+		if (beforeReset)
+			return;
+		AtlasState& state = State();
+		{
+			std::lock_guard<std::mutex> lock(
+				state.defaultPoolPublicationMutex);
+			++state.defaultPoolDeviceEpoch;
+			state.defaultPoolResetInProgress = false;
+		}
+		state.defaultPoolPublicationCondition.notify_all();
+	}
+
+	void SetDefaultPoolPublicationShutdown(bool shutdown)
+	{
+		AtlasState& state = State();
+		{
+			std::lock_guard<std::mutex> lock(
+				state.defaultPoolPublicationMutex);
+			state.defaultPoolShutdown = shutdown;
+			state.defaultPoolResetInProgress = shutdown;
+			++state.defaultPoolDeviceEpoch;
+		}
+		state.defaultPoolPublicationCondition.notify_all();
 	}
 
 	void* DefaultAtlasTexture::s_vtable[41] = {};
@@ -685,8 +865,10 @@ namespace fonthook::vectorfont
 				retiredAtlases.begin(), retiredAtlases.end(),
 				[](const RetiredAtlasGeneration& retired)
 				{
-					return !retired.resource || !retired.resource->property
-						|| retired.resource->property->m_uiRefCount <= 1;
+					return !retired.resource
+						|| (retired.resource.use_count() == 1
+							&& (!retired.resource->property
+								|| retired.resource->property->m_uiRefCount <= 1));
 				}));
 			if (!releaseCount
 				|| releaseCount > retiredReleases.max_size()
@@ -709,8 +891,9 @@ namespace fonthook::vectorfont
 				retiredAtlases.end(), [&](RetiredAtlasGeneration& retired)
 			{
 				const bool releasable = !retired.resource
-					|| !retired.resource->property
-					|| retired.resource->property->m_uiRefCount <= 1;
+					|| (retired.resource.use_count() == 1
+						&& (!retired.resource->property
+							|| retired.resource->property->m_uiRefCount <= 1));
 				if (releasable && retired.resource)
 					retiredReleases.push_back(std::move(retired.resource));
 				return releasable;
@@ -1110,6 +1293,10 @@ namespace fonthook::vectorfont
 	void PruneRetiredAtlasGenerationsSafely()
 	{
 		AtlasState& state = State();
+		DefaultPoolPublicationScope releaseScope(
+			g_bEnableFreeTypeDefaultPoolAtlas);
+		if (!releaseScope.Ready() || !releaseScope.IsCurrent())
+			return;
 		RetiredAtlasReleaseList retiredReleases;
 		{
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
@@ -1130,6 +1317,28 @@ namespace fonthook::vectorfont
 		resource->pageContentHash = pageContentHash;
 		std::lock_guard<std::mutex> lock(State().atlasMutex);
 		State().atlasPageDedup.emplace(pageContentHash, resource);
+	}
+
+	void RegisterExternalDefaultPoolAtlas(
+		const std::shared_ptr<AtlasResource>& resource)
+	{
+		if (!resource || resource->backend != AtlasBackend::DefaultPool
+			|| !resource->property)
+		{
+			return;
+		}
+		AtlasState& state = State();
+		std::lock_guard<std::mutex> lock(state.atlasMutex);
+		const bool alreadyRegistered = std::any_of(
+			state.retiredAtlases.begin(), state.retiredAtlases.end(),
+			[&](const RetiredAtlasGeneration& retired)
+			{
+				return retired.resource.get() == resource.get();
+			});
+		if (!alreadyRegistered)
+			state.retiredAtlases.push_back({ resource });
+		state.defaultPoolMaintenancePending.store(
+			true, std::memory_order_release);
 	}
 
 		struct PendingAtlasPlacement

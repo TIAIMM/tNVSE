@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <list>
 #include <limits>
 #include <memory>
@@ -888,8 +889,17 @@ namespace fonthook::vectorfont
 		size_t atlasCacheBytes = 0;
 		std::mutex atlasMutex;
 		std::vector<RetiredAtlasGeneration> retiredAtlases;
+		// DEFAULT-pool textures can be constructed in a private shadow generation
+		// before atlasMutex publishes them.  A renderer Reset callback cannot find
+		// those objects in atlasCache yet, so it must first close this publication
+		// gate and wait for every shadow generation to commit or unwind.
+		std::mutex defaultPoolPublicationMutex;
+		std::condition_variable defaultPoolPublicationCondition;
+		UInt32 defaultPoolActivePublications = 0;
+		UInt64 defaultPoolDeviceEpoch = 1;
+		bool defaultPoolResetInProgress = false;
 		bool defaultPoolResetRegistered = false;
-		bool defaultPoolShutdown = false;
+		std::atomic<bool> defaultPoolShutdown = false;
 		std::atomic<bool> defaultPoolMaintenancePending = false;
 		bool budgetResolved = false;
 		size_t resolvedGpuBudgetBytes = 0;
@@ -1038,6 +1048,11 @@ namespace fonthook::vectorfont
 	void RefreshAtlasResourceCpuMemory(AtlasResource& resource);
 	void RegisterDefaultPoolAtlasPage(const std::shared_ptr<AtlasResource>& resource,
 		UInt64 pageContentHash);
+	// Keeps a DEFAULT resource owned only by external text geometry visible to
+	// device-reset and deferred-retirement walks until both the geometry-side
+	// shared owner and its NiTexturingProperty reference have drained.
+	void RegisterExternalDefaultPoolAtlas(
+		const std::shared_ptr<AtlasResource>& resource);
 	void CopyBitmapToAtlas(AtlasResource& resource, const GlyphBitmap& bitmap,
 		const AtlasRect& rect);
 
@@ -1056,6 +1071,12 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<std::shared_ptr<const GlyphBitmap>>& results);
 	bool BuildDirectGlyphAtlasTables(RuntimeFont& runtime, float rasterScale);
+	// Returns the exact immutable profile generation published by this build.
+	// Holding this reference lets a multi-font snapshot transaction survive a
+	// concurrent runtime-slot revocation without accepting invalidated tables.
+	bool BuildDirectGlyphAtlasTablesPinned(RuntimeFont& runtime,
+		float rasterScale,
+		std::shared_ptr<const SealedDirectFontProfile>& pinnedProfile);
 	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
 		const std::vector<GlyphBitmapRequest>& requests, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,

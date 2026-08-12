@@ -39,6 +39,36 @@ namespace fonthook::vectorfont
 			UInt64 candidateGpuBytes = 0;
 		};
 
+		struct PhysicalAtlasGroupMemberSource
+		{
+			UInt32 fontId = 0;
+			std::shared_ptr<const SealedDirectFontProfile> sealedProfile;
+		};
+
+		// Transaction-local strong owners for the immutable source generation.
+		// Runtime drawing may revoke a font's current slot while these sources
+		// remain valid; actual table/resource invalidation is still honored.
+		struct PhysicalAtlasGroupSourceSnapshot
+		{
+			std::vector<PhysicalAtlasGroupMemberSource> members;
+		};
+
+		struct SnapshotSaveDiagnostics
+		{
+			const char* stage = "not-started";
+			const char* reason = "none";
+			DWORD win32Error = ERROR_SUCCESS;
+			UInt32 resourceCount = 0;
+			UInt32 roleSourceCount = 0;
+			UInt32 pageCount = 0;
+			UInt32 aliasTargetCount = 0;
+			UInt32 aliasFileCount = 0;
+			UInt32 detailIndex = 0;
+			UInt64 placementCount = 0;
+			UInt64 sourceGpuBytes = 0;
+			UInt64 candidateGpuBytes = 0;
+		};
+
 		struct SnapshotPackingCaps
 		{
 			UInt32 singleByteMaximum = kSingleByteAtlasHardLimit;
@@ -125,14 +155,16 @@ namespace fonthook::vectorfont
 			std::vector<SnapshotPageData>& pages, UInt64& originalGpuBytes,
 			VectorFontByteClass packingByteClass,
 			size_t maximumAcceptedPages = 0,
-			bool emitDiagnostics = true);
+			bool emitDiagnostics = true,
+			SnapshotSaveDiagnostics* saveDiagnostics = nullptr);
 		bool DecodeAtlasSnapshotPixels(const AtlasSnapshotHeader& header,
 			const std::vector<AtlasSnapshotPlacement>& placements,
 			const UInt8* storedPixels, std::vector<UInt8>& pixels);
 		bool ReadSnapshotBytesExact(HANDLE file, void* destination, size_t size);
 		bool WriteRepackedSnapshotPixels(HANDLE file,
 			const SnapshotPageData& page, UInt64& payloadChecksum,
-			UInt64& writtenBytes);
+			UInt64& writtenBytes,
+			SnapshotSaveDiagnostics* saveDiagnostics = nullptr);
 		bool ReadSnapshotMetadata(const std::wstring& path,
 			AtlasSnapshotHeader& header,
 			std::vector<AtlasSnapshotPlacement>* placements,
@@ -152,5 +184,9 @@ namespace fonthook::vectorfont
 			physicalGroup = nullptr,
 		bool* physicalGroupFallback = nullptr,
 		implementation::font_atlas_snapshot::PhysicalAtlasGroupPreview*
-			physicalGroupPreview = nullptr);
+			physicalGroupPreview = nullptr,
+		implementation::font_atlas_snapshot::SnapshotSaveDiagnostics*
+			saveDiagnostics = nullptr,
+		const implementation::font_atlas_snapshot::
+			PhysicalAtlasGroupSourceSnapshot* physicalGroupSources = nullptr);
 }

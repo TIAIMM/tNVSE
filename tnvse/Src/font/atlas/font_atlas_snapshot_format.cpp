@@ -1081,8 +1081,19 @@ namespace fonthook::vectorfont
 		bool ValidateRepackedSnapshotSource(
 			const CompactAtlasSnapshot& snapshot,
 			std::vector<UInt8>& buffer,
-			RepackedSnapshotSource& result)
+			RepackedSnapshotSource& result,
+			const char** failureReason,
+			DWORD* failureError)
 		{
+			auto fail = [&](const char* reason,
+				DWORD error = ERROR_SUCCESS)
+			{
+				if (failureReason)
+					*failureReason = reason;
+				if (failureError)
+					*failureError = error;
+				return false;
+			};
 			result = {};
 			if (snapshot.sourceHeader.placementCount
 					!= snapshot.placements.size()
@@ -1098,7 +1109,7 @@ namespace fonthook::vectorfont
 				|| snapshot.sourceHeader.storedPixelBytes
 					> std::numeric_limits<size_t>::max())
 			{
-				return false;
+				return fail("source-header-incompatible");
 			}
 			const UInt64 placementBytes = static_cast<UInt64>(
 				snapshot.placements.size()) * sizeof(AtlasSnapshotPlacement);
@@ -1108,7 +1119,7 @@ namespace fonthook::vectorfont
 				|| snapshot.sourceHeader.storedPixelBytes
 					> std::numeric_limits<UInt64>::max() - payloadOffset)
 			{
-				return false;
+				return fail("source-payload-offset-overflow");
 			}
 
 			UInt64 hash = 1469598103934665603ull;
@@ -1117,7 +1128,7 @@ namespace fonthook::vectorfont
 				if (snapshot.pixels.size()
 						!= snapshot.sourceHeader.storedPixelBytes)
 				{
-					return false;
+					return fail("source-resident-pixel-size");
 				}
 				hash = HashAtlasBytes(snapshot.placements.data(),
 					snapshot.placements.size()
@@ -1125,33 +1136,36 @@ namespace fonthook::vectorfont
 				hash = HashAtlasBytes(snapshot.pixels.data(),
 					snapshot.pixels.size(), hash);
 				if (hash != snapshot.sourceHeader.payloadChecksum)
-					return false;
+					return fail("source-resident-checksum");
 				result.snapshot = &snapshot;
 				result.payloadOffset = payloadOffset;
 				return true;
 			}
 			if (snapshot.sourcePath.empty())
-				return false;
+				return fail("source-path-empty");
 			result.file = CreateFileW(snapshot.sourcePath.c_str(), GENERIC_READ,
 				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
 				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
 				nullptr);
 			if (result.file == INVALID_HANDLE_VALUE)
-				return false;
+				return fail("source-open", GetLastError());
 			LARGE_INTEGER fileSize = {};
-			if (!GetFileSizeEx(result.file, &fileSize) || fileSize.QuadPart < 0
+			if (!GetFileSizeEx(result.file, &fileSize))
+				return fail("source-file-size-query", GetLastError());
+			if (fileSize.QuadPart < 0
 				|| static_cast<UInt64>(fileSize.QuadPart)
 					!= payloadOffset + snapshot.sourceHeader.storedPixelBytes)
 			{
-				return false;
+				return fail("source-file-size-mismatch");
 			}
 			AtlasSnapshotHeader currentHeader = {};
 			if (!ReadSnapshotBytesExact(result.file, &currentHeader,
-					sizeof(currentHeader))
-				|| std::memcmp(&currentHeader, &snapshot.sourceHeader,
+					sizeof(currentHeader)))
+				return fail("source-header-read", GetLastError());
+			if (std::memcmp(&currentHeader, &snapshot.sourceHeader,
 					sizeof(currentHeader)) != 0)
 			{
-				return false;
+				return fail("source-header-mismatch");
 			}
 			if (buffer.size() != kRepackedSnapshotIoBufferBytes)
 				buffer.resize(kRepackedSnapshotIoBufferBytes);
@@ -1162,11 +1176,10 @@ namespace fonthook::vectorfont
 			{
 				const size_t chunk = static_cast<size_t>(std::min<UInt64>(
 					remainingPlacementBytes, buffer.size()));
-				if (!ReadSnapshotBytesExact(result.file, buffer.data(), chunk)
-					|| std::memcmp(buffer.data(), expectedPlacements, chunk) != 0)
-				{
-					return false;
-				}
+				if (!ReadSnapshotBytesExact(result.file, buffer.data(), chunk))
+					return fail("source-placement-read", GetLastError());
+				if (std::memcmp(buffer.data(), expectedPlacements, chunk) != 0)
+					return fail("source-placement-mismatch");
 				hash = HashAtlasBytes(buffer.data(), chunk, hash);
 				expectedPlacements += chunk;
 				remainingPlacementBytes -= chunk;
@@ -1177,13 +1190,13 @@ namespace fonthook::vectorfont
 				const size_t chunk = static_cast<size_t>(std::min<UInt64>(
 					remainingPixels, buffer.size()));
 				if (!ReadSnapshotBytesExact(result.file, buffer.data(), chunk))
-					return false;
+					return fail("source-pixel-validation-read", GetLastError());
 				hash = HashAtlasBytes(buffer.data(), chunk, hash);
 				remainingPixels -= chunk;
 				ServiceFontPrewarmHostMessages();
 			}
 			if (hash != snapshot.sourceHeader.payloadChecksum)
-				return false;
+				return fail("source-file-checksum");
 			result.snapshot = &snapshot;
 			result.payloadOffset = payloadOffset;
 			return true;
@@ -1191,12 +1204,27 @@ namespace fonthook::vectorfont
 
 		bool WriteRepackedSnapshotPixels(HANDLE file,
 			const SnapshotPageData& page, UInt64& payloadChecksum,
-			UInt64& pageContentHash)
+			UInt64& pageContentHash,
+			SnapshotSaveDiagnostics* saveDiagnostics)
 		{
+			auto fail = [&](const char* reason, size_t detailIndex = 0,
+				DWORD error = ERROR_SUCCESS)
+			{
+				if (saveDiagnostics)
+				{
+					saveDiagnostics->stage = "write-repacked-pixels";
+					saveDiagnostics->reason = reason;
+					saveDiagnostics->win32Error = error;
+					saveDiagnostics->detailIndex = static_cast<UInt32>(
+						std::min(detailIndex,
+							static_cast<size_t>(std::numeric_limits<UInt32>::max())));
+				}
+				return false;
+			};
 			if (file == INVALID_HANDLE_VALUE
 				|| page.pixelSources.size() != page.placements.size())
 			{
-				return false;
+				return fail("output-handle-or-source-count");
 			}
 			struct PageIdentity
 			{
@@ -1234,13 +1262,13 @@ namespace fonthook::vectorfont
 				if (!source.snapshot
 					|| source.destinationOffset != destinationOffset)
 				{
-					return false;
+					return fail("source-destination-offset", index);
 				}
 				const size_t expectedBytes =
 					static_cast<size_t>(placement.rect.width)
 						* placement.rect.height * bytesPerPixel;
 				if (source.bytes != expectedBytes)
-					return false;
+					return fail("source-glyph-byte-count", index);
 				pageContentHash = HashAtlasBytes(
 					&placement.rect, sizeof(placement.rect),
 					pageContentHash);
@@ -1252,10 +1280,14 @@ namespace fonthook::vectorfont
 				if (state == sourceStates.end())
 				{
 					RepackedSnapshotSource opened;
+					const char* sourceFailureReason = "source-validation";
+					DWORD sourceFailureError = ERROR_SUCCESS;
 					if (!ValidateRepackedSnapshotSource(
-							*source.snapshot, ioBuffer, opened))
+							*source.snapshot, ioBuffer, opened,
+							&sourceFailureReason, &sourceFailureError))
 					{
-						return false;
+						return fail(sourceFailureReason, index,
+							sourceFailureError);
 					}
 					sourceStates.push_back(std::move(opened));
 					state = std::prev(sourceStates.end());
@@ -1265,7 +1297,7 @@ namespace fonthook::vectorfont
 					|| source.bytes > source.snapshot->sourceHeader.pixelBytes
 						- source.sourceOffset)
 				{
-					return false;
+					return fail("source-range", index);
 				}
 				size_t remaining = source.bytes;
 				size_t sourceOffset = source.sourceOffset;
@@ -1274,12 +1306,12 @@ namespace fonthook::vectorfont
 					if (sourceOffset > std::numeric_limits<UInt64>::max()
 							- state->payloadOffset)
 					{
-						return false;
+						return fail("source-file-offset-overflow", index);
 					}
 					LARGE_INTEGER position = {};
 					position.QuadPart = state->payloadOffset + sourceOffset;
 					if (!SetFilePointerEx(state->file, position, nullptr, FILE_BEGIN))
-						return false;
+						return fail("source-seek", index, GetLastError());
 				}
 				while (remaining)
 				{
@@ -1290,7 +1322,7 @@ namespace fonthook::vectorfont
 						if (!ReadSnapshotBytesExact(
 								state->file, ioBuffer.data(), chunk))
 						{
-							return false;
+							return fail("source-read", index, GetLastError());
 						}
 						bytes = ioBuffer.data();
 					}
@@ -1304,7 +1336,8 @@ namespace fonthook::vectorfont
 						bytes, chunk, pageContentHash);
 					if (!WriteSequentialFileBytes(file, bytes, chunk))
 					{
-						return false;
+						return fail("destination-write", index,
+							GetLastError());
 					}
 					sourceOffset += chunk;
 					remaining -= chunk;
@@ -1312,8 +1345,13 @@ namespace fonthook::vectorfont
 				}
 				destinationOffset += source.bytes;
 			}
-			return destinationOffset == page.header.pixelBytes
-				&& SetEndOfFile(file) != FALSE;
+			if (destinationOffset != page.header.pixelBytes)
+				return fail("destination-byte-count-final",
+					page.pixelSources.size());
+			if (SetEndOfFile(file) == FALSE)
+				return fail("destination-set-eof", page.pixelSources.size(),
+					GetLastError());
+			return true;
 		}
 
 		bool IsSnapshotHeaderEnvelopeValid(const AtlasSnapshotHeader& header)

@@ -1,5 +1,8 @@
 #include "font_atlas_snapshot_internal.h"
 
+#include "font_atlas_nvtf_compat.h"
+#include "font_atlas_resource_internal.h"
+
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -35,6 +38,39 @@ namespace fonthook::vectorfont
 			return false;
 		if (!metadataOnly && TryReuseCompleteAtlasProfile(key))
 			return true;
+		const bool directDefaultPublication = !metadataOnly
+			&& g_bEnableFreeTypeDefaultPoolAtlas;
+		DefaultPoolPublicationScope publicationScope(
+			directDefaultPublication);
+		const NvtfTextureLockCompatibilityState lockCompatibility =
+			GetNvtfTextureLockCompatibilityState(true);
+		if (directDefaultPublication
+			&& (!publicationScope.Ready() || !publicationScope.IsCurrent()))
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: direct atlas shadow publication rejected font=%u role=%s reason=%s deviceEpoch=%llu",
+				key.fontId,
+				key.byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				publicationScope.Ready()
+					? "device-generation-changed"
+					: publicationScope.FailureReason(),
+				static_cast<unsigned long long>(
+					publicationScope.DeviceEpoch()));
+			return false;
+		}
+		if (directDefaultPublication && lockCompatibility.active
+			&& !publicationScope.DeviceIsMultithreaded())
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: direct atlas shadow publication rejected font=%u role=%s pattern=%s reason=d3d9-device-not-multithreaded policy=retain-current-generation",
+				key.fontId,
+				key.byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				lockCompatibility.exactMode2Pattern
+					? "nvtf-mode-2" : "partial-or-foreign");
+			return false;
+		}
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		std::vector<std::pair<AtlasCacheKey, std::shared_ptr<AtlasResource>>> pages;
@@ -196,6 +232,13 @@ namespace fonthook::vectorfont
 					&& expectsPlacedLevelZero;
 				if (compactDefaultEligible)
 				{
+					const UInt64 candidateGpuBytes = GetAtlasStorageBytes(
+						header.width, header.height, pageKey.pixelMode,
+						header.mipLevels);
+					LogNvtfMode2DirectAtlasPublication(
+						header.width, header.height, candidateGpuBytes,
+						publicationScope.DeviceIsMultithreaded(),
+						publicationScope.DeviceEpoch());
 					size_t packedBytes = 0;
 					if (!GetPlacedLevelZeroSnapshotBytes(compactSnapshot->placements,
 						header.width, header.height, pageKey.pixelMode, packedBytes)
@@ -280,6 +323,17 @@ namespace fonthook::vectorfont
 		}
 		if (pages.empty() || pages.size() != pageCount)
 			return false;
+		if (directDefaultPublication && !publicationScope.IsCurrent())
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: direct atlas shadow publication aborted before profile swap font=%u role=%s reason=device-generation-changed deviceEpoch=%llu policy=destroy-shadow-retain-current-generation",
+				key.fontId,
+				key.byteClass == VectorFontByteClass::DoubleByte
+					? "doubleByte" : "singleByte",
+				static_cast<unsigned long long>(
+					publicationScope.DeviceEpoch()));
+			return false;
+		}
 		UInt32 replacedPages = 0;
 		bool insertedAllPages = true;
 		{
@@ -297,9 +351,26 @@ namespace fonthook::vectorfont
 			if (metadataOnly)
 				InvalidateCompleteAtlasProfileLocked(state, profileKey);
 			const auto existingProfile = state.atlasProfiles.find(profileKey);
-			const std::vector<UInt16> existingPages = existingProfile
+			std::vector<UInt16> existingPages = existingProfile
 				!= state.atlasProfiles.end() ? existingProfile->second.pages
 				: std::vector<UInt16>();
+			// A previous interrupted profile-index update can leave a cache node
+			// whose page is absent from AtlasProfileIndex. Treat every target-key
+			// collision as part of the old generation before inserting anything;
+			// this makes all subsequent emplace operations non-conflicting while
+			// atlasMutex excludes demand publication.
+			for (const auto& page : pages)
+			{
+				if (state.atlasCache.find(page.first) != state.atlasCache.end()
+					&& std::find(existingPages.begin(), existingPages.end(),
+						page.first.pageIndex) == existingPages.end())
+				{
+					existingPages.push_back(page.first.pageIndex);
+				}
+			}
+			std::sort(existingPages.begin(), existingPages.end());
+			existingPages.erase(std::unique(existingPages.begin(),
+				existingPages.end()), existingPages.end());
 			for (UInt16 existingPageIndex : existingPages)
 			{
 				AtlasCacheKey existingKey = key;

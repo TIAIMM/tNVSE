@@ -685,8 +685,10 @@ namespace implementation::font_atlas_direct
 		}
 
 		bool PublishSealedDirectFontProfile(RuntimeFont& runtime,
-			float rasterScale)
+			float rasterScale,
+			std::shared_ptr<const SealedDirectFontProfile>& pinnedProfile)
 		{
+			pinnedProfile.reset();
 			const FontConfig& config = GetRuntimeConfig(runtime);
 			AtlasState& state = State();
 			std::shared_ptr<const SealedDirectFontProfile> published;
@@ -894,6 +896,9 @@ namespace implementation::font_atlas_direct
 					state, *published);
 			}
 			StoreRuntimeSealedDirectProfile(runtime, published);
+			// Preserve the exact generation even if a loading-overlay draw revokes
+			// the mutable runtime slot immediately after publication.
+			pinnedProfile = published;
 			state.directProfilesAvailable.store(
 				true, std::memory_order_release);
 			gLog.FormattedMessage(
@@ -912,8 +917,11 @@ namespace implementation::font_atlas_direct
 			return true;
 		}
 	}
-	bool BuildDirectGlyphAtlasTables(RuntimeFont& runtime, float rasterScale)
+	bool BuildDirectGlyphAtlasTablesPinned(RuntimeFont& runtime,
+		float rasterScale,
+		std::shared_ptr<const SealedDirectFontProfile>& pinnedProfile)
 	{
+		pinnedProfile.reset();
 		const bool single = BuildDirectGlyphAtlasTableRole(runtime,
 			VectorFontByteClass::SingleByte, rasterScale);
 		const bool doubleByte = !UsesDbcsTextLayout()
@@ -921,12 +929,21 @@ namespace implementation::font_atlas_direct
 				VectorFontByteClass::DoubleByte, rasterScale);
 		const bool complete = single && doubleByte;
 		if (!complete
-			|| !PublishSealedDirectFontProfile(runtime, rasterScale))
+			|| !PublishSealedDirectFontProfile(
+				runtime, rasterScale, pinnedProfile))
 		{
+			pinnedProfile.reset();
 			InvalidateSealedDirectFontProfile(runtime);
 			return false;
 		}
 		ReleaseSealedRuntimeFreeTypeState(runtime);
 		return true;
+	}
+
+	bool BuildDirectGlyphAtlasTables(RuntimeFont& runtime, float rasterScale)
+	{
+		std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
+		return BuildDirectGlyphAtlasTablesPinned(
+			runtime, rasterScale, pinnedProfile);
 	}
 }

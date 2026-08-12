@@ -1,5 +1,8 @@
 #include "font_atlas_snapshot_internal.h"
 
+#include "font_atlas_nvtf_compat.h"
+#include "font_atlas_resource_internal.h"
+
 #include "font_manager.h"
 #include "load_config.h"
 
@@ -23,11 +26,13 @@ namespace fonthook::vectorfont
 		{
 			PhysicalAtlasGroupMember member;
 			std::shared_ptr<AtlasResource> page;
+			std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
 		};
 
 		struct PhysicalPoolAtom
 		{
 			std::vector<PhysicalAtlasGroupMember> members;
+			std::vector<PhysicalAtlasGroupMemberSource> sources;
 			std::shared_ptr<AtlasResource> page;
 			UInt64 gpuBytes = 0;
 			bool restoredPoolV3 = false;
@@ -216,9 +221,11 @@ namespace fonthook::vectorfont
 		void LogPhysicalPoolMemberValidationFailure(const char* phase,
 			RuntimeFont& runtime, const PhysicalAtlasGroupMember& member,
 			float rasterScale, const char* reason, size_t roleIndex,
-			const std::shared_ptr<AtlasResource>& sharedPage)
+			const std::shared_ptr<AtlasResource>& sharedPage,
+			const std::shared_ptr<const SealedDirectFontProfile>& pinnedProfile)
 		{
-			const auto sealed = LoadRuntimeSealedDirectProfile(runtime);
+			const auto sealed = pinnedProfile
+				? pinnedProfile : LoadRuntimeSealedDirectProfile(runtime);
 			const UInt32 expectedScaleMilli =
 				std::isfinite(rasterScale) && rasterScale > 0.0f
 				? static_cast<UInt32>(std::lround(rasterScale * 1000.0f)) : 0;
@@ -329,6 +336,7 @@ namespace fonthook::vectorfont
 
 		bool ValidatePhysicalPoolMember(RuntimeFont& runtime,
 			const PhysicalAtlasGroupMember& member, float rasterScale,
+			const std::shared_ptr<const SealedDirectFontProfile>& sealed,
 			std::shared_ptr<AtlasResource>& sharedPage,
 			const char** failureReason = nullptr,
 			size_t* failureRoleIndex = nullptr)
@@ -342,8 +350,6 @@ namespace fonthook::vectorfont
 					*failureRoleIndex = roleIndex;
 				return false;
 			};
-			const std::shared_ptr<const SealedDirectFontProfile> sealed =
-				LoadRuntimeSealedDirectProfile(runtime);
 			if (!sealed)
 				return fail("sealed-profile-missing", kPhysicalPoolProfileRole);
 			if (!std::isfinite(rasterScale) || rasterScale <= 0.0f)
@@ -408,6 +414,62 @@ namespace fonthook::vectorfont
 			return sharedPage != nullptr;
 		}
 
+		bool CapturePhysicalPoolSources(const PhysicalAtlasGroup& pool,
+			float rasterScale, const char* phase,
+			PhysicalAtlasGroupSourceSnapshot& sources)
+		{
+			sources.members.clear();
+			sources.members.reserve(pool.members.size());
+			for (const PhysicalAtlasGroupMember& member : pool.members)
+			{
+				RuntimeFont* runtime = member.config
+					? EnsureRuntimeFont(member.config->fontId) : nullptr;
+				if (!runtime)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: physical atlas pool member validation failed phase=%s version=%u font=%u role=profile reason=runtime-missing",
+						phase ? phase : "unknown", kPhysicalAtlasPoolVersion,
+						member.config ? member.config->fontId : 0);
+					return false;
+				}
+
+				std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
+				if (!BuildDirectGlyphAtlasTablesPinned(
+						*runtime, rasterScale, pinnedProfile))
+				{
+					LogPhysicalPoolMemberValidationFailure(phase,
+						*runtime, member, rasterScale, "direct-table-build",
+						kPhysicalPoolProfileRole, {}, pinnedProfile);
+					return false;
+				}
+
+				std::shared_ptr<AtlasResource> ignoredPage;
+				const char* memberFailureReason = nullptr;
+				size_t memberFailureRole = kPhysicalPoolProfileRole;
+				if (!ValidatePhysicalPoolMember(*runtime, member, rasterScale,
+						pinnedProfile, ignoredPage, &memberFailureReason,
+						&memberFailureRole))
+				{
+					LogPhysicalPoolMemberValidationFailure(phase,
+						*runtime, member, rasterScale, memberFailureReason,
+						memberFailureRole, {}, pinnedProfile);
+					return false;
+				}
+				sources.members.push_back({
+					member.config->fontId, std::move(pinnedProfile) });
+			}
+			const bool complete =
+				sources.members.size() == pool.members.size();
+			if (complete)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas pool source generation pinned phase=%s version=%u members=%u policy=immutable-transaction-snapshot",
+					phase ? phase : "unknown", kPhysicalAtlasPoolVersion,
+					static_cast<UInt32>(sources.members.size()));
+			}
+			return complete;
+		}
+
 		bool CollectPhysicalPoolMemberStates(float rasterScale,
 			std::vector<PhysicalPoolMemberState>& states,
 			UInt32& skippedFonts)
@@ -428,6 +490,7 @@ namespace fonthook::vectorfont
 			{
 				PhysicalPoolMemberState state;
 				state.member.config = config;
+				std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
 				RuntimeFont* runtime = config
 					? EnsureRuntimeFont(config->fontId) : nullptr;
 				if (!config || !runtime
@@ -444,13 +507,15 @@ namespace fonthook::vectorfont
 					|| !SamePhysicalPoolStorageContract(
 						state.member.singleByteKey,
 						state.member.doubleByteKey)
-					|| !BuildDirectGlyphAtlasTables(*runtime, rasterScale)
+					|| !BuildDirectGlyphAtlasTablesPinned(
+						*runtime, rasterScale, pinnedProfile)
 					|| !ValidatePhysicalPoolMember(*runtime,
-						state.member, rasterScale, state.page))
+						state.member, rasterScale, pinnedProfile, state.page))
 				{
 					++skippedFonts;
 					continue;
 				}
+				state.pinnedProfile = std::move(pinnedProfile);
 				states.push_back(std::move(state));
 			}
 			return !states.empty();
@@ -492,6 +557,9 @@ namespace fonthook::vectorfont
 					atoms.push_back({});
 				PhysicalPoolAtom& atom = atoms[inserted.first->second];
 				atom.members.push_back(states[index].member);
+				atom.sources.push_back({
+					states[index].member.config->fontId,
+					states[index].pinnedProfile });
 				if (!atom.page)
 					atom.page = states[index].page;
 			}
@@ -517,8 +585,14 @@ namespace fonthook::vectorfont
 		}
 
 		bool RestorePhysicalPoolMembers(const PhysicalAtlasGroup& pool,
-			float rasterScale)
+			float rasterScale,
+			PhysicalAtlasGroupSourceSnapshot* restoredSources = nullptr)
 		{
+			if (restoredSources)
+			{
+				restoredSources->members.clear();
+				restoredSources->members.reserve(pool.members.size());
+			}
 			std::vector<std::pair<RuntimeFont*, bool>> runtimes;
 			runtimes.reserve(pool.members.size());
 			for (const PhysicalAtlasGroupMember& member : pool.members)
@@ -532,13 +606,30 @@ namespace fonthook::vectorfont
 			// replacement before publishing any member-local direct table, otherwise
 			// the next member revokes the table sealed for the previous member.
 			bool restored = true;
-			for (const auto& [runtime, rebuilt] : runtimes)
+			for (size_t memberIndex = 0; memberIndex < runtimes.size();
+				++memberIndex)
 			{
+				const auto& [runtime, rebuilt] = runtimes[memberIndex];
+				std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
 				if (!rebuilt || !runtime
-					|| !BuildDirectGlyphAtlasTables(*runtime, rasterScale))
+					|| !BuildDirectGlyphAtlasTablesPinned(
+						*runtime, rasterScale, pinnedProfile))
 				{
 					restored = false;
+					continue;
 				}
+				if (restoredSources)
+				{
+					restoredSources->members.push_back({
+						pool.members[memberIndex].config->fontId,
+						std::move(pinnedProfile) });
+				}
+			}
+			if (restoredSources
+				&& restoredSources->members.size() != pool.members.size())
+			{
+				restoredSources->members.clear();
+				restored = false;
 			}
 			return restored;
 		}
@@ -631,43 +722,14 @@ namespace fonthook::vectorfont
 		{
 			const PhysicalAtlasGroup& pool = candidate.pool;
 			RuntimeFont* ownerRuntime = EnsureRuntimeFont(pool.ownerFontId);
-			bool sourcesReady = ownerRuntime != nullptr;
-			for (const PhysicalAtlasGroupMember& member : pool.members)
-			{
-				RuntimeFont* runtime = EnsureRuntimeFont(member.config->fontId);
-				std::shared_ptr<AtlasResource> ignoredPage;
-				if (!runtime)
-				{
-					sourcesReady = false;
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: physical atlas pool member validation failed phase=pre-publish version=%u font=%u role=profile reason=runtime-missing",
-						kPhysicalAtlasPoolVersion,
-						member.config ? member.config->fontId : 0);
-					break;
-				}
-				if (!BuildDirectGlyphAtlasTables(*runtime, rasterScale))
-				{
-					sourcesReady = false;
-					LogPhysicalPoolMemberValidationFailure("pre-publish",
-						*runtime, member, rasterScale, "direct-table-build",
-						kPhysicalPoolProfileRole, {});
-					break;
-				}
-				const char* memberFailureReason = nullptr;
-				size_t memberFailureRole = kPhysicalPoolProfileRole;
-				if (!ValidatePhysicalPoolMember(*runtime, member, rasterScale,
-						ignoredPage, &memberFailureReason, &memberFailureRole))
-				{
-					sourcesReady = false;
-					LogPhysicalPoolMemberValidationFailure("pre-publish",
-						*runtime, member, rasterScale, memberFailureReason,
-						memberFailureRole, {});
-					break;
-				}
-			}
+			PhysicalAtlasGroupSourceSnapshot sourceSnapshot;
+			const bool sourcesReady = ownerRuntime
+				&& CapturePhysicalPoolSources(pool, rasterScale,
+					"pre-publish", sourceSnapshot);
 
 			bool published = false;
 			bool fallback = false;
+			SnapshotSaveDiagnostics saveDiagnostics;
 			PhysicalPoolDiskTransaction diskTransaction;
 			if (sourcesReady && !diskTransaction.Capture(pool))
 			{
@@ -678,10 +740,35 @@ namespace fonthook::vectorfont
 					diskTransaction.LastError());
 				return false;
 			}
+			const ULONGLONG saveBeginMs = GetTickCount64();
 			const bool saved = sourcesReady
 				&& SaveGlyphAtlasSnapshotRole(*ownerRuntime,
 					VectorFontByteClass::SingleByte, rasterScale,
-					&published, &pool, &fallback);
+					&published, &pool, &fallback, nullptr,
+					&saveDiagnostics, &sourceSnapshot);
+			const ULONGLONG saveElapsedMs = GetTickCount64() - saveBeginMs;
+			if (sourcesReady && !saved)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas pool snapshot save failed version=%u owner=%u members=%u stage=%s reason=%s win32Error=%lu detailIndex=%u resources=%u roleSources=%u pages=%u aliasTargets=%u aliasFiles=%u placements=%llu sourceGpuBytes=%llu candidateGpuBytes=%llu elapsedMs=%llu",
+					kPhysicalAtlasPoolVersion, pool.ownerFontId,
+					static_cast<UInt32>(pool.members.size()),
+					saveDiagnostics.stage, saveDiagnostics.reason,
+					saveDiagnostics.win32Error,
+					saveDiagnostics.detailIndex,
+					saveDiagnostics.resourceCount,
+					saveDiagnostics.roleSourceCount,
+					saveDiagnostics.pageCount,
+					saveDiagnostics.aliasTargetCount,
+					saveDiagnostics.aliasFileCount,
+					static_cast<unsigned long long>(
+						saveDiagnostics.placementCount),
+					static_cast<unsigned long long>(
+						saveDiagnostics.sourceGpuBytes),
+					static_cast<unsigned long long>(
+						saveDiagnostics.candidateGpuBytes),
+					static_cast<unsigned long long>(saveElapsedMs));
+			}
 			if (!saved || !published || fallback)
 			{
 				const bool diskRolledBack = sourcesReady
@@ -700,7 +787,46 @@ namespace fonthook::vectorfont
 				return false;
 			}
 
-			const bool rebuilt = RestorePhysicalPoolMembers(pool, rasterScale);
+			// CPU repacking and disk publication own no private DEFAULT resource.
+			// Enter the reset barrier only for the shadow D3D build, the complete
+			// member-profile handoff, validation, and any in-memory rollback.
+			DefaultPoolPublicationScope publicationScope;
+			const NvtfTextureLockCompatibilityState lockCompatibility =
+				GetNvtfTextureLockCompatibilityState(true);
+			if (!publicationScope.Ready() || !publicationScope.IsCurrent()
+				|| (lockCompatibility.active
+					&& !publicationScope.DeviceIsMultithreaded()))
+			{
+				const bool diskRolledBack = diskTransaction.Rollback();
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas pool direct publication skipped version=%u owner=%u members=%u pattern=%s reason=%s deviceMultithreaded=%u deviceEpoch=%llu diskRolledBack=%u policy=retain-current-generation",
+					kPhysicalAtlasPoolVersion, pool.ownerFontId,
+					static_cast<UInt32>(pool.members.size()),
+					lockCompatibility.active
+						? (lockCompatibility.exactMode2Pattern
+							? "nvtf-mode-2" : "partial-or-foreign")
+						: "stock-locks",
+					!publicationScope.Ready()
+						? publicationScope.FailureReason()
+						: lockCompatibility.active
+							&& !publicationScope.DeviceIsMultithreaded()
+								? "d3d9-device-not-multithreaded"
+								: "device-generation-changed",
+					publicationScope.DeviceIsMultithreaded() ? 1u : 0u,
+					static_cast<unsigned long long>(
+						publicationScope.DeviceEpoch()),
+					diskRolledBack ? 1u : 0u);
+				return false;
+			}
+			LogNvtfMode2DirectAtlasPublication(
+				candidate.preview.width, candidate.preview.height,
+				candidate.preview.candidateGpuBytes,
+				publicationScope.DeviceIsMultithreaded(),
+				publicationScope.DeviceEpoch());
+
+			PhysicalAtlasGroupSourceSnapshot restoredSources;
+			const bool rebuilt = RestorePhysicalPoolMembers(
+				pool, rasterScale, &restoredSources);
 			std::shared_ptr<AtlasResource> shared;
 			const char* failureReason = rebuilt ? "none" : "rebuild";
 			bool physicallyShared = false;
@@ -713,16 +839,24 @@ namespace fonthook::vectorfont
 			bool logicalProfilesReady = rebuilt && physicallyShared && shared;
 			if (logicalProfilesReady)
 			{
-				for (const PhysicalAtlasGroupMember& member : pool.members)
+				for (size_t memberIndex = 0;
+					memberIndex < pool.members.size(); ++memberIndex)
 				{
+					const PhysicalAtlasGroupMember& member =
+						pool.members[memberIndex];
 					RuntimeFont* runtime = EnsureRuntimeFont(
 						member.config->fontId);
+					const std::shared_ptr<const SealedDirectFontProfile>
+						pinnedProfile = memberIndex < restoredSources.members.size()
+							? restoredSources.members[memberIndex].sealedProfile
+							: nullptr;
 					std::shared_ptr<AtlasResource> memberPage;
 					const char* memberFailureReason = nullptr;
 					size_t memberFailureRole = kPhysicalPoolProfileRole;
 					const bool memberValid = runtime
 						&& ValidatePhysicalPoolMember(*runtime, member,
-							rasterScale, memberPage, &memberFailureReason,
+							rasterScale, pinnedProfile, memberPage,
+							&memberFailureReason,
 							&memberFailureRole);
 					const bool memberSharesPool = memberValid && memberPage
 						&& AreAtlasResourcesBackedBySameTexture(
@@ -743,7 +877,7 @@ namespace fonthook::vectorfont
 								memberValid ? static_cast<size_t>(
 									VectorFontByteClass::SingleByte)
 									: memberFailureRole,
-								validationReference);
+								validationReference, pinnedProfile);
 						}
 						else
 						{
@@ -997,6 +1131,8 @@ namespace fonthook::vectorfont
 				continue;
 			++candidatesTried;
 			std::vector<PhysicalAtlasGroupMember> members;
+			std::unordered_map<UInt32,
+				std::shared_ptr<const SealedDirectFontProfile>> sourceProfiles;
 			UInt64 subsetBaseline = 0;
 			for (size_t atomIndex = 0; atomIndex < atoms.size(); ++atomIndex)
 			{
@@ -1004,6 +1140,11 @@ namespace fonthook::vectorfont
 					continue;
 				members.insert(members.end(), atoms[atomIndex].members.begin(),
 					atoms[atomIndex].members.end());
+				for (const PhysicalAtlasGroupMemberSource& source :
+					atoms[atomIndex].sources)
+				{
+					sourceProfiles.emplace(source.fontId, source.sealedProfile);
+				}
 				if (atoms[atomIndex].gpuBytes > infinity - subsetBaseline)
 				{
 					subsetBaseline = infinity;
@@ -1033,11 +1174,27 @@ namespace fonthook::vectorfont
 				candidate.pool.ownerFontId);
 			bool ignoredPublished = false;
 			bool ignoredFallback = false;
+			PhysicalAtlasGroupSourceSnapshot previewSources;
+			previewSources.members.reserve(candidate.pool.members.size());
+			bool previewSourcesReady = true;
+			for (const PhysicalAtlasGroupMember& member : candidate.pool.members)
+			{
+				const auto source = sourceProfiles.find(
+					member.config->fontId);
+				if (source == sourceProfiles.end() || !source->second)
+				{
+					previewSourcesReady = false;
+					break;
+				}
+				previewSources.members.push_back({
+					member.config->fontId, source->second });
+			}
 			if (!ownerRuntime
+				|| !previewSourcesReady
 				|| !SaveGlyphAtlasSnapshotRole(*ownerRuntime,
 					VectorFontByteClass::SingleByte, rasterScale,
 					&ignoredPublished, &candidate.pool, &ignoredFallback,
-					&candidate.preview)
+					&candidate.preview, nullptr, &previewSources)
 				|| !candidate.preview.evaluated)
 			{
 				++previewFailures;
@@ -1060,7 +1217,6 @@ namespace fonthook::vectorfont
 				++nonSavingCandidates;
 				continue;
 			}
-
 			const int candidateIndex = static_cast<int>(candidates.size());
 			candidateIndices[mask] = candidateIndex;
 			subsetCosts[mask] = candidate.preview.candidateGpuBytes;
@@ -1182,6 +1338,13 @@ namespace fonthook::vectorfont
 			{
 				// Avoid accumulating retired source pools while the next selected
 				// one may still require a 256-MiB 8192x8192 target allocation.
+				DefaultPoolPublicationScope releaseScope(
+					g_bEnableFreeTypeDefaultPoolAtlas);
+				if (!releaseScope.Ready() || !releaseScope.IsCurrent())
+				{
+					success = false;
+					continue;
+				}
 				RetiredAtlasReleaseList retiredReleases;
 				{
 					std::lock_guard<std::mutex> lock(State().atlasMutex);
@@ -1193,6 +1356,10 @@ namespace fonthook::vectorfont
 			ServiceFontPrewarmHostMessages();
 		}
 		{
+			DefaultPoolPublicationScope releaseScope(
+				g_bEnableFreeTypeDefaultPoolAtlas);
+			if (!releaseScope.Ready() || !releaseScope.IsCurrent())
+				return false;
 			RetiredAtlasReleaseList retiredReleases;
 			{
 				std::lock_guard<std::mutex> lock(State().atlasMutex);

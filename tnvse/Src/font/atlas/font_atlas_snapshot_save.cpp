@@ -320,43 +320,35 @@ namespace fonthook::vectorfont
 			return view;
 		}
 
-		bool CollectRoleFilteredResourcesLocked(
+		bool CollectRoleFilteredResources(
 			const AtlasCacheKey& roleKey,
 			const DirectAtlasGlyphTable& directTable,
 			std::vector<std::pair<AtlasCacheKey,
 				std::shared_ptr<AtlasResource>>>& destination,
 			std::vector<std::shared_ptr<AtlasResource>>& physicalSources)
 		{
-			AtlasState& state = State();
-			const auto profile = state.atlasProfiles.find(
-				MakeAtlasProfileKey(roleKey));
-			if (profile == state.atlasProfiles.end()
-				|| profile->second.pages.empty()
-				|| directTable.pages.size()
-					!= profile->second.pages.size())
+			if (!directTable.validity
+				|| !directTable.validity->load(std::memory_order_acquire)
+				|| directTable.pages.empty()
+				|| directTable.pages.size() > kMaximumAtlasSnapshotPages)
 			{
 				return false;
 			}
-			UInt16 expectedPage = 0;
 			for (size_t pageSlot = 0;
-				pageSlot < profile->second.pages.size(); ++pageSlot)
+				pageSlot < directTable.pages.size(); ++pageSlot)
 			{
-				const UInt16 pageIndex =
-					profile->second.pages[pageSlot];
-				if (pageIndex != expectedPage++)
-					return false;
 				AtlasCacheKey pageKey = roleKey;
-				pageKey.pageIndex = pageIndex;
-				const auto page = state.atlasCache.find(pageKey);
-				if (page == state.atlasCache.end()
-					|| !page->second.resource)
+				pageKey.pageIndex = static_cast<UInt16>(pageSlot);
+				std::shared_ptr<AtlasResource> page =
+					directTable.pages[pageSlot].lock();
+				if (!page || !page->compactSnapshot)
 				{
 					return false;
 				}
-				physicalSources.push_back(page->second.resource);
+				physicalSources.push_back(page);
 				std::shared_ptr<AtlasResource> view =
 					CreateRoleFilteredAtlasView(
-						*page->second.resource,
+						*page,
 						directTable,
 						static_cast<UInt16>(pageSlot));
 				if (!view)
@@ -373,8 +365,29 @@ namespace fonthook::vectorfont
 		bool* jointRolePublished,
 		const PhysicalAtlasGroup* physicalGroup,
 		bool* physicalGroupFallback,
-		PhysicalAtlasGroupPreview* physicalGroupPreview)
+		PhysicalAtlasGroupPreview* physicalGroupPreview,
+		SnapshotSaveDiagnostics* saveDiagnostics,
+		const PhysicalAtlasGroupSourceSnapshot* physicalGroupSources)
 	{
+		if (saveDiagnostics)
+		{
+			*saveDiagnostics = {};
+			saveDiagnostics->stage = "initialize";
+		}
+		auto fail = [&](const char* stage, const char* reason,
+			DWORD win32Error = ERROR_SUCCESS, size_t detailIndex = 0)
+		{
+			if (saveDiagnostics)
+			{
+				saveDiagnostics->stage = stage;
+				saveDiagnostics->reason = reason;
+				saveDiagnostics->win32Error = win32Error;
+				saveDiagnostics->detailIndex = static_cast<UInt32>(
+					std::min(detailIndex,
+						static_cast<size_t>(std::numeric_limits<UInt32>::max())));
+			}
+			return false;
+		};
 		if (jointRolePublished)
 			*jointRolePublished = false;
 		if (physicalGroupFallback)
@@ -384,11 +397,11 @@ namespace fonthook::vectorfont
 		const FontConfig& config = GetRuntimeConfig(runtime);
 		AtlasCacheKey key;
 		if (!ResolvePrewarmAtlasKey(config, byteClass, rasterScale, key))
-			return false;
+			return fail("initialize", "resolve-prewarm-key");
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		if (GetAtlasSnapshotPath(runtime, key, snapshotHash, maskContentHash).empty())
-			return false;
+			return fail("initialize", "snapshot-path-empty");
 		std::vector<SnapshotPageData> pages;
 		UInt64 totalBytes = 0;
 		UInt64 totalPlacements = 0;
@@ -411,22 +424,48 @@ namespace fonthook::vectorfont
 		if (jointlyPackedFontGroup)
 		{
 			if (!physicalGroup || physicalGroup->members.empty())
-				return false;
+				return fail("collect-role-sources", "physical-group-empty");
 			std::unordered_set<const DirectAtlasGlyphTable*> uniqueTables;
 			physicalGroupRoleSources.reserve(
 				physicalGroup->members.size() * 2u);
-			for (const PhysicalAtlasGroupMember& member : physicalGroup->members)
+			if (physicalGroupSources
+				&& physicalGroupSources->members.size()
+					!= physicalGroup->members.size())
 			{
-				RuntimeFont* memberRuntime =
-					EnsureRuntimeFont(member.config->fontId);
-				const std::shared_ptr<const SealedDirectFontProfile> sealed =
-					memberRuntime
-						? LoadRuntimeSealedDirectProfile(*memberRuntime) : nullptr;
+				return fail("collect-role-sources",
+					"captured-source-count-mismatch");
+			}
+			for (size_t memberIndex = 0;
+				memberIndex < physicalGroup->members.size(); ++memberIndex)
+			{
+				const PhysicalAtlasGroupMember& member =
+					physicalGroup->members[memberIndex];
+				RuntimeFont* memberRuntime = member.config
+					? EnsureRuntimeFont(member.config->fontId) : nullptr;
+				std::shared_ptr<const SealedDirectFontProfile> sealed;
+				if (physicalGroupSources)
+				{
+					const PhysicalAtlasGroupMemberSource& source =
+						physicalGroupSources->members[memberIndex];
+					if (!member.config || source.fontId != member.config->fontId)
+					{
+						return fail("collect-role-sources",
+							"captured-source-font-mismatch", ERROR_SUCCESS,
+							memberIndex);
+					}
+					sealed = source.sealedProfile;
+				}
+				else if (memberRuntime)
+				{
+					sealed = LoadRuntimeSealedDirectProfile(*memberRuntime);
+				}
 				if (!memberRuntime || !sealed
 					|| !IsSealedDirectFontProfileUsable(
 						*memberRuntime, sealed, rasterScale))
 				{
-					return false;
+					return fail("collect-role-sources",
+						"member-sealed-profile-unusable", ERROR_SUCCESS,
+						memberIndex);
 				}
 				for (size_t roleIndex = 0; roleIndex < 2; ++roleIndex)
 				{
@@ -446,17 +485,29 @@ namespace fonthook::vectorfont
 						|| table->pages.empty()
 						|| table->pages.size() > kMaximumAtlasSnapshotPages)
 					{
-						return false;
+						return fail("collect-role-sources",
+							"member-direct-table-invalid", ERROR_SUCCESS,
+							physicalGroupRoleSources.size());
 					}
 					if (uniqueTables.insert(table.get()).second)
 					{
 						physicalGroupRoleSources.push_back(
 							{ roleKey, table });
 					}
+					if (member.config
+						&& member.config->fontId == config.fontId
+						&& role == byteClass)
+					{
+						sourcePageCount = static_cast<UInt32>(
+							table->pages.size());
+					}
 				}
 			}
 			if (physicalGroupRoleSources.empty())
-				return false;
+				return fail("collect-role-sources", "no-unique-role-sources");
+			if (saveDiagnostics)
+				saveDiagnostics->roleSourceCount = static_cast<UInt32>(
+					physicalGroupRoleSources.size());
 		}
 		VectorFontByteClass packingByteClass = byteClass;
 		AtlasCacheKey singleByteKey;
@@ -508,8 +559,11 @@ namespace fonthook::vectorfont
 				return true;
 			};
 
-			if (!collectRole(key, resources, &sourcePageCount))
-				return false;
+			if (!jointlyPackedFontGroup
+				&& !collectRole(key, resources, &sourcePageCount))
+				return fail("collect-resources", "base-role-profile-unavailable");
+			if (jointlyPackedFontGroup && !sourcePageCount)
+				return fail("collect-resources", "captured-owner-role-empty");
 			if (jointlyPackedFontGroup)
 			{
 				std::vector<std::pair<AtlasCacheKey,
@@ -521,7 +575,7 @@ namespace fonthook::vectorfont
 					physicalGroupRoleSources)
 				{
 					collected = collected
-						&& CollectRoleFilteredResourcesLocked(
+						&& CollectRoleFilteredResources(
 							source.key, *source.table, groupResources,
 							groupPhysicalSources);
 				}
@@ -591,7 +645,11 @@ namespace fonthook::vectorfont
 				if (!collected || groupResources.empty()
 					|| groupResources.size() > maximumSourcePages)
 				{
-					return false;
+					return fail("collect-resources",
+						!collected ? "physical-role-resource-collection"
+							: groupResources.empty()
+								? "no-physical-role-resources"
+								: "physical-role-resource-limit");
 				}
 				resources.swap(groupResources);
 				jointlyPackedRoles = true;
@@ -618,7 +676,14 @@ namespace fonthook::vectorfont
 				|| (!jointlyPackedFontGroup
 					&& resources.size()
 						> static_cast<size_t>(kMaximumAtlasSnapshotPages) * 2u))
-				return false;
+				return fail("collect-resources",
+					resources.empty() ? "no-resources" : "resource-limit");
+		}
+		if (saveDiagnostics)
+		{
+			saveDiagnostics->resourceCount = static_cast<UInt32>(resources.size());
+			saveDiagnostics->sourceGpuBytes = physicalGroupSourceGpuBytes;
+			saveDiagnostics->stage = "repack";
 		}
 		// Resources are sealed and held by shared_ptr. Planning and pixel I/O can be
 		// expensive, so never hold atlasMutex while evaluating an 8192-capable
@@ -629,7 +694,7 @@ namespace fonthook::vectorfont
 				originalGpuBytes, packingByteClass,
 				jointlyPackedFontGroup && physicalGroup->version
 					== kPhysicalAtlasPoolVersion ? 1u : 0u,
-				physicalGroupPreview == nullptr))
+				physicalGroupPreview == nullptr, saveDiagnostics))
 			{
 				return false;
 			}
@@ -656,7 +721,8 @@ namespace fonthook::vectorfont
 					if (!MakeSnapshotPlacement(resource, record.cacheId,
 						record.rect, placement))
 					{
-						return false;
+						return fail("copy-pages", "snapshot-placement",
+							ERROR_SUCCESS, index);
 					}
 					page.placements.push_back(placement);
 				}
@@ -669,13 +735,17 @@ namespace fonthook::vectorfont
 				if (!BuildAtlasSnapshotPixels(resource, page.placements,
 					AtlasSnapshotStorage::FullMipChain, page.pixels))
 				{
-					return false;
+					return fail("copy-pages", "snapshot-pixels",
+						ERROR_SUCCESS, index);
 				}
 				pages.push_back(std::move(page));
 			}
 		}
 		if (pages.empty() || pages.size() > kMaximumAtlasSnapshotPages)
-			return false;
+			return fail("validate-pages",
+				pages.empty() ? "no-pages" : "page-limit");
+		if (saveDiagnostics)
+			saveDiagnostics->pageCount = static_cast<UInt32>(pages.size());
 		if (jointlyPackedFontGroup)
 		{
 			UInt64 candidateGpuBytes = 0;
@@ -746,7 +816,9 @@ namespace fonthook::vectorfont
 						candidateGpuBytes),
 					multiplePages ? "multi-page" : "gpu-growth",
 					fallbackMarked ? 1u : 0u);
-				return false;
+				return fail("validate-pages",
+					multiplePages ? "physical-group-multi-page"
+						: "physical-group-gpu-growth");
 			}
 			originalGpuBytes = physicalGroupSourceGpuBytes;
 		}
@@ -760,6 +832,19 @@ namespace fonthook::vectorfont
 			}
 		};
 		bool prepared = true;
+		const char* preparedStage = "prepare-page-files";
+		const char* preparedReason = "none";
+		DWORD preparedError = ERROR_SUCCESS;
+		size_t preparedIndex = 0;
+		auto failPreparation = [&](const char* reason, size_t index,
+			DWORD error = ERROR_SUCCESS)
+		{
+			prepared = false;
+			preparedStage = "prepare-page-files";
+			preparedReason = reason;
+			preparedError = error;
+			preparedIndex = index;
+		};
 		for (size_t index = 0; index < pages.size(); ++index)
 		{
 			SnapshotPageData& page = pages[index];
@@ -813,7 +898,7 @@ namespace fonthook::vectorfont
 								> std::numeric_limits<size_t>::max()
 									- packedPixelBytes)
 						{
-							prepared = false;
+							failPreparation("pixel-source-layout", index);
 							break;
 						}
 						packedPixelBytes += source.bytes;
@@ -827,7 +912,7 @@ namespace fonthook::vectorfont
 					if (!CacheAtlasSnapshotGlyphPlacement(placement,
 						page.header.width, page.header.height, page.header.pageIndex))
 					{
-						prepared = false;
+						failPreparation("placement-cache", index);
 						break;
 					}
 				}
@@ -846,7 +931,7 @@ namespace fonthook::vectorfont
 				if (page.path.empty() || ignoredSnapshotHash != snapshotHash
 					|| ignoredContentHash != maskContentHash)
 				{
-					prepared = false;
+					failPreparation("snapshot-path-identity", index);
 					break;
 				}
 				const std::wstring temporary = page.path + L".tmp";
@@ -855,21 +940,46 @@ namespace fonthook::vectorfont
 					CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
 				if (!file.Valid())
 				{
-					prepared = false;
+					failPreparation("page-temp-create", index,
+						GetLastError());
 					break;
 				}
 				const bool sparse = TryEnableSparseFile(file);
 				bool written = WriteSequentialFileBytes(file,
-					&page.header, sizeof(page.header))
-					&& WriteSequentialFileBytes(file, page.placements.data(),
-						page.placements.size() * sizeof(page.placements[0]));
+					&page.header, sizeof(page.header));
+				if (!written)
+					failPreparation("page-header-write", index, GetLastError());
+				if (written)
+				{
+					written = WriteSequentialFileBytes(file,
+						page.placements.data(), page.placements.size()
+							* sizeof(page.placements[0]));
+					if (!written)
+						failPreparation("page-placement-write", index,
+							GetLastError());
+				}
 				if (written)
 				{
 					if (!page.pixelSources.empty())
 					{
 						written = WriteRepackedSnapshotPixels(file,
 							page, page.header.payloadChecksum,
-							page.header.pageContentHash);
+							page.header.pageContentHash, saveDiagnostics);
+						if (!written)
+						{
+							prepared = false;
+							preparedStage = saveDiagnostics
+								? saveDiagnostics->stage
+								: "write-repacked-pixels";
+							preparedReason = saveDiagnostics
+								? saveDiagnostics->reason
+								: "repacked-pixel-write";
+							preparedError = saveDiagnostics
+								? saveDiagnostics->win32Error
+								: GetLastError();
+							preparedIndex = saveDiagnostics
+								? saveDiagnostics->detailIndex : index;
+						}
 					}
 					else
 					{
@@ -884,10 +994,17 @@ namespace fonthook::vectorfont
 						page.header.pageContentHash =
 							ComputeAtlasPageContentHash(page.header,
 								page.placements, page.pixels);
-						written = page.header.pageContentHash
-							&& WriteSparseFileBytes(file,
-								page.pixels.data(),
-								page.pixels.size(), sparse);
+						written = page.header.pageContentHash != 0;
+						if (!written)
+							failPreparation("page-content-hash", index);
+						if (written)
+						{
+							written = WriteSparseFileBytes(file,
+								page.pixels.data(), page.pixels.size(), sparse);
+							if (!written)
+								failPreparation("page-pixel-write", index,
+									GetLastError());
+						}
 					}
 				}
 				if (written)
@@ -897,16 +1014,36 @@ namespace fonthook::vectorfont
 						offsetof(AtlasSnapshotHeader, checksum));
 					LARGE_INTEGER beginning = {};
 					written = SetFilePointerEx(file, beginning,
-						nullptr, FILE_BEGIN) != FALSE
-						&& WriteSequentialFileBytes(file,
-							&page.header, sizeof(page.header))
-						&& FlushFileBuffers(file) != FALSE;
+						nullptr, FILE_BEGIN) != FALSE;
+					if (!written)
+						failPreparation("page-header-seek", index,
+							GetLastError());
+					if (written)
+					{
+						written = WriteSequentialFileBytes(file,
+							&page.header, sizeof(page.header));
+						if (!written)
+							failPreparation("page-header-rewrite", index,
+								GetLastError());
+					}
+					if (written)
+					{
+						written = FlushFileBuffers(file) != FALSE;
+						if (!written)
+							failPreparation("page-flush", index,
+								GetLastError());
+					}
 				}
 				file.Close();
 				if (!written || !page.header.payloadChecksum
 					|| !page.header.pageContentHash)
 				{
-					prepared = false;
+					if (prepared)
+					{
+						failPreparation(!page.header.payloadChecksum
+							? "payload-checksum-zero"
+							: "page-content-hash-zero", index);
+					}
 					break;
 				}
 				totalBytes += page.header.storedPixelBytes;
@@ -918,7 +1055,8 @@ namespace fonthook::vectorfont
 		if (!prepared)
 		{
 			deleteTemporaryPages();
-			return false;
+			return fail(preparedStage, preparedReason,
+				preparedError, preparedIndex);
 		}
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);
@@ -928,14 +1066,17 @@ namespace fonthook::vectorfont
 			InvalidateCompleteAtlasProfileLocked(State(),
 				MakeAtlasProfileKey(key));
 		}
-		for (const SnapshotPageData& page : pages)
+		for (size_t pageIndex = 0; pageIndex < pages.size(); ++pageIndex)
 		{
+			const SnapshotPageData& page = pages[pageIndex];
 			const std::wstring temporary = page.path + L".tmp";
 			if (!MoveFileExW(temporary.c_str(), page.path.c_str(),
 				MOVEFILE_REPLACE_EXISTING))
 			{
+				const DWORD error = GetLastError();
 				deleteTemporaryPages();
-				return false;
+				return fail("commit-page-files", "page-replace", error,
+					pageIndex);
 			}
 		}
 		for (UInt32 stalePage = pageCount; stalePage < sourcePageCount; ++stalePage)
@@ -980,23 +1121,50 @@ namespace fonthook::vectorfont
 			};
 			if (jointlyPackedFontGroup)
 			{
-				for (const PhysicalAtlasGroupMember& member :
-					physicalGroup->members)
+				for (size_t memberIndex = 0;
+					memberIndex < physicalGroup->members.size(); ++memberIndex)
 				{
+					const PhysicalAtlasGroupMember& member =
+						physicalGroup->members[memberIndex];
 					RuntimeFont* targetRuntime =
 						EnsureRuntimeFont(member.config->fontId);
-					if (!appendTarget(targetRuntime, member.singleByteKey)
-						|| !appendTarget(targetRuntime, member.doubleByteKey))
+					UInt32 singleBytePages = 0;
+					UInt32 doubleBytePages = 0;
+					if (physicalGroupSources
+						&& memberIndex < physicalGroupSources->members.size())
 					{
-						return false;
+						const auto& sealed = physicalGroupSources
+							->members[memberIndex].sealedProfile;
+						if (sealed)
+						{
+							singleBytePages = sealed->tables[0]
+								? static_cast<UInt32>(
+									sealed->tables[0]->pages.size()) : 0;
+							doubleBytePages = sealed->tables[1]
+								? static_cast<UInt32>(
+									sealed->tables[1]->pages.size()) : 0;
+						}
+					}
+					if (!appendTarget(targetRuntime, member.singleByteKey,
+							singleBytePages)
+						|| !appendTarget(targetRuntime, member.doubleByteKey,
+							doubleBytePages))
+					{
+						return fail("prepare-alias-files",
+							"alias-target-runtime-missing", ERROR_SUCCESS,
+							targets.size());
 					}
 				}
 			}
 			else if (!appendTarget(&runtime, doubleByteKey,
 				jointDoubleByteSourcePageCount))
 			{
-				return false;
+				return fail("prepare-alias-files",
+					"double-byte-alias-target-missing");
 			}
+			if (saveDiagnostics)
+				saveDiagnostics->aliasTargetCount = static_cast<UInt32>(
+					targets.size());
 
 			{
 				std::lock_guard<std::mutex> lock(State().atlasMutex);
@@ -1018,8 +1186,13 @@ namespace fonthook::vectorfont
 			aliasFiles.reserve(pages.size() * targets.size());
 			std::unordered_set<std::wstring> preparedPaths;
 			bool aliasesPrepared = true;
-			for (const SnapshotAliasTarget& target : targets)
+			const char* aliasFailureReason = "none";
+			DWORD aliasFailureError = ERROR_SUCCESS;
+			size_t aliasFailureIndex = 0;
+			for (size_t targetIndex = 0; targetIndex < targets.size();
+				++targetIndex)
 			{
+				const SnapshotAliasTarget& target = targets[targetIndex];
 				for (size_t index = 0; index < pages.size(); ++index)
 				{
 					AtlasCacheKey aliasKey = target.key;
@@ -1032,6 +1205,8 @@ namespace fonthook::vectorfont
 					if (aliasPath.empty())
 					{
 						aliasesPrepared = false;
+						aliasFailureReason = "alias-path-empty";
+						aliasFailureIndex = targetIndex;
 						break;
 					}
 					if (aliasPath == pages[index].path
@@ -1078,18 +1253,48 @@ namespace fonthook::vectorfont
 						pages[index].header.pageIndex;
 					alias.checksum = HashAtlasBytes(&alias,
 						offsetof(AtlasSnapshotAliasRecord, checksum));
-					const bool patched = file != INVALID_HANDLE_VALUE
-						&& WriteSequentialFileBytes(file, &header,
-							sizeof(header))
-						&& WriteSequentialFileBytes(file, &alias,
-							sizeof(alias))
-						&& FlushFileBuffers(file) != FALSE;
+					bool patched = file != INVALID_HANDLE_VALUE;
+					if (!patched)
+					{
+						aliasFailureReason = "alias-temp-create";
+						aliasFailureError = GetLastError();
+					}
+					if (patched)
+					{
+						patched = WriteSequentialFileBytes(file, &header,
+							sizeof(header));
+						if (!patched)
+						{
+							aliasFailureReason = "alias-header-write";
+							aliasFailureError = GetLastError();
+						}
+					}
+					if (patched)
+					{
+						patched = WriteSequentialFileBytes(file, &alias,
+							sizeof(alias));
+						if (!patched)
+						{
+							aliasFailureReason = "alias-record-write";
+							aliasFailureError = GetLastError();
+						}
+					}
+					if (patched)
+					{
+						patched = FlushFileBuffers(file) != FALSE;
+						if (!patched)
+						{
+							aliasFailureReason = "alias-flush";
+							aliasFailureError = GetLastError();
+						}
+					}
 					if (file != INVALID_HANDLE_VALUE)
 						CloseHandle(file);
 					if (!patched)
 					{
 						DeleteFileW(temporary.c_str());
 						aliasesPrepared = false;
+						aliasFailureIndex = targetIndex;
 						break;
 					}
 					aliasFiles.push_back({ aliasPath, temporary,
@@ -1106,6 +1311,8 @@ namespace fonthook::vectorfont
 						physicalAliasSavedBytes +=
 							fullFileBytes - aliasFileBytes;
 					++physicalAliasFiles;
+					if (saveDiagnostics)
+						saveDiagnostics->aliasFileCount = physicalAliasFiles;
 				}
 				if (!aliasesPrepared)
 					break;
@@ -1114,7 +1321,8 @@ namespace fonthook::vectorfont
 			{
 				for (const SnapshotAliasFile& file : aliasFiles)
 					DeleteFileW(file.temporary.c_str());
-				return false;
+				return fail("prepare-alias-files", aliasFailureReason,
+					aliasFailureError, aliasFailureIndex);
 			}
 			{
 				std::lock_guard<std::mutex> lock(State().atlasMutex);
@@ -1145,14 +1353,18 @@ namespace fonthook::vectorfont
 					}
 				}
 			}
-			for (const SnapshotAliasFile& file : aliasFiles)
+			for (size_t aliasIndex = 0; aliasIndex < aliasFiles.size();
+				++aliasIndex)
 			{
+				const SnapshotAliasFile& file = aliasFiles[aliasIndex];
 				if (!MoveFileExW(file.temporary.c_str(), file.path.c_str(),
 					MOVEFILE_REPLACE_EXISTING))
 				{
+					const DWORD error = GetLastError();
 					for (const SnapshotAliasFile& cleanup : aliasFiles)
 						DeleteFileW(cleanup.temporary.c_str());
-					return false;
+					return fail("commit-alias-files", "alias-replace", error,
+						aliasIndex);
 				}
 			}
 
@@ -1213,6 +1425,17 @@ namespace fonthook::vectorfont
 					pages.front().header.pageContentHash),
 				pages.front().header.width, pages.front().header.height,
 				static_cast<unsigned long long>(totalPlacements));
+		}
+		if (saveDiagnostics)
+		{
+			saveDiagnostics->stage = "complete";
+			saveDiagnostics->reason = "none";
+			saveDiagnostics->win32Error = ERROR_SUCCESS;
+			saveDiagnostics->pageCount = pageCount;
+			saveDiagnostics->aliasFileCount = physicalAliasFiles;
+			saveDiagnostics->placementCount = totalPlacements;
+			saveDiagnostics->sourceGpuBytes = originalGpuBytes;
+			saveDiagnostics->candidateGpuBytes = snapshotGpuBytes;
 		}
 		return true;
 	}

@@ -474,13 +474,28 @@ namespace fonthook::vectorfont
 			std::vector<SnapshotPageData>& pages, UInt64& originalGpuBytes,
 			VectorFontByteClass packingByteClass,
 			size_t maximumAcceptedPages,
-			bool emitDiagnostics)
+			bool emitDiagnostics,
+			SnapshotSaveDiagnostics* saveDiagnostics)
 		{
+			auto fail = [&](const char* reason, size_t detailIndex = 0)
+			{
+				if (saveDiagnostics)
+				{
+					saveDiagnostics->stage = "repack";
+					saveDiagnostics->reason = reason;
+					saveDiagnostics->detailIndex = static_cast<UInt32>(
+						std::min(detailIndex,
+							static_cast<size_t>(std::numeric_limits<UInt32>::max())));
+				}
+				return false;
+			};
 			std::vector<SnapshotGlyphData> glyphs;
 			std::unordered_set<UInt64> cacheIds;
 			originalGpuBytes = 0;
 			bool hasSingleByte = false;
 			bool hasDoubleByte = false;
+			if (saveDiagnostics)
+				saveDiagnostics->resourceCount = static_cast<UInt32>(resources.size());
 			for (size_t resourceIndex = 0; resourceIndex < resources.size();
 				++resourceIndex)
 			{
@@ -493,13 +508,13 @@ namespace fonthook::vectorfont
 				if (resource.pixelMode != baseKey.pixelMode
 					|| resource.renderMode != baseKey.renderMode
 					|| !resource.levelZeroOnly)
-					return false;
+					return fail("resource-format-mismatch", resourceIndex);
 				originalGpuBytes += GetAtlasStorageBytes(resource.width, resource.height,
 					resource.pixelMode, resource.mipLevels);
 				const std::shared_ptr<const CompactAtlasSnapshot> sourceSnapshot =
 					resource.compactSnapshot;
 				if (!sourceSnapshot || sourceSnapshot->placements.empty())
-					return false;
+					return fail("source-snapshot-missing", resourceIndex);
 				std::vector<size_t> sourceOffsets(sourceSnapshot->placements.size());
 				size_t sourceBytes = 0;
 				for (size_t index = 0; index < sourceSnapshot->placements.size(); ++index)
@@ -511,7 +526,7 @@ namespace fonthook::vectorfont
 					if (!rect.width || !rect.height
 						|| bytes > std::numeric_limits<size_t>::max() - sourceBytes)
 					{
-						return false;
+						return fail("source-placement-size-overflow", resourceIndex);
 					}
 					sourceBytes += bytes;
 				}
@@ -519,11 +534,11 @@ namespace fonthook::vectorfont
 					? static_cast<size_t>(sourceSnapshot->sourceHeader.pixelBytes)
 					: sourceSnapshot->pixels.size();
 				if (sourceBytes != expectedSourceBytes)
-					return false;
+					return fail("source-pixel-byte-count-mismatch", resourceIndex);
 				for (const AtlasGlyphRecord& record : resource.glyphs)
 				{
 					if (record.snapshotPlacementIndex >= sourceSnapshot->placements.size())
-						return false;
+						return fail("source-placement-index-out-of-range", resourceIndex);
 					const size_t placementIndex = record.snapshotPlacementIndex;
 					const AtlasSnapshotPlacement& placement =
 						sourceSnapshot->placements[placementIndex];
@@ -532,7 +547,7 @@ namespace fonthook::vectorfont
 					if (placement.cacheId != record.cacheId
 						|| std::memcmp(&placement.rect, &record.rect, sizeof(record.rect)) != 0
 						|| !cacheIds.insert(record.cacheId).second)
-						return false;
+						return fail("source-glyph-record-mismatch-or-duplicate", resourceIndex);
 					SnapshotGlyphData glyph;
 					glyph.placement = placement;
 					glyph.sourceSnapshot = sourceSnapshot;
@@ -544,7 +559,9 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (glyphs.empty())
-				return false;
+				return fail("no-source-glyphs");
+			if (saveDiagnostics)
+				saveDiagnostics->placementCount = glyphs.size();
 			const bool mixedByteRoles = hasSingleByte && hasDoubleByte;
 			std::sort(glyphs.begin(), glyphs.end(), [mixedByteRoles](
 				const auto& lhs, const auto& rhs)
@@ -572,7 +589,7 @@ namespace fonthook::vectorfont
 			const std::vector<UInt32> candidateWidths =
 				BuildSnapshotCandidateWidths(glyphs, padding, maximumSize);
 			if (candidateWidths.empty())
-				return false;
+				return fail("no-candidate-width");
 
 			const int heuristics[] = {
 				STBRP_HEURISTIC_Skyline_BL_sortHeight,
@@ -607,7 +624,13 @@ namespace fonthook::vectorfont
 				}
 			}
 			if (selectedPlan.pages.empty())
-				return false;
+				return fail("no-feasible-packing-plan");
+			if (saveDiagnostics)
+			{
+				saveDiagnostics->pageCount = static_cast<UInt32>(
+					selectedPlan.pages.size());
+				saveDiagnostics->candidateGpuBytes = selectedPlan.gpuBytes;
+			}
 
 			pages.clear();
 			pages.reserve(selectedPlan.pages.size());
@@ -647,7 +670,7 @@ namespace fonthook::vectorfont
 				for (const SnapshotPackedGlyph& packedGlyph : ordered)
 				{
 					if (packedGlyph.glyphIndex >= glyphs.size())
-						return false;
+						return fail("packed-glyph-index-out-of-range", pageIndex);
 					const SnapshotGlyphData& glyph =
 						glyphs[packedGlyph.glyphIndex];
 					AtlasSnapshotPlacement placement = glyph.placement;
@@ -658,7 +681,7 @@ namespace fonthook::vectorfont
 					if (glyph.sourceBytes > std::numeric_limits<size_t>::max()
 						- destinationBytes)
 					{
-						return false;
+						return fail("destination-byte-count-overflow", pageIndex);
 					}
 					destinationBytes += glyph.sourceBytes;
 				}

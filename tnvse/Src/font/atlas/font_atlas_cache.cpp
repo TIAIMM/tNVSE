@@ -1,5 +1,8 @@
 #include "font_atlas_internal.h"
 
+#include "font_atlas_nvtf_compat.h"
+#include "font_atlas_resource_internal.h"
+
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -23,6 +26,7 @@ namespace fonthook::vectorfont
 {
 	namespace implementation::font_atlas_cache {}
 	using namespace implementation::font_atlas_cache;
+	using namespace implementation::font_atlas_snapshot;
 
 	namespace implementation::font_atlas_cache
 	{
@@ -1107,6 +1111,18 @@ namespace fonthook::vectorfont
 				byteClass
 			};
 
+			DefaultPoolPublicationScope publicationScope(
+				g_bEnableFreeTypeDefaultPoolAtlas);
+			const NvtfTextureLockCompatibilityState lockCompatibility =
+				GetNvtfTextureLockCompatibilityState();
+			if (g_bEnableFreeTypeDefaultPoolAtlas
+				&& (!publicationScope.Ready()
+					|| !publicationScope.IsCurrent()
+					|| (lockCompatibility.active
+						&& !publicationScope.DeviceIsMultithreaded())))
+			{
+				return {};
+			}
 			RetiredAtlasReleaseList retiredReleases;
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
 			std::vector<std::pair<AtlasCacheKey, AtlasCacheEntry*>> entries;
@@ -1299,6 +1315,18 @@ namespace fonthook::vectorfont
 			AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 			UInt32 padding, VectorFontByteClass byteClass)
 		{
+			DefaultPoolPublicationScope publicationScope(
+				g_bEnableFreeTypeDefaultPoolAtlas);
+			const NvtfTextureLockCompatibilityState lockCompatibility =
+				GetNvtfTextureLockCompatibilityState();
+			if (g_bEnableFreeTypeDefaultPoolAtlas
+				&& (!publicationScope.Ready()
+					|| !publicationScope.IsCurrent()
+					|| (lockCompatibility.active
+						&& !publicationScope.DeviceIsMultithreaded())))
+			{
+				return nullptr;
+			}
 			auto resource = std::make_shared<AtlasResource>();
 			resource->pixelMode = pixelMode;
 			resource->backend = g_bEnableFreeTypeDefaultPoolAtlas
@@ -1327,6 +1355,7 @@ namespace fonthook::vectorfont
 			if (resource->backend == AtlasBackend::DefaultPool
 				&& CreateDefaultPoolAtlas(*resource, pixelMode))
 			{
+				RegisterExternalDefaultPoolAtlas(resource);
 				return resource;
 			}
 			if (g_bEnableFreeTypeDefaultPoolAtlas)

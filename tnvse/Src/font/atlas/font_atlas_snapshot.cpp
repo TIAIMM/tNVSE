@@ -1,5 +1,8 @@
 #include "font_atlas_snapshot_internal.h"
 
+#include "font_atlas_nvtf_compat.h"
+#include "font_atlas_resource_internal.h"
+
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -189,6 +192,10 @@ namespace fonthook::vectorfont
 		void PruneRetiredAtlasGenerationsWithLock()
 		{
 			AtlasState& state = State();
+			DefaultPoolPublicationScope releaseScope(
+				g_bEnableFreeTypeDefaultPoolAtlas);
+			if (!releaseScope.Ready() || !releaseScope.IsCurrent())
+				return;
 			RetiredAtlasReleaseList retiredReleases;
 			{
 				std::lock_guard<std::mutex> lock(state.atlasMutex);
@@ -263,6 +270,10 @@ namespace fonthook::vectorfont
 		}
 		size_t cacheBefore = 0;
 		size_t cacheAfter = 0;
+		DefaultPoolPublicationScope publicationScope(
+			g_bEnableFreeTypeDefaultPoolAtlas);
+		if (!publicationScope.Ready() || !publicationScope.IsCurrent())
+			return false;
 		RetiredAtlasReleaseList retiredReleases;
 		{
 			// Reserve both byte roles as one transaction. Reserving roles
@@ -359,6 +370,10 @@ namespace fonthook::vectorfont
 			return false;
 		size_t cacheBefore = 0;
 		size_t cacheAfter = 0;
+		DefaultPoolPublicationScope publicationScope(
+			g_bEnableFreeTypeDefaultPoolAtlas);
+		if (!publicationScope.Ready() || !publicationScope.IsCurrent())
+			return false;
 		RetiredAtlasReleaseList retiredReleases;
 		{
 			AtlasState& state = State();
@@ -584,6 +599,8 @@ namespace fonthook::vectorfont
 			std::lround(rasterScale * 1000.0f));
 		if (!scaleMilli)
 			return true;
+		const NvtfTextureLockCompatibilityState lockCompatibility =
+			GetNvtfTextureLockCompatibilityState(true);
 
 		std::vector<const FontConfig*> configs;
 		configs.reserve(g_configs.size());
@@ -651,10 +668,9 @@ namespace fonthook::vectorfont
 
 			RuntimeFont* ownerRuntime =
 				EnsureRuntimeFont(group.ownerFontId);
-			const auto validateMemberTables = [&](RuntimeFont& memberRuntime)
+			const auto validateMemberTables = [&](RuntimeFont& memberRuntime,
+				const std::shared_ptr<const SealedDirectFontProfile>& sealed)
 			{
-				const std::shared_ptr<const SealedDirectFontProfile> sealed =
-					LoadRuntimeSealedDirectProfile(memberRuntime);
 				if (!sealed || !IsSealedDirectFontProfileUsable(
 						memberRuntime, sealed, rasterScale))
 				{
@@ -676,20 +692,26 @@ namespace fonthook::vectorfont
 				return true;
 			};
 			bool sourceTablesReady = ownerRuntime != nullptr;
+			PhysicalAtlasGroupSourceSnapshot sourceSnapshot;
+			sourceSnapshot.members.reserve(group.members.size());
 			if (sourceTablesReady)
 			{
 				for (const PhysicalAtlasGroupMember& member : group.members)
 				{
 					RuntimeFont* memberRuntime =
 						EnsureRuntimeFont(member.config->fontId);
+					std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
 					if (!memberRuntime
-						|| !BuildDirectGlyphAtlasTables(
-							*memberRuntime, rasterScale)
-						|| !validateMemberTables(*memberRuntime))
+						|| !BuildDirectGlyphAtlasTablesPinned(
+							*memberRuntime, rasterScale, pinnedProfile)
+						|| !validateMemberTables(
+							*memberRuntime, pinnedProfile))
 					{
 						sourceTablesReady = false;
 						break;
 					}
+					sourceSnapshot.members.push_back({
+						member.config->fontId, std::move(pinnedProfile) });
 				}
 			}
 			bool groupPublished = false;
@@ -714,7 +736,8 @@ namespace fonthook::vectorfont
 			const bool groupSaved = sourceTablesReady
 				&& SaveGlyphAtlasSnapshotRole(*ownerRuntime,
 					VectorFontByteClass::SingleByte, rasterScale,
-					&groupPublished, &group, &groupFallback);
+					&groupPublished, &group, &groupFallback,
+					nullptr, nullptr, &sourceSnapshot);
 			if (groupFallback)
 			{
 				const bool rollbackCleanup = diskTransaction.Commit();
@@ -764,6 +787,37 @@ namespace fonthook::vectorfont
 				continue;
 			}
 
+			// The snapshot is now durable, but no candidate DEFAULT texture exists
+			// yet. Hold the reset barrier from the first shadow upload through the
+			// complete member-profile validation or in-memory rollback.
+			DefaultPoolPublicationScope publicationScope;
+			if (!publicationScope.Ready() || !publicationScope.IsCurrent()
+				|| (lockCompatibility.active
+					&& !publicationScope.DeviceIsMultithreaded()))
+			{
+				success = false;
+				const bool diskRolledBack = diskTransaction.Rollback();
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group direct publication skipped version=%u owner=%u members=%u pattern=%s reason=%s deviceMultithreaded=%u deviceEpoch=%llu diskRolledBack=%u policy=retain-current-generation",
+					kPhysicalAtlasGroupVersion, group.ownerFontId,
+					static_cast<UInt32>(group.members.size()),
+					lockCompatibility.active
+						? (lockCompatibility.exactMode2Pattern
+							? "nvtf-mode-2" : "partial-or-foreign")
+						: "stock-locks",
+					!publicationScope.Ready()
+						? publicationScope.FailureReason()
+						: lockCompatibility.active
+							&& !publicationScope.DeviceIsMultithreaded()
+								? "d3d9-device-not-multithreaded"
+								: "device-generation-changed",
+					publicationScope.DeviceIsMultithreaded() ? 1u : 0u,
+					static_cast<unsigned long long>(
+						publicationScope.DeviceEpoch()),
+					diskRolledBack ? 1u : 0u);
+				continue;
+			}
+
 			bool rebuilt = true;
 			std::vector<RuntimeFont*> memberRuntimes;
 			memberRuntimes.reserve(group.members.size());
@@ -788,15 +842,24 @@ namespace fonthook::vectorfont
 			}
 			if (rebuilt)
 			{
-				for (RuntimeFont* memberRuntime : memberRuntimes)
+				sourceSnapshot.members.clear();
+				sourceSnapshot.members.reserve(memberRuntimes.size());
+				for (size_t memberIndex = 0;
+					memberIndex < memberRuntimes.size(); ++memberIndex)
 				{
-					if (!BuildDirectGlyphAtlasTables(
-							*memberRuntime, rasterScale)
-						|| !validateMemberTables(*memberRuntime))
+					RuntimeFont* memberRuntime = memberRuntimes[memberIndex];
+					std::shared_ptr<const SealedDirectFontProfile> pinnedProfile;
+					if (!BuildDirectGlyphAtlasTablesPinned(
+							*memberRuntime, rasterScale, pinnedProfile)
+						|| !validateMemberTables(
+							*memberRuntime, pinnedProfile))
 					{
 						rebuilt = false;
 						break;
 					}
+					sourceSnapshot.members.push_back({
+						group.members[memberIndex].config->fontId,
+						std::move(pinnedProfile) });
 				}
 			}
 
@@ -813,11 +876,16 @@ namespace fonthook::vectorfont
 			}
 			if (rebuilt && physicallyShared && shared)
 			{
-				for (RuntimeFont* memberRuntime : memberRuntimes)
+				for (size_t memberIndex = 0;
+					memberIndex < memberRuntimes.size(); ++memberIndex)
 				{
+					RuntimeFont* memberRuntime = memberRuntimes[memberIndex];
 					const std::shared_ptr<const SealedDirectFontProfile> sealed =
-						LoadRuntimeSealedDirectProfile(*memberRuntime);
-					if (!sealed || !validateMemberTables(*memberRuntime))
+						memberIndex < sourceSnapshot.members.size()
+							? sourceSnapshot.members[memberIndex].sealedProfile
+							: nullptr;
+					if (!sealed
+						|| !validateMemberTables(*memberRuntime, sealed))
 					{
 						logicalProfilesReady = false;
 						break;
@@ -856,12 +924,15 @@ namespace fonthook::vectorfont
 					{
 						RuntimeFont* memberRuntime =
 							EnsureRuntimeFont(member.config->fontId);
+						std::shared_ptr<const SealedDirectFontProfile>
+							pinnedProfile;
 						if (!memberRuntime
 							|| !RebuildGlyphAtlasFromSnapshot(
 								*memberRuntime, rasterScale)
-							|| !BuildDirectGlyphAtlasTables(
-								*memberRuntime, rasterScale)
-							|| !validateMemberTables(*memberRuntime))
+							|| !BuildDirectGlyphAtlasTablesPinned(
+								*memberRuntime, rasterScale, pinnedProfile)
+							|| !validateMemberTables(
+								*memberRuntime, pinnedProfile))
 						{
 							fallbackRestored = false;
 						}

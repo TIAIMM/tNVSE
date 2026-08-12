@@ -177,7 +177,10 @@ namespace fonthook::vectorfont
 		bool DefaultPoolResetCallback(bool beforeReset, void*)
 		{
 			AtlasState& state = State();
-			if (state.defaultPoolShutdown)
+			UInt32 waitedPublications = 0;
+			UInt64 deviceEpoch = 0;
+			if (!EnterDefaultPoolResetBarrier(beforeReset,
+				waitedPublications, deviceEpoch))
 				return true;
 			const bool logResetTiming = g_bEnableFreeTypeFontRenderingLog;
 			const auto started = logResetTiming
@@ -350,14 +353,16 @@ namespace fonthook::vectorfont
 				}
 			}
 			retiredReleases.clear();
+			LeaveDefaultPoolResetBarrier(beforeReset);
 			if (logResetTiming)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - started).count();
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font: DEFAULT atlas reset phase=%s generations=%u shared=%u failed=%u timeUs=%lld",
+					"tnvse_freetype_font: DEFAULT atlas reset phase=%s generations=%u shared=%u failed=%u waitedPublications=%u deviceEpoch=%llu timeUs=%lld",
 					beforeReset ? "release" : "rebuild",
-					processed, shared, failed,
+					processed, shared, failed, waitedPublications,
+					static_cast<unsigned long long>(deviceEpoch),
 					static_cast<long long>(elapsed));
 			}
 			return true;
@@ -369,7 +374,7 @@ namespace fonthook::vectorfont
 		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeDefaultPoolAtlas
 			|| State().defaultPoolResetRegistered)
 			return;
-		State().defaultPoolShutdown = false;
+		SetDefaultPoolPublicationShutdown(false);
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
 		if (!renderer || !renderer->GetD3DDevice())
 			return;
@@ -391,6 +396,9 @@ namespace fonthook::vectorfont
 		static UInt32 retryFrame = 0;
 		const bool retry = (++retryFrame % 120u) == 0;
 		if (!retry)
+			return;
+		DefaultPoolPublicationScope publicationScope;
+		if (!publicationScope.Ready() || !publicationScope.IsCurrent())
 			return;
 		RetiredAtlasReleaseList retiredReleases;
 		{
@@ -422,7 +430,7 @@ namespace fonthook::vectorfont
 		// handling and new DEFAULT-pool allocations, but keep all referenced atlas
 		// generations valid.  ExitProcess reclaims them with the rest of the address
 		// space, while normal device-reset and runtime eviction paths are unchanged.
-		State().defaultPoolShutdown = true;
+		SetDefaultPoolPublicationShutdown(true);
 		if (g_bEnableFreeTypeFontRenderingLog)
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: atlas lifecycle quiesced for process exit; resource reclamation deferred");
