@@ -113,7 +113,14 @@ void LoadConfig()
 			filename);
 	}
 
-	g_uiEncoding = ReadConfigInt(kMultibyteSection, "uiEncoding", 1, filename);
+	g_bEnableMultibyteFontHook = ReadConfigInt(
+		kMultibyteSection, "bEnableMultibyteFontHook", 1, filename) != 0;
+	gLog.FormattedMessage("g_bEnableMultibyteFontHook: %d",
+		g_bEnableMultibyteFontHook);
+
+	const UINT32 configuredUiEncoding = ReadConfigInt(
+		kMultibyteSection, "uiEncoding", 1, filename);
+	g_uiEncoding = g_bEnableMultibyteFontHook ? configuredUiEncoding : 0;
 	switch (g_uiEncoding)
 	{
 	case 0: g_usingWinEncoding = 1252; break; // Windows-1252
@@ -129,12 +136,14 @@ void LoadConfig()
 	gLog.FormattedMessage("Encoding: uiEncoding=%u codePage=%u",
 		g_uiEncoding, g_usingWinEncoding);
 
-	g_bEnableUTF8 = ReadConfigInt(kMultibyteSection, "bUTF8", 1, filename);
+	g_bEnableUTF8 = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteSection, "bUTF8", 1, filename) != 0;
 	gLog.FormattedMessage("EnableUTF8: %d", g_bEnableUTF8);
-
-	g_bEnableMultibyteFontHook = ReadConfigInt(
-		kMultibyteSection, "bEnableMultibyteFontHook", 1, filename);
-	gLog.FormattedMessage("g_bEnableMultibyteFontHook: %d", g_bEnableMultibyteFontHook);
+	if (!g_bEnableMultibyteFontHook)
+	{
+		gLog.FormattedMessage(
+			"Multibyte master disabled: forcing uiEncoding=0 and disabling Multibyte, MultibyteInput, and Dictionary features");
+	}
 
 	g_bEnableFreeTypeFontRendering = ReadConfigInt(
 		kFreeTypeFontSection, "bEnableFreeTypeFontRendering", 0, filename);
@@ -268,51 +277,62 @@ void LoadConfig()
 		"g_uiFreeTypeFontCompositeCacheMB: %u (deprecated; whole-text RTT cache disabled)",
 		compositeCacheBudgetMB);
 
-	g_bMultibyteInput = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInput", 0, filename);
+	g_bMultibyteInput = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInput", 0, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInput: %d", g_bMultibyteInput);
 
-	g_bMultibyteInputLog = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputLog", 0, filename) != 0;
+	g_bMultibyteInputLog = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputLog", 0, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInputLog: %d", g_bMultibyteInputLog);
 
-	g_bMultibyteInputCompositionPreview = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputCompositionPreview", 0, filename);
+	g_bMultibyteInputCompositionPreview = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputCompositionPreview", 0, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInputCompositionPreview: %d", g_bMultibyteInputCompositionPreview);
 
-	g_bMultibyteInputUseTSFCandidates = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputUseTSFCandidates", 1, filename);
+	g_bMultibyteInputUseTSFCandidates = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputUseTSFCandidates", 1, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInputUseTSFCandidates: %d", g_bMultibyteInputUseTSFCandidates);
 
-	g_bMultibyteInputStewieTweaks = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputStewieTweaks", 1, filename);
+	g_bMultibyteInputStewieTweaks = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputStewieTweaks", 1, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInputStewieTweaks: %d", g_bMultibyteInputStewieTweaks);
 
-	g_bMultibyteInputMCMExtender = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputMCMExtender", 1, filename) != 0;
+	g_bMultibyteInputMCMExtender = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputMCMExtender", 1, filename) != 0;
 	gLog.FormattedMessage("g_bMultibyteInputMCMExtender: %d", g_bMultibyteInputMCMExtender);
 
-	g_bMultibyteInputDialogueHistory = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputDialogueHistory", 1, filename) != 0;
+	g_bMultibyteInputDialogueHistory = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputDialogueHistory", 1, filename) != 0;
 	gLog.FormattedMessage(
 		"g_bMultibyteInputDialogueHistory: %d",
 		g_bMultibyteInputDialogueHistory);
 
-	g_bMultibyteInputModernHelpMenu = ReadConfigInt(kMultibyteInputSection,
-		"bMultibyteInputModernHelpMenu", 1, filename) != 0;
+	g_bMultibyteInputModernHelpMenu = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bMultibyteInputModernHelpMenu", 1, filename) != 0;
 	gLog.FormattedMessage(
 		"g_bMultibyteInputModernHelpMenu: %d",
 		g_bMultibyteInputModernHelpMenu);
 
-	g_bSuppressJIPKeyEventsDuringMultibyteInput = ReadConfigInt(
-		kMultibyteInputSection,
-		"bSuppressJIPKeyEventsDuringMultibyteInput", 1, filename) != 0;
+	g_bSuppressJIPKeyEventsDuringMultibyteInput = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteInputSection,
+			"bSuppressJIPKeyEventsDuringMultibyteInput", 1, filename) != 0;
 	gLog.FormattedMessage(
 		"g_bSuppressJIPKeyEventsDuringMultibyteInput: %d",
 		g_bSuppressJIPKeyEventsDuringMultibyteInput);
 
-	g_bChangeJIPBigGunDesc = ReadConfigInt(
-		kMultibyteSection, "bChangeJIPBigGunDesc", 1, filename);
+	g_bChangeJIPBigGunDesc = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteSection,
+			"bChangeJIPBigGunDesc", 1, filename) != 0;
+	gLog.FormattedMessage("g_bChangeJIPBigGunDesc: %d",
+		g_bChangeJIPBigGunDesc);
 
 	char sTempBigGunsDesc[512] = { 0 };
 	ReadConfigString(
@@ -325,8 +345,9 @@ void LoadConfig()
 	);
 	g_sNewBigGunsDesc = sTempBigGunsDesc;
 
-	g_uiReorderDoorPrompt = ReadConfigInt(
-		kMultibyteSection, "uiReorderDoorPrompt", 1, filename);
+	g_uiReorderDoorPrompt = g_bEnableMultibyteFontHook
+		? ReadConfigInt(kMultibyteSection, "uiReorderDoorPrompt", 1, filename)
+		: 0;
 	gLog.FormattedMessage("g_uiReorderDoorPrompt: %d", g_uiReorderDoorPrompt);
 
 	char sTempStructuralParticle[512] = { 0 };
@@ -340,44 +361,66 @@ void LoadConfig()
 	);
 	g_sOptionalStructuralParticle = sTempStructuralParticle;
 
-	g_bRemovePlural = ReadConfigInt(
-		kMultibyteSection, "bRemovePlural", 1, filename);
+	g_bRemovePlural = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteSection, "bRemovePlural", 1, filename) != 0;
 	gLog.FormattedMessage("g_bRemovePlural: %d", g_bRemovePlural);
 
-	g_bSaveDisplayNameMap = ReadConfigInt(
-		kMultibyteSection, "bSaveDisplayNameMap", 1, filename);
+	g_bSaveDisplayNameMap = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kMultibyteSection, "bSaveDisplayNameMap", 1, filename) != 0;
 	gLog.FormattedMessage("g_bSaveDisplayNameMap: %d", g_bSaveDisplayNameMap);
 
-	g_bEnableDictionaryTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryTranslation", 1, filename);
+	g_bEnableDictionaryTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);
 
-	g_bEnableDictionaryTranslationLog = ReadConfigInt(kDictionarySection, "bEnableDictionaryTranslationLog", 0, filename);
+	g_bEnableDictionaryTranslationLog = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryTranslationLog", 0, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryTranslationLog: %d", g_bEnableDictionaryTranslationLog);
 
-	g_bEnableMuxQuestPromptTranslation = ReadConfigInt(kDictionarySection, "bEnableMuxQuestPromptTranslation", 1, filename);
+	g_bEnableMuxQuestPromptTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableMuxQuestPromptTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableMuxQuestPromptTranslation: %d", g_bEnableMuxQuestPromptTranslation);
 
-	g_bEnableDictionaryPerkDescriptionTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryPerkDescriptionTranslation", 1, filename);
+	g_bEnableDictionaryPerkDescriptionTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryPerkDescriptionTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryPerkDescriptionTranslation: %d", g_bEnableDictionaryPerkDescriptionTranslation);
 
-	g_bEnableDictionaryItemEffectTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryItemEffectTranslation", 1, filename);
+	g_bEnableDictionaryItemEffectTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryItemEffectTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryItemEffectTranslation: %d", g_bEnableDictionaryItemEffectTranslation);
 
-	g_bEnableDictionaryMultiplierTextTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryMultiplierTextTranslation", 1, filename);
+	g_bEnableDictionaryMultiplierTextTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryMultiplierTextTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryMultiplierTextTranslation: %d", g_bEnableDictionaryMultiplierTextTranslation);
 
-	g_bEnableDictionaryWildcardTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryWildcardTranslation", 1, filename);
+	g_bEnableDictionaryWildcardTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryWildcardTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryWildcardTranslation: %d", g_bEnableDictionaryWildcardTranslation);
 
-	g_bEnableDictionaryRegexTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryRegexTranslation", 1, filename);
+	g_bEnableDictionaryRegexTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryRegexTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryRegexTranslation: %d", g_bEnableDictionaryRegexTranslation);
 
-	g_bEnableDictionaryBeforeLinebreakTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryBeforeLinebreakTranslation", 1, filename);
+	g_bEnableDictionaryBeforeLinebreakTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryBeforeLinebreakTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryBeforeLinebreakTranslation: %d", g_bEnableDictionaryBeforeLinebreakTranslation);
 
-	g_bEnableDictionaryShrinkFuzzyTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryShrinkFuzzyTranslation", 1, filename);
+	g_bEnableDictionaryShrinkFuzzyTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryShrinkFuzzyTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryShrinkFuzzyTranslation: %d", g_bEnableDictionaryShrinkFuzzyTranslation);
 
-	g_bEnableDictionaryTrimBypassFuzzyTranslation = ReadConfigInt(kDictionarySection, "bEnableDictionaryTrimBypassFuzzyTranslation", 1, filename);
+	g_bEnableDictionaryTrimBypassFuzzyTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryTrimBypassFuzzyTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryTrimBypassFuzzyTranslation: %d", g_bEnableDictionaryTrimBypassFuzzyTranslation);
 }

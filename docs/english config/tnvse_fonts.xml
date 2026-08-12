@@ -64,6 +64,9 @@
       singleByte handles valid one-byte units; doubleByte handles valid DBCS
       pairs. FreeType-only mode is always Windows-1252 and therefore routes
       every byte through singleByte, regardless of configured uiEncoding.
+      A face chain declared directly under <font> is inherited by both byte
+      classes. Either byte-class node may therefore be omitted when it does
+      not need separate metrics or a separate font face.
       Each byte-class node may override:
         pixelSize, tracking, fixedWidth, scaleX, scaleY, embolden, slant,
         baselineOffset
@@ -118,16 +121,9 @@
     <!-- 1: Glow_Monofonto_Large -->
     <font id="1" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -136,16 +132,9 @@
     <!-- 2: Monofonto_Large -->
     <font id="2" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -154,16 +143,9 @@
     <!-- 3: Glow_Monofonto_Medium -->
     <font id="3" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="26" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.25" y="1.5" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -172,16 +154,9 @@
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
     <font id="4" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="32" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="26" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.75" y="2" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -190,16 +165,9 @@
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
     <font id="5" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\FixedsysExcelsior.ttf" index="0"/>
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\FixedsysExcelsior.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\WenQuanYi Bitmap Song 16px.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0"/>
       <outline enabled="0" width="0" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="0" x="0" y="0" blur="0" power="2" includeGlow="0" includeOutline="0" colorMode="fixed" color="#000000" alpha="0"/>
@@ -208,16 +176,9 @@
     <!-- 6: Glow_Monofonto_VL_dialogs -->
     <font id="6" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="30" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="24" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="1" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -226,16 +187,9 @@
     <!-- 7: Baked-in_Monofonto_Large -->
     <font id="7" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="1" inner="0" outer="2.0" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -244,16 +198,9 @@
     <!-- 8: Glow_Futura_Caps_Large -->
     <font id="8" prewarmEncoding="gb2312" effectQuality="fast" verticalMetrics="vanilla" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\Futura BdCn BT Bold.ttf" index="0"/>
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\Futura BdCn BT Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="43" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\HarmonyOS_Sans_SC_Black.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="1" inner="0" outer="3" power="2" colorMode="fill" color="#FFFFFF" alpha="0.35"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="2" y="2.5" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
@@ -262,16 +209,9 @@
     <!-- 42: Monofonto_STn (same as Monofonto_Large) -->
     <font id="42" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
+      <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </singleByte>
-      <doubleByte pixelSize="22" tracking="0" scaleX="1" scaleY="1"
-                  embolden="0" slant="0" baselineOffset="0">
-        <face path="Data\NVSE\plugins\fonts\SarasaUiSC-Bold.ttf" index="0"/>
-        <fallback path="" index="0"/>
-      </doubleByte>
+                  embolden="0" slant="0" baselineOffset="0"/>
       <glow enabled="0" inner="0" outer="2" power="2" colorMode="fill" color="#FFFFFF" alpha="0.5"/>
       <outline enabled="1" width="1" softness="0.5" color="#1A1A1A" alpha="1"/>
       <shadow enabled="1" x="1.5" y="1.75" blur="0" power="1.5" includeGlow="1" includeOutline="0" colorMode="fixed" color="#000000" alpha="0.75"/>
