@@ -272,6 +272,7 @@ namespace fonthook
 			static constexpr size_t kDirectFontSlots = 64;
 			NiNode* parent = nullptr;
 			float rasterScale = 1.0f;
+			bool suppressEffects = false;
 			std::array<Font*, kDirectFontSlots> fonts = {};
 			std::array<std::optional<VectorTextBuilder>,
 				kDirectFontSlots> builders;
@@ -446,9 +447,10 @@ namespace fonthook
 		}
 
 		Impl(Font* apFont, bool abPrepareObject, float afRasterScale,
-			const NiColorA* apTileColor)
+			const NiColorA* apTileColor, bool abSuppressEffects)
 			: font(apFont), prepareObject(abPrepareObject),
-			suppressEffects(IsFreeTypeEffectSuppressionActive()),
+			suppressEffects(abSuppressEffects
+				|| IsFreeTypeEffectSuppressionActive()),
 			rasterScale(std::isfinite(afRasterScale) && afRasterScale >= 0.1f
 				&& afRasterScale <= 10.0f ? afRasterScale : 1.0f),
 				tileColor(apTileColor ? *apTileColor
@@ -477,9 +479,10 @@ namespace fonthook
 	}
 
 	VectorTextBuilder::VectorTextBuilder(Font* apFont, bool abPrepareObject,
-		float afRasterScale, const NiColorA* apTileColor)
+		float afRasterScale, const NiColorA* apTileColor,
+		bool abSuppressEffects)
 		: m_impl(std::make_unique<Impl>(apFont, abPrepareObject,
-			afRasterScale, apTileColor))
+			afRasterScale, apTileColor, abSuppressEffects))
 	{
 	}
 
@@ -741,6 +744,8 @@ namespace fonthook
 		s_richTextContext.emplace();
 		s_richTextContext->parent = parent;
 		s_richTextContext->rasterScale = GetCanonicalFreeTypeRasterScale();
+		s_richTextContext->suppressEffects =
+			g_bDisableFreeTypeRichTextEffects;
 	}
 
 	void EndFreeTypeRichTextRender()
@@ -796,7 +801,8 @@ namespace fonthook
 				s_richTextContext->builders[fontId];
 			if (!builder)
 				builder.emplace(font, true,
-					s_richTextContext->rasterScale, color);
+					s_richTextContext->rasterScale, color,
+					s_richTextContext->suppressEffects);
 			return builder->IsAvailable()
 				&& builder->AddEncodedGlyph(
 					encoded, pen, color);
@@ -805,7 +811,8 @@ namespace fonthook
 			s_richTextContext->fallbackBuilders[font];
 		if (!builder)
 			builder = std::make_unique<VectorTextBuilder>(font, true,
-				s_richTextContext->rasterScale, color);
+				s_richTextContext->rasterScale, color,
+				s_richTextContext->suppressEffects);
 		return builder->IsAvailable()
 			&& builder->AddEncodedGlyph(
 				encoded, pen, color);

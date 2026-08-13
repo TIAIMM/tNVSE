@@ -190,8 +190,10 @@ namespace fonthook
 	class VectorTextBuilder
 	{
 	public:
-		VectorTextBuilder(Font* apFont, bool abPrepareObject, float afRasterScale = 1.0f,
-			const NiColorA* apTileColor = nullptr);
+		VectorTextBuilder(Font* apFont, bool abPrepareObject,
+			float afRasterScale = 1.0f,
+			const NiColorA* apTileColor = nullptr,
+			bool abSuppressEffects = false);
 		~VectorTextBuilder();
 
 		VectorTextBuilder(const VectorTextBuilder&) = delete;

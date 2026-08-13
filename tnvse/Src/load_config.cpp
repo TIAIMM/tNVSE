@@ -22,6 +22,7 @@ bool g_bEnableFreeTypeFontCommandBuffer = false;
 UINT32 g_uiFreeTypeFontDistanceFieldMode = kFreeTypeFontMtsdfMode;
 UINT32 g_uiFreeTypeFontGpuAtlasCacheMB;
 bool g_bEnableFreeTypeFontCompositePass = true;
+bool g_bDisableFreeTypeRichTextEffects = false;
 bool g_bFixPipBoySearchIcon = true;
 bool g_bMultibyteInput;
 bool g_bMultibyteInputLog;
@@ -264,6 +265,12 @@ void LoadConfig()
 		filename) != 0;
 	gLog.FormattedMessage("g_bEnableFreeTypeFontCompositePass: %d",
 		g_bEnableFreeTypeFontCompositePass);
+
+	g_bDisableFreeTypeRichTextEffects = ReadConfigInt(
+		kFreeTypeFontSection, "bDisableFreeTypeRichTextEffects", 0,
+		filename) != 0;
+	gLog.FormattedMessage("g_bDisableFreeTypeRichTextEffects: %d",
+		g_bDisableFreeTypeRichTextEffects);
 
 	g_bFixPipBoySearchIcon = ReadConfigInt(
 		kFreeTypeFontSection, "bFixPipBoySearchIcon", 1, filename) != 0;
