@@ -902,13 +902,15 @@ namespace fonthook::vectorfont
 	struct DirectGlyphCommand
 	{
 		NiPoint3 pen;
-		UInt32 packedColor = 0xFFFFFFFFu;
+		// Preserve the game-provided color until the final vertex boundary. In
+		// particular, creation alpha can be nonzero but smaller than 1 / 255.
+		NiColorA sourceColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		UInt16 directSlot = std::numeric_limits<UInt16>::max();
 		UInt16 encodedCode = 0;
 		UInt8 byteClass = 0;
 		UInt8 byteLength = 0;
 	};
-	static_assert(sizeof(DirectGlyphCommand) <= 24);
+	static_assert(sizeof(DirectGlyphCommand) <= 36);
 
 	enum class GlyphAtlasBuildOutcome : UInt8
 	{

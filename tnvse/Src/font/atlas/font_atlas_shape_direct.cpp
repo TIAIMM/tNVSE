@@ -54,7 +54,7 @@ namespace fonthook::vectorfont
 		NiColorA GetDirectGlyphSourceColor(
 			const DirectGlyphCommand& glyph)
 		{
-			return UnpackNativeBaseColor(glyph.packedColor);
+			return glyph.sourceColor;
 		}
 
 		VectorFontByteClass GetDirectGlyphByteClass(
@@ -432,7 +432,7 @@ namespace fonthook::vectorfont
 			if (resolution.knownEmpty)
 				continue;
 			const NiColorA baseColor = ResolveBaseColor(
-				UnpackNativeBaseColor(command.packedColor), tileColor);
+				command.sourceColor, tileColor);
 			for (size_t layer = 0; layer < enabled.size(); ++layer)
 			{
 				if (!enabled[layer])

@@ -103,33 +103,6 @@ namespace fonthook
 		UInt32 s_atlasEmptyLogCount = 0;
 		UInt32 s_atlasFailureLogCount = 0;
 
-		UInt32 PackDirectCommandColor(const NiColorA& color)
-		{
-			auto channel = [](float value)
-			{
-				if (!std::isfinite(value))
-					value = 1.0f;
-				return static_cast<UInt32>(
-					std::clamp(value, 0.0f, 1.0f)
-					* 255.0f + 0.5f);
-			};
-			return (channel(color.a) << 24)
-				| (channel(color.r) << 16)
-				| (channel(color.g) << 8)
-				| channel(color.b);
-		}
-
-		NiColorA UnpackDirectCommandColor(UInt32 color)
-		{
-			constexpr float inverse = 1.0f / 255.0f;
-			return {
-				static_cast<float>((color >> 16) & 0xFFu) * inverse,
-				static_cast<float>((color >> 8) & 0xFFu) * inverse,
-				static_cast<float>(color & 0xFFu) * inverse,
-				static_cast<float>((color >> 24) & 0xFFu) * inverse
-			};
-		}
-
 		const char* GlyphAtlasBuildOutcomeName(
 			vectorfont::GlyphAtlasBuildOutcome outcome)
 		{
@@ -464,7 +437,7 @@ namespace fonthook
 					return false;
 				}
 				glyphs.push_back({ replayGlyph, command.pen,
-					UnpackDirectCommandColor(command.packedColor) });
+					command.sourceColor });
 			}
 			directGlyphs.clear();
 			sealedProfile.reset();
@@ -572,8 +545,7 @@ namespace fonthook
 			}
 			vectorfont::DirectGlyphCommand command;
 			command.pen = pen;
-			command.packedColor =
-				PackDirectCommandColor(sourceColor);
+			command.sourceColor = sourceColor;
 			command.directSlot = glyph.directSlot;
 			command.encodedCode =
 				static_cast<UInt16>(glyph.encodedCode);
