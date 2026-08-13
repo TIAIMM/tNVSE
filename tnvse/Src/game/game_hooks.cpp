@@ -32,6 +32,67 @@ namespace fonthook
 		inline constexpr SIZE_T kFontMakeString = 0xA12460;
 		inline constexpr SIZE_T kFontManagerCalculateStringDimensions = 0xA1B020;
 		inline constexpr SIZE_T kFontPrepText = 0xA12FB0;
+		inline constexpr SIZE_T kQuestTextCaseCall = 0x77AD36;
+		inline constexpr SIZE_T kRetailQuestTextToUpper = 0xECA7F4;
+		inline constexpr SIZE_T kQuestTextCasePrefixAddress = 0x77AD27;
+		inline constexpr SIZE_T kQuestTextCaseSuffixAddress = 0x77AD3B;
+
+		// HUDMainMenu::UpdateQuestText 1.4.0.525 context around 0x77AD36:
+		//   load/sign-extend localBuffer[index], push it, CALL toupper,
+		//   then clean the cdecl argument and store AL back to the same byte.
+		constexpr std::array<UInt8, 15> kQuestTextCasePrefix = {
+			0x8B, 0x85, 0x80, 0xFE, 0xFF, 0xFF,
+			0x0F, 0xBE, 0x8C, 0x05, 0xAC, 0xFE, 0xFF, 0xFF,
+			0x51,
+		};
+		constexpr std::array<UInt8, 16> kQuestTextCaseSuffix = {
+			0x83, 0xC4, 0x04,
+			0x8B, 0x95, 0x80, 0xFE, 0xFF, 0xFF,
+			0x88, 0x84, 0x15, 0xAC, 0xFE, 0xFF, 0xFF,
+		};
+		static_assert(kQuestTextCasePrefixAddress
+			+ kQuestTextCasePrefix.size() == kQuestTextCaseCall);
+		static_assert(kQuestTextCaseCall + 5
+			== kQuestTextCaseSuffixAddress);
+
+		bool ValidateQuestTextCaseLoopContext()
+		{
+			const bool prefixAccessible = hook_identity::IsAccessibleRegion(
+				kQuestTextCasePrefixAddress, kQuestTextCasePrefix.size(), true);
+			const bool suffixAccessible = hook_identity::IsAccessibleRegion(
+				kQuestTextCaseSuffixAddress, kQuestTextCaseSuffix.size(), true);
+			const bool prefixMatches = prefixAccessible
+				&& hook_identity::MatchesBytesUnchecked(
+					kQuestTextCasePrefixAddress, kQuestTextCasePrefix.data(),
+					kQuestTextCasePrefix.size());
+			const bool suffixMatches = suffixAccessible
+				&& hook_identity::MatchesBytesUnchecked(
+					kQuestTextCaseSuffixAddress, kQuestTextCaseSuffix.data(),
+					kQuestTextCaseSuffix.size());
+			if (prefixMatches && suffixMatches)
+				return true;
+
+			gLog.FormattedMessage(
+				"tnvse_font_hook: identity mismatch site=HUDMainMenu::UpdateQuestText byte-case loop call=%08X prefix=%08X/%u prefixMatch=%u suffix=%08X/%u suffixMatch=%u",
+				static_cast<UInt32>(kQuestTextCaseCall),
+				static_cast<UInt32>(kQuestTextCasePrefixAddress),
+				static_cast<UInt32>(kQuestTextCasePrefix.size()),
+				prefixMatches ? 1u : 0u,
+				static_cast<UInt32>(kQuestTextCaseSuffixAddress),
+				static_cast<UInt32>(kQuestTextCaseSuffix.size()),
+				suffixMatches ? 1u : 0u);
+			return false;
+		}
+
+		bool MatchesQuestTextCaseLoopContextUnchecked()
+		{
+			return hook_identity::MatchesBytesUnchecked(
+					kQuestTextCasePrefixAddress, kQuestTextCasePrefix.data(),
+					kQuestTextCasePrefix.size())
+				&& hook_identity::MatchesBytesUnchecked(
+					kQuestTextCaseSuffixAddress, kQuestTextCaseSuffix.data(),
+					kQuestTextCaseSuffix.size());
+		}
 
 		// Font::Load allocates exactly sizeof(FontData), but retail asks BSFile for
 		// the complete .FNT size and passes that value to Read.  Extended tNVSE
@@ -164,7 +225,7 @@ namespace fonthook
 			{ "TextLine constructor -> TextLine::AddChar (__thiscall member)", 0xA1BDE2, 0xA19F70, &FontManagerEx::TextLineAddChar },
 		}};
 
-		std::array<hook_site::RelCallSite, 27> kMultibyteFontCallSites = {{
+		std::array<hook_site::RelCallSite, 28> kMultibyteFontCallSites = {{
 			{ "AnimatingText::Update -> encoded-unit memcpy (__cdecl)", 0x6FFFEE, 0x401460, &CopyAnimatingTextEncodedUnits },
 			{ "FontManager::PrepText -> PrepHypertext (__thiscall member)", 0xA18ACC, 0xA17390, &FontManagerEx::PrepHypertext },
 			{ "PrepHypertext CollectTo[0] (__fastcall thiscall shim)", 0xA1772D, 0xA16EA0, &FontManagerEx::CollectTo },
@@ -192,6 +253,7 @@ namespace fonthook
 			{ "Location text -> BSStringT<char>::GetCStringOrEmpty (__fastcall)", 0x772B4B, 0x438EB0, &BSString_GetCStringOrEmptyHook },
 			{ "Quest text -> strcpy_s[0] (__cdecl)", 0x77ACCC, 0x406D30, &strcpy_sHook },
 			{ "Quest text -> strcpy_s[1] (__cdecl)", 0x77ACF8, 0x406D30, &strcpy_sHook },
+			{ "Quest text byte-case loop -> DBCS-preserving identity (__cdecl)", kQuestTextCaseCall, kRetailQuestTextToUpper, &QuestTextCaseIdentityHook },
 		}};
 
 		constexpr std::array<UInt8, 8> kFontPrepTextEntryPrefix = {
@@ -332,6 +394,7 @@ namespace fonthook
 			{
 				valid = ValidateVanillaCallSites(kMultibyteFontCallSites)
 					&& valid;
+				valid = ValidateQuestTextCaseLoopContext() && valid;
 				if (!s_fontPrepTextEntrySite.MatchesOriginalBytes())
 				{
 					gLog.FormattedMessage(
@@ -470,6 +533,7 @@ namespace fonthook
 			if (s_fontHookInstallState.multibyte)
 			{
 				return s_fontPrepTextEntrySite.IsInstalledUnchecked()
+					&& MatchesQuestTextCaseLoopContextUnchecked()
 					&& MatchInstalledCallSitesUnchecked(
 						kMultibyteFontCallSites);
 			}
@@ -958,6 +1022,8 @@ namespace fonthook
 			{
 				modeInstalled = VerifyInstalledCallSites(
 					kMultibyteFontCallSites);
+				modeInstalled = ValidateQuestTextCaseLoopContext()
+					&& modeInstalled;
 				prepTextTarget = s_fontPrepTextEntrySite.replacementTarget;
 				prepTextInstalled = VerifyFontPrepTextEntry(prepTextTarget);
 			}
@@ -1311,10 +1377,16 @@ namespace fonthook
 		// Quest text strcpy_s adapters (__cdecl)
 		WriteRelCall(0x77ACCC, &strcpy_sHook);
 		WriteRelCall(0x77ACF8, &strcpy_sHook);
+		// The copied buffer has already received a DBCS-aware case pass. Keep
+		// retail's following byte-at-a-time loop from mutating trail bytes.
+		WriteRelCall(kQuestTextCaseCall, &QuestTextCaseIdentityHook);
 
 		FinalizeFontHookGraph(true, g_bEnableFreeTypeFontRendering);
 		if (!s_fontHookInstallState.multibyte)
 			return s_fontHookInstallState;
+		gLog.FormattedMessage(
+			"tnvse_font_hook: quest text DBCS case guard installed copySites=77ACCC,77ACF8 caseSite=%08X configuredCodePage=%u",
+			static_cast<UInt32>(kQuestTextCaseCall), g_usingWinEncoding);
 		gLog.FormattedMessage(
 			"tnvse_font_hook: installed mode=%s configuredCodePage=%u freeTypeCodePage=%u",
 			s_fontHookInstallState.freeType ? "multibyte-freetype" : "multibyte-original",

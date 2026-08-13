@@ -15,6 +15,7 @@ namespace fonthook
 	char* __fastcall BSString_c_strHook(BSStringT<char>* pthis, void*);
 	char* __fastcall BSString_GetCStringOrEmptyHook(BSStringT<char>* pthis, void*);
 	int __cdecl strcpy_sHook(char* dest, int dest_size, const char* src);
+	int __cdecl QuestTextCaseIdentityHook(int value);
 
 	// ---- Door Prompt Hooks ----
 	int BSsprintfHookCHS(

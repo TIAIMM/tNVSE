@@ -2,6 +2,8 @@
 #include "dictionary.h"
 #include "font_glyphs.h"
 
+#include <cstddef>
+
 namespace fonthook
 {
 	namespace implementation::text_hooks {}
@@ -9,6 +11,36 @@ namespace fonthook
 
 	namespace implementation::text_hooks
 	{
+		inline constexpr SIZE_T kRetailQuestTextToUpper = 0xECA7F4;
+
+		// HUDMainMenu::UpdateQuestText uppercases its copied quest/location body
+		// one byte at a time. DBCS trail bytes can overlap ASCII a-z, so perform
+		// the intended case conversion here while the complete byte stream is
+		// available. The retail byte loop is replaced by the identity hook below.
+		void UppercaseQuestTextPreservingDbcs(char* text, size_t capacity)
+		{
+			if (!text || capacity == 0)
+				return;
+
+			for (size_t index = 0; index < capacity && text[index];)
+			{
+				UInt32 doubleByteCode = 0;
+				if (index + 1 < capacity
+					&& TryDecodeDoubleByte(text + index, doubleByteCode))
+				{
+					index += 2;
+					continue;
+				}
+
+				// Match retail's MOVSX argument exactly for every standalone byte.
+				const int input = static_cast<int>(
+					static_cast<signed char>(text[index]));
+				text[index] = static_cast<char>(
+					CdeclCall<int>(kRetailQuestTextToUpper, input));
+				++index;
+			}
+		}
+
 		std::string GetDoorStructuralParticle()
 		{
 			if (g_sOptionalStructuralParticle.empty())
@@ -167,9 +199,20 @@ namespace fonthook
 		std::string sConvertedStr;
 		ConvertToMultiByte(src, sConvertedStr, HasExtraGlyphsForFont(8));
 		std::string sTranslatedStr;
-		if (TranslateText(src, sTranslatedStr))
-			return strcpy_s(dest, dest_size, sTranslatedStr.c_str());
-		return strcpy_s(dest, dest_size, src);
+		const char* copySource = TranslateText(src, sTranslatedStr)
+			? sTranslatedStr.c_str() : src;
+		const int result = strcpy_s(dest, dest_size, copySource);
+		if (result == 0 && dest_size > 0)
+		{
+			UppercaseQuestTextPreservingDbcs(
+				dest, static_cast<size_t>(dest_size));
+		}
+		return result;
+	}
+
+	int __cdecl QuestTextCaseIdentityHook(int value)
+	{
+		return value;
 	}
 
 	// ==================== Door Prompt Hooks ====================
