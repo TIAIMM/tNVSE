@@ -12,6 +12,38 @@ namespace fonthook
 	namespace implementation::multibyte_input
 	{
 		bool s_initialized = false;
+
+		void TryInitializeRuntime(const char* source)
+		{
+			using namespace fonthook::multibyte_input;
+
+			if (!s_hooksInstalled)
+				return;
+
+			bool windowProcPublished = false;
+			if (!TryInstallWindowProc(&windowProcPublished)
+				|| !windowProcPublished)
+			{
+				return;
+			}
+
+			// COM/TSF and window subclassing must not run from NVSEPlugin_Load:
+			// xNVSE invokes plugin Load callbacks while its DLL is still under the
+			// loader lock. DeferredInit/MainGameLoop run after that load chain and
+			// on the game-window thread enforced by TryInstallWindowProc().
+			if (InitializeTsfCandidateSupport())
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: runtime initialized source=%s; TSF system candidate UI suppression enabled",
+					source ? source : "unknown");
+			}
+			else
+			{
+				gLog.FormattedMessage(
+					"tnvse_multibyte_input: runtime initialized source=%s; TSF UI element sink unavailable, WM_IME_SETCONTEXT and IMM32 offscreen suppression remain active",
+					source ? source : "unknown");
+			}
+		}
 	}
 
 	namespace multibyte_input
@@ -50,18 +82,6 @@ namespace fonthook
 			return;
 		}
 		s_hooksInstalled = true;
-		TryInstallWindowProc();
-
-		if (InitializeTsfCandidateSupport())
-		{
-			gLog.FormattedMessage(
-				"tnvse_multibyte_input: TSF system candidate UI suppression enabled");
-		}
-		else
-		{
-			gLog.FormattedMessage(
-				"tnvse_multibyte_input: TSF UI element sink unavailable; WM_IME_SETCONTEXT and IMM32 offscreen suppression remain active");
-		}
 
 		if (g_bMultibyteInputCompositionPreview)
 		{
@@ -70,7 +90,8 @@ namespace fonthook
 			gLog.FormattedMessage(
 				"tnvse_multibyte_input: native Tile composition preview enabled; host will be resolved on the main loop");
 		}
-		gLog.FormattedMessage("tnvse_multibyte_input: hooks installed");
+		gLog.FormattedMessage(
+			"tnvse_multibyte_input: TextEdit hooks installed; window, IMM32, and TSF runtime initialization deferred");
 	}
 
 	void HandleMultibyteInputMessage(NVSEMessagingInterface::Message* apMessage)
@@ -88,20 +109,15 @@ namespace fonthook
 				InitializeModernHelpMenuInputBridge();
 				InitializeMcmExtenderInputBridge();
 				InitializeDialogueHistoryInputBridge();
+				TryInitializeRuntime("deferred_init");
 			}
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 		{
-			bool windowProcPublished = false;
-			if (s_hooksInstalled
-				&& TryInstallWindowProc(&windowProcPublished)
-				&& windowProcPublished)
-			{
-				// A new game window can follow ExitToMainMenu. Recreate/verify the
-				// process-local TSF sink only when the adapter is actually published;
-				// an externally replaced live chain is deliberately not overwritten.
-				InitializeTsfCandidateSupport();
-			}
+			// DeferredInit can precede creation of the game HWND. Retry window
+			// publication here; TSF is initialized only for a newly published
+			// adapter, including a replacement window after ExitToMainMenu.
+			TryInitializeRuntime("main_game_loop");
 
 			if (s_hooksInstalled)
 			{
@@ -131,6 +147,9 @@ namespace fonthook
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
 			ShutdownNativeTileOverlayHost();
+			// COM teardown must not depend on whether a later plugin currently
+			// owns the top of the WndProc subclass chain.
+			ShutdownTsfCandidateSupport();
 			RestoreWindowProc();
 		}
 		else if (apMessage->type == NVSEMessagingInterface::kMessage_ExitToMainMenu)

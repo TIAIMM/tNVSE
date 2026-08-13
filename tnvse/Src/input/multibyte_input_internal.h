@@ -330,6 +330,7 @@ namespace fonthook
 		bool HasOverlayInputTarget();
 		bool IsCandidateOverlayRendererAvailable();
 		bool InitializeTsfCandidateSupport();
+		void ShutdownTsfCandidateSupport();
 		void PumpTsfInputUpdates();
 		void UpdateCandidateOverlay();
 		void PumpCandidateOverlay();

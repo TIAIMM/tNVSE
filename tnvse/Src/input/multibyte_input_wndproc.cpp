@@ -14,6 +14,7 @@ namespace fonthook
 		};
 		WNDPROC s_lastUnknownTopWindowProc = nullptr;
 		bool s_loggedWindowProcReadFailure = false;
+		DWORD s_lastRejectedWindowThreadId = 0;
 
 		bool ApplyCapturedImeResult(
 			const std::wstring& result,
@@ -1468,6 +1469,27 @@ namespace fonthook
 			if (!hwnd)
 				return false;
 
+			DWORD processId = 0;
+			const DWORD windowThreadId = GetWindowThreadProcessId(hwnd, &processId);
+			const DWORD currentThreadId = GetCurrentThreadId();
+			if (!windowThreadId
+				|| processId != GetCurrentProcessId()
+				|| windowThreadId != currentThreadId)
+			{
+				if (s_lastRejectedWindowThreadId != windowThreadId)
+				{
+					s_lastRejectedWindowThreadId = windowThreadId;
+					gLog.FormattedMessage(
+						"tnvse_multibyte_input: deferred WndProc runtime initialization hwnd=0x%08X windowThread=%u currentThread=%u process=%u; waiting for the game-window thread",
+						reinterpret_cast<UInt32>(hwnd),
+						windowThreadId,
+						currentThreadId,
+						processId);
+				}
+				return false;
+			}
+			s_lastRejectedWindowThreadId = 0;
+
 			LONG_PTR previousWndProc = 0;
 			if (!SafeSetWindowLongPtrA(hwnd, GWLP_WNDPROC,
 					reinterpret_cast<LONG_PTR>(adapter),
@@ -1569,6 +1591,7 @@ namespace fonthook
 				s_predecessorWndProc = nullptr;
 				s_lastUnknownTopWindowProc = nullptr;
 				s_loggedWindowProcReadFailure = false;
+				s_lastRejectedWindowThreadId = 0;
 				s_gameWindowProcSite.windowHandle = nullptr;
 				s_gameWindowProcSite.predecessorProc = nullptr;
 				ShutdownTsfCandidateSupport();
