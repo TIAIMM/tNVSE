@@ -38,8 +38,22 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg);
 
 namespace
 {
-	constexpr UInt32 kSupportedRuntimeVersion = 0x040020D0;
+	constexpr UInt32 kRequiredNvseVersion = 0x06040080;
+	constexpr UInt32 kMinimumRuntimeVersion = 0x040020D0;
+	constexpr UInt32 kMinimumEditorVersion = 0x04002060;
 	bool s_shaderLoaderListenerRegistered = false;
+
+	bool IsSupportedNvseEnvironment(const NVSEInterface* nvse)
+	{
+		if (!nvse)
+			return false;
+		if (nvse->nvseVersion < kRequiredNvseVersion)
+			return false;
+		if (nvse->isEditor)
+			return nvse->editorVersion >= kMinimumEditorVersion;
+		return nvse->runtimeVersion >= kMinimumRuntimeVersion
+			&& !nvse->isNogore;
+	}
 
 	bool TryRegisterShaderLoaderListener()
 	{
@@ -292,29 +306,30 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 	info->name = "tNVSE";
 	info->version = 63;
 
-	// Every game/renderer entry used by tNVSE is a fixed address in the retail
-	// 1.4.0.525 image. In particular, the NoGore 1.4.0.525 executable has a
-	// distinct packed version and must not reach any hook installer.
-	return nvse->isEditor
-		|| nvse->runtimeVersion == kSupportedRuntimeVersion;
+	return IsSupportedNvseEnvironment(nvse);
 }
 
 bool NVSEPlugin_Load(const NVSEInterface* nvse)
 {
 	if (!nvse)
 		return false;
+	if (!IsSupportedNvseEnvironment(nvse)
+		|| !nvse->QueryInterface || !nvse->GetPluginHandle)
+	{
+		const UInt32 isNogore = nvse->nvseVersion >= kRequiredNvseVersion
+			? nvse->isNogore : 0u;
+		gLog.FormattedMessage(
+			"tnvse: unsupported xNVSE/runtime/editor or incomplete root interface nvse=%08X minimumNvse=%08X runtime=%08X minimumRuntime=%08X editor=%08X minimumEditor=%08X isEditor=%u isNogore=%u query=%p handle=%p",
+			nvse->nvseVersion, kRequiredNvseVersion,
+			nvse->runtimeVersion, kMinimumRuntimeVersion,
+			nvse->editorVersion, kMinimumEditorVersion,
+			nvse->isEditor, isNogore,
+			nvse->QueryInterface, nvse->GetPluginHandle);
+		return false;
+	}
 	if (nvse->isEditor)
 	{
 		return true;
-	}
-	if (nvse->runtimeVersion != kSupportedRuntimeVersion
-		|| !nvse->QueryInterface || !nvse->GetPluginHandle)
-	{
-		gLog.FormattedMessage(
-			"tnvse: unsupported runtime or incomplete NVSE root interface runtime=%08X expected=%08X query=%p handle=%p",
-			nvse->runtimeVersion, kSupportedRuntimeVersion,
-			nvse->QueryInterface, nvse->GetPluginHandle);
-		return false;
 	}
 	if (fonthook::compatibility::BlockTianmiaoFontPatchIfPresent(
 		"plugin-load-entry"))

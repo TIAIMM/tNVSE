@@ -8,6 +8,7 @@ class Script;
 class TESForm;
 struct ScriptEventList;
 struct ArrayKey;
+enum CommandReturnType : UInt8;
 
 namespace PluginAPI
 {
@@ -58,6 +59,9 @@ struct NVSEInterface
 	void (*SetOpcodeBase)(UInt32 opcode);
 	void* (*QueryInterface)(UInt32 id);
 	PluginHandle(*GetPluginHandle)(void);
+	bool (*RegisterTypedCommand)(CommandInfo* info, CommandReturnType retnType);
+	const char* (*GetRuntimeDirectory)(void);
+	UInt32 isNogore;
 };
 
 struct NVSEConsoleInterface
