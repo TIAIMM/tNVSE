@@ -29,7 +29,7 @@ namespace fonthook
 		const NiColorA* color, NiTriShape** textShape, NiTriShape** iconShape);
 	NiAVObject* CallOriginalFontMakeString(
 		Font* font, float startX, float startY, float z,
-		BSStringT<char>* text, int* width, bool prepareObject,
+		BSStringT<char>* text, int* width, UInt32 flags,
 		const NiColorA* color, bool upperLeftCorner, bool prepareObjectFinal);
 	NiPoint3* CallOriginalCalculateStringDimensions(
 		FontManager* manager, NiPoint3* dimensions, const char* text,

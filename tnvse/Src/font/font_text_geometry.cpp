@@ -729,14 +729,14 @@ namespace fonthook
 	// ==================== FontEx::MakeString ====================
 	NiAVObject* FontEx::MakeString(
 		float afStartX, float afStartY, float afZ,
-		BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
+		BSStringT<char>* apTextString, int* aiWidth, UInt32 aiFlags,
 		const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1)
 	{
 		const bool freeTypeActive = IsFreeTypeFontActive(this);
 		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
 		{
 			return CallOriginalFontMakeString(this, afStartX, afStartY, afZ,
-				apTextString, aiWidth, abPrepareObject, arg1C,
+				apTextString, aiWidth, aiFlags, arg1C,
 				abUpperLeftCorner, abPrepareObject_1);
 		}
 
@@ -769,13 +769,13 @@ namespace fonthook
 				this,
 				apTextString->pString,
 				textXOffset,
-				static_cast<UInt32>(abPrepareObject),
+				aiFlags,
 				0);
 		}
 		else
 		{
 			ThisStdCall<void>(0xA12370, this, apTextString->pString, &textXOffset,
-				newlineBuffer, abPrepareObject, 0);
+				newlineBuffer, aiFlags, 0);
 		}
 
 		float currentX = afStartX + textXOffset;
@@ -847,13 +847,13 @@ namespace fonthook
 					{
 						nextLineX = GetFreeTypeLineOffset(this,
 							apTextString->pString, nextLineX,
-							static_cast<UInt32>(abPrepareObject), byteIndex + 1);
+							aiFlags, byteIndex + 1);
 					}
 					else
 					{
 						char escapeBuffer[4];
 						ThisStdCall<void>(0xA12370, this, apTextString->pString,
-							&nextLineX, escapeBuffer, abPrepareObject,
+							&nextLineX, escapeBuffer, aiFlags,
 							byteIndex + 1);
 					}
 					*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
@@ -922,7 +922,7 @@ namespace fonthook
 				char escapeBuffer[4];
 				float tabPrevX = (float)*aiWidth;
 				ThisStdCall<void>(0xA12370, this, apTextString->pString, &tabPrevX,
-					escapeBuffer, abPrepareObject, lineIdx + 1);
+					escapeBuffer, aiFlags, lineIdx + 1);
 				position.x = tabPrevX;
 				position.z -= this->pFontData->fBaseLine;
 			}

@@ -417,7 +417,7 @@ namespace fonthook
 		using FontCreateTextFn = void (__thiscall*)(Font*, BSStringT<char>*,
 			int*, int*, int, int, int, char, const NiColorA*, NiTriShape**, NiTriShape**);
 		using FontMakeStringFn = NiAVObject* (__thiscall*)(Font*, float, float,
-			float, BSStringT<char>*, int*, bool, const NiColorA*, bool, bool);
+			float, BSStringT<char>*, int*, UInt32, const NiColorA*, bool, bool);
 		using CalculateStringDimensionsFn = NiPoint3* (__thiscall*)(FontManager*,
 			NiPoint3*, const char*, UInt32, float, UInt32);
 
@@ -1101,12 +1101,12 @@ namespace fonthook
 
 	NiAVObject* CallOriginalFontMakeString(
 		Font* font, float startX, float startY, float z,
-		BSStringT<char>* text, int* width, bool prepareObject,
+		BSStringT<char>* text, int* width, UInt32 flags,
 		const NiColorA* color, bool upperLeftCorner, bool prepareObjectFinal)
 	{
 		return s_originalFontMakeString
 			? s_originalFontMakeString(font, startX, startY, z, text, width,
-				prepareObject, color, upperLeftCorner, prepareObjectFinal) : nullptr;
+				flags, color, upperLeftCorner, prepareObjectFinal) : nullptr;
 	}
 
 	NiPoint3* CallOriginalCalculateStringDimensions(

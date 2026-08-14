@@ -30,9 +30,10 @@ namespace fonthook
 			BSStringT<char>* axTextString, int* aiWidth, int* aiHeight,
 			int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 			const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape);
+		// Low nibble is justification (1 left, 2 center, 4 right), not a boolean.
 		NiAVObject* MakeString(
 			float afStartX, float afStartY, float afZ,
-			BSStringT<char>* apTextString, int* aiWidth, bool abPrepareObject,
+			BSStringT<char>* apTextString, int* aiWidth, UInt32 aiFlags,
 			const NiColorA* arg1C, bool abUpperLeftCorner, bool abPrepareObject_1);
 		void __thiscall TextDocRenderAddChar(
 			FontLetter* apLetter, int aiVert, NiTriShape* apShape,
