@@ -28,7 +28,8 @@ namespace fonthook::vectorfont
 	{
 		inline constexpr SIZE_T kNiTexturingPropertyDefaultConstructor = 0xA6AA40;
 		inline constexpr SIZE_T kNiTexturingPropertyMapConstructor = 0xA69E00;
-		inline constexpr SIZE_T kSetBaseTextureEnabled = 0x60AEB0;
+		inline constexpr SIZE_T kNiTexturingPropertySetBaseFilterMode = 0x60AEB0;
+		inline constexpr SIZE_T kNiTexturingPropertySetBaseClampMode = 0x4F3200;
 
 		thread_local bool s_atlasAllocationMemoryPressure = false;
 		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
@@ -52,6 +53,14 @@ namespace fonthook::vectorfont
 	void MarkAtlasAllocationMemoryPressure()
 	{
 		s_atlasAllocationMemoryPressure = true;
+	}
+
+	void ConfigureAtlasBaseMapSampling(NiTexturingProperty& property)
+	{
+		ThisStdCall<void>(kNiTexturingPropertySetBaseFilterMode, &property,
+			NiTexturingProperty::FILTER_TRILERP);
+		ThisStdCall<void>(kNiTexturingPropertySetBaseClampMode, &property,
+			NiTexturingProperty::CLAMP_S_CLAMP_T);
 	}
 
 	bool ConsumeAtlasAllocationMemoryPressure()
@@ -508,22 +517,20 @@ namespace fonthook::vectorfont
 			// Retail NiTexturingProperty::NiTexturingProperty at 0xA6AA40 creates
 			// the nine-slot map array without a texture/pixel-data graph. Retail
 			// NiTexturingProperty::Map::Map at 0xA69E00 receives
-			// (texture, lowFlags=0, maxAnisotropy=3, mapType=1, transform=null) and
+			// (texture, uiIndex=0, clampMode=WRAP_S_WRAP_T,
+			// filterMode=FILTER_BILERP, transform=null) and
 			// takes the sole NiTexture reference. Publishing this direct shell avoids
 			// the former 1x1 managed-bootstrap texture swap and its synchronous
 			// temporary NiObjectNET destruction.
 			ThisStdCall<void>(kNiTexturingPropertyDefaultConstructor,
 				propertyStorage);
 			ThisStdCall<void>(kNiTexturingPropertyMapConstructor,
-				mapStorage, static_cast<NiTexture*>(texture), 0, 3, 1,
+				mapStorage, static_cast<NiTexture*>(texture), 0,
+				NiTexturingProperty::WRAP_S_WRAP_T,
+				NiTexturingProperty::FILTER_BILERP,
 				static_cast<NiTextureTransform*>(nullptr));
 			propertyStorage->m_kMaps.SetAt(0, mapStorage);
-			ThisStdCall<void>(kSetBaseTextureEnabled, propertyStorage, 1);
-
-			NiTexturingProperty::Map* map = mapStorage;
-			map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
-				| (NiTexturingProperty::FILTER_TRILERP << 2)
-				| NiTexturingProperty::CLAMP_S_CLAMP_T);
+			ConfigureAtlasBaseMapSampling(*propertyStorage);
 			return propertyStorage;
 		}
 

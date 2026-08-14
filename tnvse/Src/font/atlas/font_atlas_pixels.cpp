@@ -524,13 +524,9 @@ namespace fonthook::vectorfont
 				|| !property->m_kMaps[0]
 				|| !property->m_kMaps[0]->m_spTexture)
 				return nullptr;
-			ThisStdCall<void>(0x60AEB0, property, 1);
+			ConfigureAtlasBaseMapSampling(*property);
 			if (mode == AtlasPixelMode::A8 && !PropertyUsesA8(property))
 				return nullptr;
-			NiTexturingProperty::Map* map = property->m_kMaps[0];
-			map->m_usflags = static_cast<UInt16>((map->m_usflags & ~0x1Fu)
-				| (NiTexturingProperty::FILTER_TRILERP << 2)
-				| NiTexturingProperty::CLAMP_S_CLAMP_T);
 
 			outPixelData = pixelDataGuard;
 			return propertyGuard.release();

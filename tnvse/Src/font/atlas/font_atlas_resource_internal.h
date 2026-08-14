@@ -55,6 +55,7 @@ namespace fonthook::vectorfont
 		UInt32 width, UInt32 height, AtlasPixelMode mode, UInt32 mipLevels);
 	bool PopulateDefaultTexture(IDirect3DTexture9* texture,
 		const AtlasResource& resource, AtlasPixelMode mode);
+	void ConfigureAtlasBaseMapSampling(NiTexturingProperty& property);
 	bool HasDefaultPoolMaintenanceLocked();
 	IDirect3DTexture9* QueryAtlasD3DTexture(const AtlasResource& resource);
 
