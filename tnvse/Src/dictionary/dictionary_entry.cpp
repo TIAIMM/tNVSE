@@ -199,7 +199,15 @@ namespace fonthook
 		entry.lengthWithoutBinds = LengthWithoutBinds(source);
 		entry.isExact = sourceBindCount == 0;
 		if (!entry.isExact)
+		{
 			entry.tokens = SplitByToken(source, kBindSymbol);
+			entry.hasAsciiLiteralAnchor = std::any_of(
+				entry.tokens.begin(), entry.tokens.end(),
+				[](const std::string& token)
+				{
+					return HasAlphabet(token);
+				});
+		}
 
 		const size_t index = s_entries.size();
 		s_entries.push_back(std::move(entry));

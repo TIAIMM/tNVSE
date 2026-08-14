@@ -324,7 +324,7 @@ namespace fonthook
 		}
 	}
 
-	bool TryTranslateRegexText(const std::string& source, std::string& translated)
+	bool TryTranslateRegexText(const std::string& source, std::string& translated, bool mixedSource)
 	{
 		if (s_translationRegexRules.empty())
 			return false;
@@ -349,7 +349,8 @@ namespace fonthook
 						static_cast<size_t>(match.length(i)));
 				}
 				std::string translatedCapture;
-				TranslateInternal(capture.c_str(), translatedCapture, 0);
+				if (!ContainsDbcs(capture))
+					TranslateInternal(capture.c_str(), translatedCapture, 0);
 				const std::string& replacement = translatedCapture.empty() ? capture : translatedCapture;
 				ReplaceAll(result, "$" + std::to_string(i), replacement);
 			}
@@ -358,7 +359,8 @@ namespace fonthook
 
 			if (g_bEnableDictionaryTranslationLog)
 			{
-				gLog.FormattedMessage("tnvse_dictionary: regex match:");
+				gLog.FormattedMessage("tnvse_dictionary: %sregex match:",
+					mixedSource ? "mixed-source " : "");
 				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source.c_str());
 				gLog.FormattedMessage("tnvse_dictionary:   from=\"%s\"", rule.fromPattern.c_str());
 				gLog.FormattedMessage("tnvse_dictionary:   to=\"%s\" ->\"%s\"",

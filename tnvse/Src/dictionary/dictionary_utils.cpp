@@ -214,6 +214,17 @@ namespace fonthook
 		return false;
 	}
 
+	bool ContainsDbcs(std::string_view text)
+	{
+		for (size_t i = 0; i + 1 < text.size(); ++i)
+		{
+			UInt32 code = 0;
+			if (TryDecodeDoubleByte(text.data() + i, code))
+				return true;
+		}
+		return false;
+	}
+
 	void RemoveControlChars(std::string& text)
 	{
 		text.erase(std::remove_if(text.begin(), text.end(), [](unsigned char ch)

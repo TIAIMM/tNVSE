@@ -47,6 +47,7 @@ bool g_bEnableDictionaryItemEffectTranslation;
 bool g_bEnableDictionaryMultiplierTextTranslation;
 bool g_bEnableDictionaryWildcardTranslation;
 bool g_bEnableDictionaryRegexTranslation;
+bool g_bEnableDictionaryMixedSourceTranslation;
 bool g_bEnableDictionaryBeforeLinebreakTranslation;
 bool g_bEnableDictionaryShrinkFuzzyTranslation;
 bool g_bEnableDictionaryTrimBypassFuzzyTranslation;
@@ -415,6 +416,11 @@ void LoadConfig()
 		&& ReadConfigInt(kDictionarySection,
 			"bEnableDictionaryRegexTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryRegexTranslation: %d", g_bEnableDictionaryRegexTranslation);
+
+	g_bEnableDictionaryMixedSourceTranslation = g_bEnableMultibyteFontHook
+		&& ReadConfigInt(kDictionarySection,
+			"bEnableDictionaryMixedSourceTranslation", 0, filename) != 0;
+	gLog.FormattedMessage("g_bEnableDictionaryMixedSourceTranslation: %d", g_bEnableDictionaryMixedSourceTranslation);
 
 	g_bEnableDictionaryBeforeLinebreakTranslation = g_bEnableMultibyteFontHook
 		&& ReadConfigInt(kDictionarySection,

@@ -9,6 +9,9 @@ namespace fonthook
 	{
 		std::string TranslateCapture(const std::string& capture, int depth)
 		{
+			if (ContainsDbcs(capture))
+				return capture;
+
 			std::string translated;
 			if (depth < 4 && TranslateInternal(capture.c_str(), translated, depth + 1))
 				return translated;

@@ -58,6 +58,7 @@ namespace fonthook
 		size_t bindCount = 0;
 		size_t lengthWithoutBinds = 0;
 		bool isExact = true;
+		bool hasAsciiLiteralAnchor = false;
 	};
 
 	// ---- record type for XML auto-entry generation ----
@@ -115,6 +116,7 @@ namespace fonthook
 	void CollapseSpaces(std::string& text);
 	void ToLowerAscii(std::string& text);
 	bool HasAlphabet(std::string_view text);
+	bool ContainsDbcs(std::string_view text);
 	void RemoveControlChars(std::string& text);
 	void Correct1252ToAscii(std::string& text);
 	void Replace1252ForXml(std::wstring& text);
@@ -154,7 +156,7 @@ namespace fonthook
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateMultiplierText(const std::string& source, std::string& translated, int depth);
 	bool TryTranslatePerkDescription(const std::string& source, std::string& translated, int depth);
-	bool TryTranslateRegexText(const std::string& source, std::string& translated);
+	bool TryTranslateRegexText(const std::string& source, std::string& translated, bool mixedSource);
 	bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth);
 	void ResetFuzzyTextConfig();
 	void ResetPerkRequirementConfig();

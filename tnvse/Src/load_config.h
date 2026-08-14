@@ -48,6 +48,7 @@ extern bool g_bEnableDictionaryItemEffectTranslation;
 extern bool g_bEnableDictionaryMultiplierTextTranslation;
 extern bool g_bEnableDictionaryWildcardTranslation;
 extern bool g_bEnableDictionaryRegexTranslation;
+extern bool g_bEnableDictionaryMixedSourceTranslation;
 extern bool g_bEnableDictionaryBeforeLinebreakTranslation;
 extern bool g_bEnableDictionaryShrinkFuzzyTranslation;
 extern bool g_bEnableDictionaryTrimBypassFuzzyTranslation;

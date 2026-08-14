@@ -957,6 +957,8 @@ namespace fonthook
 			for (size_t index : candidateIndexes)
 			{
 				const auto& entry = s_entries[index];
+				if (mappedSource && mappedSource->containsDbcs && !entry.hasAsciiLiteralAnchor)
+					continue;
 				if (key.size() < entry.lengthWithoutBinds)
 					continue;
 
@@ -1269,6 +1271,9 @@ namespace fonthook
 		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);
 		std::string key = mappedSource.key;
 		const bool sourceContainsDbcs = mappedSource.containsDbcs;
+		const bool sourceIsMixed = sourceContainsDbcs && HasAlphabet(raw);
+		const bool allowPatternTranslation = !sourceContainsDbcs
+			|| (g_bEnableDictionaryMixedSourceTranslation && sourceIsMixed);
 		PreparedTranslationMatch fullMatch;
 		if (TryTranslateExactKey(key, fullMatch, depth))
 		{
@@ -1308,12 +1313,13 @@ namespace fonthook
 			return true;
 		}
 
-		if (!sourceContainsDbcs && g_bEnableDictionaryWildcardTranslation && TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
+		if (allowPatternTranslation && g_bEnableDictionaryWildcardTranslation && TryTranslateWildcardKey(key, fullMatch, depth, &mappedSource))
 		{
 			translated = fullMatch.translated;
 			if (g_bEnableDictionaryTranslationLog)
 			{
-				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal wildcard match:");
+				gLog.FormattedMessage("tnvse_dictionary: TranslateInternal %swildcard match:",
+					sourceIsMixed ? "mixed-source " : "");
 				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[fullMatch.entryIndex].key.c_str(), translated.c_str());
@@ -1328,7 +1334,7 @@ namespace fonthook
 			return true;
 		}
 
-		if (!sourceContainsDbcs && g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated))
+		if (allowPatternTranslation && g_bEnableDictionaryRegexTranslation && TryTranslateRegexText(raw, translated, sourceIsMixed))
 		{
 			StorePositiveCache(cacheKey, translated);
 			return true;
