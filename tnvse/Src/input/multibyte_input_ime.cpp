@@ -331,21 +331,20 @@ namespace fonthook
 			handoff.compositionReady = true;
 		}
 
-		void RefreshImeCandidatesFromImm(HWND hwnd)
+		bool TryRefreshImeCandidatesFromImm(HWND hwnd)
 		{
 			if (g_bMultibyteInputLog)
 				++State().candidateContentRefreshes;
-			ClearImeCandidates();
 
 			HIMC context = hwnd ? ImmGetContext(hwnd) : nullptr;
 			if (!context)
-				return;
+				return false;
 
 			const DWORD bytes = ImmGetCandidateListW(context, 0, nullptr, 0);
 			if (!bytes)
 			{
 				ImmReleaseContext(hwnd, context);
-				return;
+				return false;
 			}
 
 			// Candidate lists are normally tiny. Reuse one bounded buffer so
@@ -357,7 +356,7 @@ namespace fonthook
 				|| bytes > kMaxCandidateListBytes)
 			{
 				ImmReleaseContext(hwnd, context);
-				return;
+				return false;
 			}
 
 			std::vector<char>& buffer = State().immCandidateBuffer;
@@ -366,52 +365,66 @@ namespace fonthook
 			if (ImmGetCandidateListW(context, 0, list, bytes) != bytes)
 			{
 				ImmReleaseContext(hwnd, context);
-				return;
+				return false;
 			}
 
-			if (list->dwStyle != IME_CAND_CODE)
+			if (list->dwStyle == IME_CAND_CODE)
 			{
-				State().candidate.selection = list->dwSelection;
-				State().candidate.pageStart = list->dwPageStart;
-				State().candidate.pageSize = list->dwPageSize;
+				ImmReleaseContext(hwnd, context);
+				return false;
+			}
 
-				const DWORD boundedCount = std::min<DWORD>(
-					list->dwCount,
-					static_cast<DWORD>(
-						(bytes - kCandidateOffsetTable) / sizeof(DWORD)));
-				const DWORD pageStart = std::min<DWORD>(
-					list->dwPageStart,
-					boundedCount);
-				const DWORD pageEnd = std::min<DWORD>(
-					boundedCount,
-					pageStart + std::min<DWORD>(
-						list->dwPageSize,
-						kMaxImeCandidatesToDisplay));
-				for (DWORD index = pageStart; index < pageEnd; ++index)
-				{
-					const DWORD offset = list->dwOffset[index];
-					if (!offset || offset >= bytes)
-						continue;
+			const DWORD boundedCount = std::min<DWORD>(
+				list->dwCount,
+				static_cast<DWORD>(
+					(bytes - kCandidateOffsetTable) / sizeof(DWORD)));
+			const DWORD pageStart = std::min<DWORD>(
+				list->dwPageStart,
+				boundedCount);
+			const DWORD pageEnd = std::min<DWORD>(
+				boundedCount,
+				pageStart + std::min<DWORD>(
+					list->dwPageSize,
+					kMaxImeCandidatesToDisplay));
+			const DWORD selection = list->dwSelection;
+			const DWORD publishedPageStart = list->dwPageStart;
+			const DWORD publishedPageSize = list->dwPageSize;
+			std::vector<std::wstring> candidates;
+			candidates.reserve(pageEnd - pageStart);
+			for (DWORD index = pageStart; index < pageEnd; ++index)
+			{
+				const DWORD offset = list->dwOffset[index];
+				if (!offset || offset >= bytes)
+					continue;
 
-					const wchar_t* candidate =
-						reinterpret_cast<const wchar_t*>(
-							buffer.data() + offset);
-					const size_t maxChars =
-						(bytes - offset) / sizeof(wchar_t);
-					size_t length = 0;
-					while (length < maxChars && candidate[length])
-						++length;
-					if (length && length < maxChars)
-					{
-						State().candidate.candidates.emplace_back(
-							candidate,
-							length);
-					}
-				}
+				const wchar_t* candidate =
+					reinterpret_cast<const wchar_t*>(
+						buffer.data() + offset);
+				const size_t maxChars =
+					(bytes - offset) / sizeof(wchar_t);
+				size_t length = 0;
+				while (length < maxChars && candidate[length])
+					++length;
+				if (length && length < maxChars)
+					candidates.emplace_back(candidate, length);
 			}
 
 			ImmReleaseContext(hwnd, context);
+			if (candidates.empty())
+				return false;
+
+			// IMN_OPEN/IMN_CHANGE identifies a current IMM candidate snapshot.
+			// Publish it only after the complete list has been validated so an
+			// unavailable compatibility snapshot cannot erase useful TSF data.
+			ImeState& state = State();
+			state.candidate.selection = selection;
+			state.candidate.pageStart = publishedPageStart;
+			state.candidate.pageSize = publishedPageSize;
+			state.candidate.candidatesFromTsf = false;
+			state.candidate.candidates = std::move(candidates);
+			state.tsfCandidateActive = false;
 			MarkImeResultHandoffCandidates();
+			return true;
 		}
 
 		void RefreshImeCandidates(HWND hwnd)
@@ -422,13 +435,10 @@ namespace fonthook
 				return;
 			}
 
-			if (g_bMultibyteInputUseTSFCandidates
-				&& State().tsfCandidateActive
-				&& State().candidate.candidatesFromTsf
-				&& !State().candidate.candidates.empty())
-				return;
-
-			RefreshImeCandidatesFromImm(hwnd);
+			// An explicit IMM open/change notification is newer evidence than a
+			// previously captured TSF list. Let a valid IMM snapshot replace it;
+			// transactional reading preserves the TSF list when IMM is unavailable.
+			TryRefreshImeCandidatesFromImm(hwnd);
 		}
 
 		void ClearImePreviewState(
