@@ -957,6 +957,8 @@ namespace fonthook
 			for (size_t index : candidateIndexes)
 			{
 				const auto& entry = s_entries[index];
+				if (entry.bindCount != 0 && entry.lengthWithoutBinds == 0)
+					continue;
 				if (mappedSource && mappedSource->containsDbcs && !entry.hasAsciiLiteralAnchor)
 					continue;
 				if (key.size() < entry.lengthWithoutBinds)

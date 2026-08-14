@@ -190,13 +190,23 @@ namespace fonthook
 			return false;
 		}
 
+		const size_t literalLength = LengthWithoutBinds(source);
+		if (sourceBindCount != 0 && literalLength == 0)
+		{
+			if (g_bEnableDictionaryTranslationLog)
+				gLog.FormattedMessage(
+					"tnvse_dictionary: skipped wildcard without literal: source=\"%s\" target=\"%s\" id=\"%s\" priority=%d",
+					source.c_str(), target.c_str(), id.c_str(), priority);
+			return false;
+		}
+
 		DictionaryEntry entry;
 		entry.key = source;
 		entry.target = target;
 		entry.priority = priority;
 		entry.order = s_entries.size();
 		entry.bindCount = sourceBindCount;
-		entry.lengthWithoutBinds = LengthWithoutBinds(source);
+		entry.lengthWithoutBinds = literalLength;
 		entry.isExact = sourceBindCount == 0;
 		if (!entry.isExact)
 		{
