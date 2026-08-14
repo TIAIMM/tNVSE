@@ -497,6 +497,36 @@ namespace fonthook::vectorfont
 			return value && (value & (value - 1u)) == 0;
 		}
 
+		constexpr UInt32 kMinimumSnapshotPageExtent = 64;
+		constexpr UInt32 kMaximumSnapshotPageAspectRatio =
+			kAtlasHardLimit / kMinimumSnapshotPageExtent;
+		// Preserve the cache identity emitted by common modern adapters while
+		// canonicalizing every aspect-ratio cap that cannot constrain any legal
+		// snapshot page. This is an identity token, not a replacement device cap.
+		constexpr UInt32 kNonBindingSnapshotAspectRatioIdentity = 16384;
+
+		constexpr UInt32 GetSnapshotAspectRatioIdentity(
+			UInt32 reportedMaximumAspectRatio)
+		{
+			// A zero D3D9 cap means unrestricted. Values at or above the largest
+			// representable page ratio admit the same complete set of page shapes.
+			if (!reportedMaximumAspectRatio
+				|| reportedMaximumAspectRatio >= kMaximumSnapshotPageAspectRatio)
+			{
+				return kNonBindingSnapshotAspectRatioIdentity;
+			}
+
+			// A cap below the maximum legal page ratio can constrain packing and
+			// therefore remains part of the exact cache identity.
+			return reportedMaximumAspectRatio;
+		}
+
+		static_assert(kMaximumSnapshotPageAspectRatio == 128);
+		static_assert(GetSnapshotAspectRatioIdentity(0) == 16384);
+		static_assert(GetSnapshotAspectRatioIdentity(8192) == 16384);
+		static_assert(GetSnapshotAspectRatioIdentity(16384) == 16384);
+		static_assert(GetSnapshotAspectRatioIdentity(64) == 64);
+
 		SnapshotPackingCaps GetSnapshotPackingCaps()
 		{
 			SnapshotPackingCaps caps;
@@ -533,7 +563,8 @@ namespace fonthook::vectorfont
 		bool IsSnapshotPageShapeValid(UInt32 width, UInt32 height,
 			UInt32 maximumSize, const SnapshotPackingCaps& caps)
 		{
-			if (width < 64 || height < 64
+			if (width < kMinimumSnapshotPageExtent
+				|| height < kMinimumSnapshotPageExtent
 				|| width > maximumSize || height > maximumSize
 				|| !IsPowerOfTwo(width) || !IsPowerOfTwo(height)
 				|| !IsSnapshotAspectRatioValid(width, height, caps))
@@ -639,8 +670,10 @@ namespace fonthook::vectorfont
 				sizeof(packingCaps.singleByteMaximum), hash);
 			hash = HashAtlasBytes(&packingCaps.doubleByteMaximum,
 				sizeof(packingCaps.doubleByteMaximum), hash);
-			hash = HashAtlasBytes(&packingCaps.maximumAspectRatio,
-				sizeof(packingCaps.maximumAspectRatio), hash);
+			const UInt32 aspectRatioIdentity = GetSnapshotAspectRatioIdentity(
+				packingCaps.maximumAspectRatio);
+			hash = HashAtlasBytes(&aspectRatioIdentity,
+				sizeof(aspectRatioIdentity), hash);
 			PhysicalAtlasGroup physicalGroup;
 			const UInt64 physicalGroupIdentity =
 				BuildPhysicalAtlasGroup(config, key.scaleMilli, physicalGroup)
