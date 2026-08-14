@@ -1040,7 +1040,7 @@ namespace fonthook
 		{
 			using hook_identity::Rel32Opcode;
 			hook_site::RelCallSite openCallSite{
-				"PlayerNameEntryMenu -> TextEditMenu::Open (__fastcall)",
+				"PlayerNameEntryMenu -> TextEditMenu::Open (__cdecl)",
 				kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				kVanillaTextEditMenuOpen,
 				&TextEditMenuEx::Open
@@ -1071,7 +1071,7 @@ namespace fonthook
 				return false;
 			}
 
-			// PlayerNameEntryMenu -> TextEditMenu::Open (__fastcall).
+			// PlayerNameEntryMenu -> TextEditMenu::Open (__cdecl).
 			WriteRelCall(kPlayerNameEntryMenuTextEditMenuOpenCallSite,
 				&TextEditMenuEx::Open);
 			// TextEditMenu::HandleKeyboardInput -> TextEditState::Input

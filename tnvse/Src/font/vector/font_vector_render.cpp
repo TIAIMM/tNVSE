@@ -73,7 +73,7 @@ namespace fonthook
 		// FalloutNV.exe 1.4.0.525 retail text-shape primitives. Keep each target
 		// beside its exact calling convention so this factory remains auditable
 		// without routing through Font::MakeTriShape.
-		using BSScissorTriShapeConstructorFn = BSScissorTriShapeView* (__thiscall*)(
+		using BSScissorTriShapeConstructorFn = void (__thiscall*)(
 			BSScissorTriShapeView*, UInt16, NiPoint3*, NiPoint3*, NiColorA*,
 			NiPoint2*, UInt16, UInt32, UInt16, UInt16*,
 			SInt32, SInt32, SInt32, SInt32);
@@ -83,9 +83,8 @@ namespace fonthook
 			NiGeometryData*, NiGeometryData::Consistency);
 		inline constexpr UInt32 kNiGeometryDataSetConsistencyAddress = 0xA67050;
 
-		using TileShaderPropertyConstructorFn =
-			TileShaderPropertyConstructionView* (__thiscall*)(
-				TileShaderPropertyConstructionView*, bool);
+		using TileShaderPropertyConstructorFn = void (__thiscall*)(
+			TileShaderPropertyConstructionView*, bool);
 		inline constexpr UInt32 kTileShaderPropertyConstructorAddress = 0xBB7C30;
 
 		using TileShaderPropertySetTextureFn = void (__thiscall*)(
@@ -322,24 +321,20 @@ namespace fonthook
 			NiFree(indices);
 			return nullptr;
 		}
-		auto* shape = reinterpret_cast<BSScissorTriShapeConstructorFn>(
-			kBSScissorTriShapeConstructorAddress)(
-			static_cast<BSScissorTriShapeView*>(shapeStorage),
+		auto* shape = static_cast<BSScissorTriShapeView*>(shapeStorage);
+		reinterpret_cast<BSScissorTriShapeConstructorFn>(
+			kBSScissorTriShapeConstructorAddress)(shape,
 			static_cast<UInt16>(vertexCount), vertices,
 			nullptr, nullptr, textureCoordinates, 1u, 0u,
 			static_cast<UInt16>(triangleCount), indices,
 			0, 0, 0, 0);
-		NiTriShapeData* data = shape ? shape->GetModelData() : nullptr;
-		if (!shape || !data)
+		NiTriShapeData* data = shape->GetModelData();
+		if (!data)
 		{
 			// The retail constructor transfers these three arrays only when its
 			// NiTriShapeData allocation succeeds. A data-less shape owns none of
 			// them, so release them explicitly after destroying the shape shell.
-			if (shape)
-				shape->DeleteThis();
-			else
-				NiMemObject::operator delete(shapeStorage,
-					kBSScissorTriShapeSize);
+			shape->DeleteThis();
 			memory->Deallocate(vertices);
 			memory->Deallocate(textureCoordinates);
 			NiFree(indices);
@@ -360,16 +355,9 @@ namespace fonthook
 			shape->DeleteThis();
 			return nullptr;
 		}
-		auto* tile = reinterpret_cast<TileShaderPropertyConstructorFn>(
-			kTileShaderPropertyConstructorAddress)(
-			static_cast<TileShaderPropertyConstructionView*>(tileStorage), false);
-		if (!tile)
-		{
-			NiMemObject::operator delete(tileStorage,
-				sizeof(TileShaderPropertyConstructionView));
-			shape->DeleteThis();
-			return nullptr;
-		}
+		auto* tile = static_cast<TileShaderPropertyConstructionView*>(tileStorage);
+		reinterpret_cast<TileShaderPropertyConstructorFn>(
+			kTileShaderPropertyConstructorAddress)(tile, false);
 		shape->AddProperty(tile);
 		tile->overlayColor = tileColor;
 		if (prepareObject)

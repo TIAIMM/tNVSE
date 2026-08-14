@@ -761,7 +761,7 @@ namespace fonthook
 		if (!textLen)
 			return 0;
 
-		char newlineBuffer[4];
+		float textYOffset = 0.0f;
 		float textXOffset = (float)*aiWidth;
 		if (freeTypeActive)
 		{
@@ -775,7 +775,7 @@ namespace fonthook
 		else
 		{
 			ThisStdCall<void>(0xA12370, this, apTextString->pString, &textXOffset,
-				newlineBuffer, aiFlags, 0);
+				&textYOffset, aiFlags, 0);
 		}
 
 		float currentX = afStartX + textXOffset;
@@ -851,9 +851,9 @@ namespace fonthook
 					}
 					else
 					{
-						char escapeBuffer[4];
+						float nextLineYOffset = 0.0f;
 						ThisStdCall<void>(0xA12370, this, apTextString->pString,
-							&nextLineX, escapeBuffer, aiFlags,
+							&nextLineX, &nextLineYOffset, aiFlags,
 							byteIndex + 1);
 					}
 					*aiWidth = MaxInt(*aiWidth, static_cast<int>(std::ceil(
@@ -919,10 +919,10 @@ namespace fonthook
 			}
 			else if (currentCharValue == '\n')
 			{
-				char escapeBuffer[4];
+				float nextLineYOffset = 0.0f;
 				float tabPrevX = (float)*aiWidth;
 				ThisStdCall<void>(0xA12370, this, apTextString->pString, &tabPrevX,
-					escapeBuffer, aiFlags, lineIdx + 1);
+					&nextLineYOffset, aiFlags, lineIdx + 1);
 				position.x = tabPrevX;
 				position.z -= this->pFontData->fBaseLine;
 			}
