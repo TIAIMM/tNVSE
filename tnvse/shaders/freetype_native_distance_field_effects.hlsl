@@ -134,35 +134,45 @@ float SupersampledNativeFontEffect(float2 uv, int layer,
 		NativeFontDistanceFieldBody(centerBodyDistance, antialiasWidth), layer,
 		distanceScale);
 #elif EFFECT_QUALITY == 1
-	const float2 quarter = AtlasPass.xy * 0.25;
+	const float2 uvDx = ddx(uv);
+	const float2 uvDy = ddy(uv);
 	float sum = 0.0;
 	sum += EvaluateNativeFontEffectAt(
-		uv + float2(-quarter.x, -quarter.y), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.25, -0.25)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + float2( quarter.x, -quarter.y), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.25, -0.25)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + float2(-quarter.x,  quarter.y), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.25,  0.25)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + float2( quarter.x,  quarter.y), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.25,  0.25)), antialiasWidth, layer,
 		distanceScale, spread);
 	coverage = sum * 0.25;
 #else
-	const float2 texel = AtlasPass.xy;
+	const float2 uvDx = ddx(uv);
+	const float2 uvDy = ddy(uv);
 	float sum = 0.0;
 	sum += EvaluateNativeFontEffectAt(
-		uv + texel * float2(-0.375, -0.125), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.375, -0.125)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + texel * float2(-0.125,  0.375), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.125,  0.375)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + texel * float2( 0.125, -0.375), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.125, -0.375)), antialiasWidth, layer,
 		distanceScale, spread);
 	sum += EvaluateNativeFontEffectAt(
-		uv + texel * float2( 0.375,  0.125), antialiasWidth, layer,
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.375,  0.125)), antialiasWidth, layer,
 		distanceScale, spread);
 	coverage = sum * 0.25;
 #endif

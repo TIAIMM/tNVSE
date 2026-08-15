@@ -222,6 +222,12 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 {
 	const float spread = max(input.glyphParams.x, 0.0001);
 	const float distanceScale = max(input.glyphParams.y, 0.0001);
+#if COMPOSITE_QUALITY > 0
+	// Resolve the complete screen-space UV basis once, before any per-layer
+	// dynamic flow. Every quality tap below is expressed in screen pixels.
+	const float2 atlasUvDx = ddx(input.atlasUv);
+	const float2 atlasUvDy = ddy(input.atlasUv);
+#endif
 #if COMPOSITE_STATIC_LAYER_MASK > 0
 	const int layerMask = COMPOSITE_STATIC_LAYER_MASK;
 #if (COMPOSITE_STATIC_LAYER_MASK & 1)
@@ -319,20 +325,26 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 
 #if COMPOSITE_QUALITY > 0
 #if COMPOSITE_QUALITY == 1
-	const float2 quarter = AtlasPass.xy * 0.25;
 	const float2 effectOffsets[4] = {
-		float2(-quarter.x, -quarter.y),
-		float2( quarter.x, -quarter.y),
-		float2(-quarter.x,  quarter.y),
-		float2( quarter.x,  quarter.y)
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.25, -0.25)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.25, -0.25)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.25,  0.25)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.25,  0.25))
 	};
 #else
-	const float2 effectTexel = AtlasPass.xy;
 	const float2 effectOffsets[4] = {
-		effectTexel * float2(-0.375, -0.125),
-		effectTexel * float2(-0.125,  0.375),
-		effectTexel * float2( 0.125, -0.375),
-		effectTexel * float2( 0.375,  0.125)
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.375, -0.125)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.125,  0.375)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.125, -0.375)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.375,  0.125))
 	};
 #endif
 	shadowCoverage = glowCoverage = outlineCoverage = fillCoverage = 0.0;
@@ -397,12 +409,15 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 #if COMPOSITE_QUALITY > 1
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 8)
-	const float2 texel = AtlasPass.xy;
 	const float2 extraOffsets[4] = {
-		texel * float2(-0.375,  0.375),
-		texel * float2( 0.375, -0.375),
-		texel * float2(-0.125, -0.125),
-		texel * float2( 0.125,  0.125)
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.375,  0.375)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.375, -0.375)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2(-0.125, -0.125)),
+		NativeFontScreenSubpixelOffset(
+			atlasUvDx, atlasUvDy, float2( 0.125,  0.125))
 	};
 	float extraFill = 0.0;
 #if COMPOSITE_STATIC_LAYER_MASK > 0

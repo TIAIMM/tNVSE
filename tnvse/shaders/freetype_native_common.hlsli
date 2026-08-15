@@ -53,6 +53,15 @@ float4 SampleNativeFontDistanceField(sampler2D atlas, float2 uv)
 #endif
 }
 
+float2 NativeFontScreenSubpixelOffset(float2 uvDx, float2 uvDy,
+	float2 screenOffset)
+{
+	// uvDx/uvDy are the atlas-UV footprint of one screen pixel. Combining the
+	// complete vectors preserves rotation, shear and non-uniform scaling; using
+	// AtlasPass.xy component-wise only describes an axis-aligned atlas texel.
+	return uvDx * screenOffset.x + uvDy * screenOffset.y;
+}
+
 float MedianNativeFontMtsdf(float3 value)
 {
 	return max(min(value.r, value.g), min(max(value.r, value.g), value.b));

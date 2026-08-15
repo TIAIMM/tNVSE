@@ -23,36 +23,50 @@ float SupersampledNativeFontDistanceFieldFill(float2 uv, float antialiasWidth,
 #if FILL_QUALITY == 0
 	return EvaluateNativeFontDistanceFieldFillAt(uv, antialiasWidth, spread);
 #elif FILL_QUALITY == 1
-	const float2 quarter = AtlasPass.xy * 0.25;
+	const float2 uvDx = ddx(uv);
+	const float2 uvDy = ddy(uv);
 	float sum = 0.0;
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + float2(-quarter.x, -quarter.y), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.25, -0.25)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + float2( quarter.x, -quarter.y), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.25, -0.25)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + float2(-quarter.x,  quarter.y), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.25,  0.25)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + float2( quarter.x,  quarter.y), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.25,  0.25)), antialiasWidth, spread);
 	return sum * 0.25;
 #else
-	const float2 texel = AtlasPass.xy;
+	const float2 uvDx = ddx(uv);
+	const float2 uvDy = ddy(uv);
 	float sum = 0.0;
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2(-0.375, -0.125), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.375, -0.125)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2(-0.125,  0.375), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.125,  0.375)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2( 0.125, -0.375), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.125, -0.375)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2( 0.375,  0.125), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.375,  0.125)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2(-0.375,  0.375), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.375,  0.375)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2( 0.375, -0.375), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.375, -0.375)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2(-0.125, -0.125), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2(-0.125, -0.125)), antialiasWidth, spread);
 	sum += EvaluateNativeFontDistanceFieldFillAt(
-		uv + texel * float2( 0.125,  0.125), antialiasWidth, spread);
+		uv + NativeFontScreenSubpixelOffset(
+			uvDx, uvDy, float2( 0.125,  0.125)), antialiasWidth, spread);
 	return sum * 0.125;
 #endif
 }
