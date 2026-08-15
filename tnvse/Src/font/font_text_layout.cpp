@@ -476,7 +476,9 @@ namespace fonthook
 		const float lineHeight = font->pFontData->fBaseLine
 			+ FontManager::GetLinePadding(font->iFontNum);
 		const float firstLineHeight = letters[kSpaceChar].fHeight;
-		const double hyphenAdvance = GetFreeTypeHyphenAdvance(font);
+		const double hyphenRenderAdvance = GetFreeTypeHyphenAdvance(font);
+		const UInt32 hyphenLayoutWidth =
+			GetGlyphLayoutWidth(&letters['-']);
 		const double maxWidth = static_cast<double>(data->iWidth);
 		const bool boundedWidth = data->iWidth < kSentinelMax;
 		const int requestedLineStart = std::max(0, data->iLineStart);
@@ -579,13 +581,19 @@ namespace fonthook
 			}
 			return directHyphenResolved ? &directHyphen : nullptr;
 		};
-		auto finishLine = [&](double width, UInt32 sourceConsumedEnd)
+		auto finishLine = [&](double layoutWidth,
+			UInt32 sourceConsumedEnd)
 		{
-			lineWidths.push_back(static_cast<int>(std::ceil(std::max(0.0, width))));
+			// Retail PrepText adds the integer result of the 0xEC62C0
+			// conversion for every encoded unit.  layoutWidth is therefore
+			// already integral; do not round the accumulated render advances.
+			lineWidths.push_back(static_cast<int>(
+				std::max(0.0, layoutWidth)));
 			lineConsumed.push_back(sourceConsumedEnd);
 		};
 
-		auto emitUnit = [&](const char* bytes, UInt32 byteCount, double unitWidth,
+		auto emitUnit = [&](const char* bytes, UInt32 byteCount,
+			double renderAdvance, UInt32 layoutWidth,
 			UInt32 unitSourceEnd, bool breakableWhitespace,
 			bool removableSpace, bool asciiWord,
 			DirectTextUnitKind unitKind,
@@ -593,7 +601,7 @@ namespace fonthook
 		{
 			bool wrappedBeforeCurrent = false;
 			while (boundedWidth && lineWidth > 0.0
-				&& lineWidth + unitWidth > maxWidth)
+				&& lineWidth + layoutWidth > maxWidth)
 			{
 				if (breakOpportunity.kind == FreeTypeBreakKind::Whitespace
 					&& breakOpportunity.outputPosition < outputLength)
@@ -645,7 +653,7 @@ namespace fonthook
 						hyphenUnit.byteOffset =
 							breakOpportunity.outputPosition;
 						hyphenUnit.advance =
-							static_cast<float>(hyphenAdvance);
+							static_cast<float>(hyphenRenderAdvance);
 						hyphenUnit.directSlot =
 							hyphen->directSlot;
 						hyphenUnit.encodedCode = '-';
@@ -674,7 +682,8 @@ namespace fonthook
 					InsertPreparedBytes(output, outputLength,
 						breakOpportunity.outputPosition, inserted,
 						static_cast<UInt32>(sizeof(inserted)));
-					finishLine(breakOpportunity.prefixWidth + hyphenAdvance,
+					finishLine(breakOpportunity.prefixWidth
+						+ hyphenLayoutWidth,
 						breakOpportunity.sourceConsumedEnd);
 					lineWidth = std::max(0.0,
 						lineWidth - breakOpportunity.consumedWidth);
@@ -685,8 +694,9 @@ namespace fonthook
 				}
 
 				double completedWidth = lineWidth;
-				if (lastUnitWasAsciiWord && asciiWord && hyphenAdvance > 0.0
-					&& completedWidth + hyphenAdvance <= maxWidth)
+				if (lastUnitWasAsciiWord && asciiWord
+					&& hyphenLayoutWidth > 0
+					&& completedWidth + hyphenLayoutWidth <= maxWidth)
 				{
 					const UInt32 hyphenOffset = outputLength;
 					appendByte('-');
@@ -696,9 +706,9 @@ namespace fonthook
 						appendDirectUnit(
 							DirectTextUnitKind::Glyph,
 							hyphenOffset, 1, '-',
-							hyphenAdvance, hyphen);
+							hyphenRenderAdvance, hyphen);
 					}
-					completedWidth += hyphenAdvance;
+					completedWidth += hyphenLayoutWidth;
 				}
 				const UInt32 lineBreakOffset = outputLength;
 				appendByte(data->cLineSep);
@@ -728,8 +738,8 @@ namespace fonthook
 					| static_cast<UInt8>(bytes[1]))
 				: static_cast<UInt8>(bytes[0]);
 			appendDirectUnit(unitKind, unitOutputStart,
-				byteCount, encodedCode, unitWidth, directGlyph);
-			lineWidth += unitWidth;
+				byteCount, encodedCode, renderAdvance, directGlyph);
+			lineWidth += layoutWidth;
 			if (breakableWhitespace && prefixWidth > 0.0)
 			{
 				breakOpportunity.kind = FreeTypeBreakKind::Whitespace;
@@ -788,7 +798,10 @@ namespace fonthook
 			{
 				++consumed;
 				const double tabAdvance = GetNextTabAdvance(lineWidth);
-				emitUnit(source + sourceOffset, 1, tabAdvance, consumed,
+				const UInt32 tabLayoutWidth =
+					static_cast<UInt32>(tabAdvance);
+				emitUnit(source + sourceOffset, 1,
+					tabAdvance, tabLayoutWidth, consumed,
 					true, false, false,
 					DirectTextUnitKind::Tab, nullptr);
 				++sourceOffset;
@@ -805,7 +818,9 @@ namespace fonthook
 				}
 				++iconIndex;
 				const char iconByte = 1;
-				emitUnit(&iconByte, 1, GetGlyphRenderAdvance(&iconMetrics),
+				emitUnit(&iconByte, 1,
+					GetGlyphRenderAdvance(&iconMetrics),
+					GetGlyphLayoutWidth(&iconMetrics),
 					consumed, false, false, false,
 					DirectTextUnitKind::Icon, nullptr);
 				++sourceOffset;
@@ -877,17 +892,21 @@ namespace fonthook
 			{
 				const UInt32 fallbackLength = isDbcs ? 2u : 1u;
 				consumed += fallbackLength;
-				emitUnit(source + sourceOffset, fallbackLength, 0.0,
+				emitUnit(source + sourceOffset, fallbackLength, 0.0, 0,
 					consumed, false, false, false,
 					DirectTextUnitKind::Control, nullptr);
 				sourceOffset += fallbackLength;
 				continue;
 			}
 
-			const double unitWidth = GetVectorGlyphRenderAdvance(glyph);
+			const double renderAdvance =
+				GetVectorGlyphRenderAdvance(glyph);
+			const UInt32 layoutWidth =
+				ConditionalFloatToUInt(renderAdvance);
 			const bool isSpace = glyph.byteLength == 1
 				&& glyph.encodedCode == kSpaceChar;
-			emitUnit(source + sourceOffset, glyph.byteLength, unitWidth,
+			emitUnit(source + sourceOffset, glyph.byteLength,
+				renderAdvance, layoutWidth,
 				consumed + glyph.byteLength, isSpace, isSpace,
 				IsAsciiWordGlyph(glyph),
 				DirectTextUnitKind::Glyph, &glyph);
@@ -967,8 +986,10 @@ namespace fonthook
 			outputLength = 1;
 			output[0] = ' ';
 			output[1] = 0;
-			const int width = static_cast<int>(std::ceil(std::max(0.0f,
-				GetGlyphRenderAdvance(&letters[kSpaceChar]))));
+			// Retail's empty-selection placeholder uses the space FontLetter's
+			// fWidth and the same 0xEC62C0 conversion used by PrepText.
+			const int width = static_cast<int>(ConditionalFloatToUInt(
+				letters[kSpaceChar].fWidth));
 			int mutableWidth = width;
 			data->xLineWidths.AddTail(mutableWidth);
 			data->xNewText.Set(output.data(), 0);
@@ -1067,7 +1088,7 @@ namespace fonthook
 
 		// Match the vanilla PrepText contract: an empty selected result is
 		// represented by one space, so BSStringT retains a valid buffer and
-		// downstream CreateText code receives one measurable placeholder glyph.
+		// downstream geometry receives one measurable placeholder glyph.
 		if (!selectedLength)
 		{
 			data->xLineWidths.RemoveAll();
@@ -1077,9 +1098,8 @@ namespace fonthook
 			output[1] = 0;
 			selectedLength = 1;
 
-			const int spaceWidth = static_cast<int>(std::ceil(std::max(
-				0.0f,
-				GetGlyphRenderAdvance(&letters[kSpaceChar]))));
+			const int spaceWidth = static_cast<int>(ConditionalFloatToUInt(
+				letters[kSpaceChar].fWidth));
 
 			int mutableWidth = spaceWidth;
 			data->xLineWidths.AddTail(mutableWidth);
