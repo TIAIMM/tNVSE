@@ -119,7 +119,7 @@
     -->
 
     <!-- 1: Glow_Monofonto_Large -->
-    <font id="1" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="1" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
@@ -130,7 +130,7 @@
     </font>
 
     <!-- 2: Monofonto_Large -->
-    <font id="2" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="2" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
@@ -141,7 +141,7 @@
     </font>
 
     <!-- 3: Glow_Monofonto_Medium -->
-    <font id="3" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="3" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="26" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="26" tracking="-0.5" scaleX="1" scaleY="1"
@@ -152,7 +152,7 @@
     </font>
 
     <!-- 4: Monofonto_VeryLarge02_Dialogs2 -->
-    <font id="4" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="4" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="36" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="32" tracking="-0.5" scaleX="1" scaleY="1"
@@ -163,7 +163,7 @@
     </font>
 
     <!-- 5: Fixedsys_Comp_uniform_width (terminal) -->
-    <font id="5" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="5" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="25" tracking="0" fixedWidth="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\FixedsysExcelsior.ttf" index="0"/>
       <singleByte pixelSize="32" tracking="0" fixedWidth="17" scaleX="1" scaleY="1"
@@ -174,7 +174,7 @@
     </font>
 
     <!-- 6: Glow_Monofonto_VL_dialogs -->
-    <font id="6" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="6" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="34" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="30" tracking="-0.5" scaleX="1" scaleY="1"
@@ -185,7 +185,7 @@
     </font>
 
     <!-- 7: Baked-in_Monofonto_Large -->
-    <font id="7" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="7" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
@@ -196,7 +196,7 @@
     </font>
 
     <!-- 8: Glow_Futura_Caps_Large -->
-    <font id="8" prewarmEncoding="gb2312" effectQuality="fast" verticalMetrics="vanilla" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="8" prewarmEncoding="gb2312" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="52" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\Futura BdCn BT Bold.ttf" index="0"/>
       <singleByte pixelSize="52" tracking="0" scaleX="1" scaleY="1"
@@ -207,7 +207,7 @@
     </font>
 
     <!-- 42: Monofonto_STn (same as Monofonto_Large) -->
-    <font id="42" prewarmEncoding="gbk" effectQuality="fast" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
+    <font id="42" prewarmEncoding="gbk" effectQuality="balanced" verticalMetrics="vanilla" pixelSize="31" tracking="0" scaleX="1" scaleY="1" fontColor="#FFFFFF" fontAlpha="1"
           embolden="0" slant="0" baselineOffset="0" baseline="0">
       <face path="Data\NVSE\plugins\fonts\monofonto.ttf" index="0"/>
       <singleByte pixelSize="27" tracking="-0.5" scaleX="1" scaleY="1"
