@@ -95,13 +95,39 @@ float DecodeNativeFontSelectedDistance(float encodedDistance, float spread)
 #endif
 }
 
+float NativeFontDistanceFieldGradientDistance(float4 distanceSample,
+	float spread)
+{
+	// MTSDF stores the smooth true signed distance in alpha while RGB retains
+	// the multi-channel contour used for sharp body corners. True-SDF pages also
+	// store their only distance in alpha, so this is the stable derivative source
+	// for both native distance-field modes.
+	return DecodeNativeFontSelectedDistance(distanceSample.a, spread);
+}
+
 float ResolveNativeFontDistanceFieldAntialiasWidth(
 	NativeFontPixelInput input, float spread)
 {
-	// All native layouts receive the affine screen footprint from the vertex
-	// shader. Keeping derivatives out of the pixel path makes AA cost independent
-	// of covered pixel count while preserving the same clamped source distance.
+	// All native layouts receive an affine screen footprint from the vertex
+	// shader. It remains the fallback when a sampled distance derivative is
+	// degenerate, including fully saturated distance-field regions.
 	return min(max(input.antialiasWidth, 0.0001), spread);
+}
+
+float ResolveNativeFontDistanceGradientAntialiasWidth(
+	float gradientDistance, float analyticAntialiasWidth, float spread)
+{
+	// fwidth is the complete source-distance footprint of a square screen pixel.
+	// NativeFontDistanceFieldBody consumes a half-width, hence the 0.5 factor.
+	// This makes diagonal contours wider by their actual projected footprint
+	// without another atlas fetch. The analytic vertex width is retained only as
+	// a fail-safe for a zero derivative away from (or at a saturated edge of) the
+	// representable distance range.
+	const float derivativeAntialiasWidth = 0.5 * fwidth(gradientDistance);
+	const float useDerivative = step(0.0001, derivativeAntialiasWidth);
+	const float resolvedAntialiasWidth = lerp(analyticAntialiasWidth,
+		derivativeAntialiasWidth, useDerivative);
+	return min(max(resolvedAntialiasWidth, 0.0001), spread);
 }
 
 float NativeFontDistanceFieldBody(float bodyDistance, float antialiasWidth)

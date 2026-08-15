@@ -121,13 +121,16 @@ float EvaluateNativeFontEffectAt(float2 uv, float antialiasWidth, int layer,
 }
 
 float SupersampledNativeFontEffect(float2 uv, int layer,
-	float distanceScale, float spread, float antialiasWidth)
+	float distanceScale, float spread, float analyticAntialiasWidth)
 {
 	const float4 center = SampleNativeFontDistanceField(FontAtlas, uv);
-	const float centerAlphaDistance = DecodeNativeFontSelectedDistance(
-		center.a, spread);
+	const float centerAlphaDistance =
+		NativeFontDistanceFieldGradientDistance(center, spread);
 	const float centerBodyDistance = DecodeNativeFontSelectedDistance(
 		NativeFontBodyEncodedDistance(center), spread);
+	const float antialiasWidth =
+		ResolveNativeFontDistanceGradientAntialiasWidth(
+			centerAlphaDistance, analyticAntialiasWidth, spread);
 	float coverage;
 #if EFFECT_QUALITY == 0
 	coverage = EvaluateNativeFontEffect(centerAlphaDistance, antialiasWidth,
@@ -197,10 +200,11 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 	const float distanceScale = max(input.glyphParams.y, 0.0001);
 	const float spread = max(input.glyphParams.x, 0.0001);
 	const int layer = (int)floor(AtlasPass.z);
-	const float antialiasWidth =
+	const float analyticAntialiasWidth =
 		ResolveNativeFontDistanceFieldAntialiasWidth(input, spread);
 	const float coverage = SupersampledNativeFontEffect(
-		input.atlasUv, layer, distanceScale, spread, antialiasWidth);
+		input.atlasUv, layer, distanceScale, spread,
+		analyticAntialiasWidth);
 	return ComposeNativeFontCoverage(coverage, TileColor, input.baseColor,
 		NativeFontUsesLiveTileRgb(AtlasPass.z));
 }

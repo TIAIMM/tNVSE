@@ -33,7 +33,9 @@ float4 CompositeFlags : register(c183);// hard-shadow outline alpha,
 
 struct NativeCompositeSample
 {
+	float gradientDistance;
 	float alphaDistance;
+	float bodyDistance;
 	float bodyCoverage;
 };
 
@@ -46,24 +48,33 @@ float NativeCompositeInsideGlyph(float2 uv, float4 glyphBounds)
 }
 
 NativeCompositeSample SampleNativeCompositeKnownInside(float2 uv,
-	float4 glyphBounds, float spread, float antialiasWidth, float inside)
+	float4 glyphBounds, float spread, float inside)
 {
 	const float2 boundedUv = clamp(uv, glyphBounds.xy, glyphBounds.zw);
 	const float4 value = SampleNativeFontDistanceField(FontAtlas, boundedUv);
 	NativeCompositeSample result;
-	result.alphaDistance = lerp(-spread,
-		DecodeNativeFontSelectedDistance(value.a, spread), inside);
-	const float bodyDistance = DecodeNativeFontSelectedDistance(
-		NativeFontBodyEncodedDistance(value), spread);
-	result.bodyCoverage = NativeFontDistanceFieldBody(bodyDistance, antialiasWidth) * inside;
+	result.gradientDistance =
+		NativeFontDistanceFieldGradientDistance(value, spread);
+	result.alphaDistance = lerp(-spread, result.gradientDistance, inside);
+	result.bodyDistance = lerp(-spread, DecodeNativeFontSelectedDistance(
+		NativeFontBodyEncodedDistance(value), spread), inside);
+	result.bodyCoverage = 0.0;
 	return result;
 }
 
 NativeCompositeSample SampleNativeComposite(float2 uv, float4 glyphBounds,
-	float spread, float antialiasWidth)
+	float spread)
 {
 	return SampleNativeCompositeKnownInside(uv, glyphBounds, spread,
-		antialiasWidth, NativeCompositeInsideGlyph(uv, glyphBounds));
+		NativeCompositeInsideGlyph(uv, glyphBounds));
+}
+
+NativeCompositeSample ResolveNativeCompositeBodyCoverage(
+	NativeCompositeSample sample, float antialiasWidth)
+{
+	sample.bodyCoverage = NativeFontDistanceFieldBody(
+		sample.bodyDistance, antialiasWidth);
+	return sample;
 }
 
 float NativeCompositeGlowMask(float alphaDistance, float bodyCoverage,
@@ -251,51 +262,37 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 #endif
 	const float2 shadowUv = input.atlasUv
 		- shadowSourceOffset * AtlasPass.xy;
-	const float antialiasWidth =
+	const float analyticAntialiasWidth =
 		ResolveNativeFontDistanceFieldAntialiasWidth(input, spread);
 
-	// Composite shadow-union geometry can contain large regions that are outside
-	// both the center glyph and its shifted shadow. Reject those pixels before
-	// the first atlas lookup or any effect reconstruction.
+	// Resolve glyph-local membership without branching around the sampled
+	// distance derivative. The final union rejection remains in Main.
 	const float centerInside =
 		NativeCompositeInsideGlyph(input.atlasUv, input.glyphBounds);
 	float shadowInside = centerInside;
-#if COMPOSITE_STATIC_LAYER_MASK > 0
-#if (COMPOSITE_STATIC_LAYER_MASK & 14) \
-	|| ((COMPOSITE_STATIC_LAYER_MASK & 1) \
-		&& COMPOSITE_STATIC_SHIFTED_SHADOW == 0)
-	float drawableInside = centerInside;
-#else
-	float drawableInside = 0.0;
-#endif
-#if (COMPOSITE_STATIC_LAYER_MASK & 1) \
-	&& COMPOSITE_STATIC_SHIFTED_SHADOW > 0
+#if COMPOSITE_STATIC_SHIFTED_SHADOW > 0
 	shadowInside = NativeCompositeInsideGlyph(shadowUv, input.glyphBounds);
-	drawableInside = max(drawableInside, shadowInside);
-#endif
-#else
-	const bool hasCenterLayer =
-		NativeCompositeHasLayer(layerMask, 2)
-		|| NativeCompositeHasLayer(layerMask, 4)
-		|| NativeCompositeHasLayer(layerMask, 8)
-		|| (hasShadow && !shiftedShadow);
-	float drawableInside = hasCenterLayer ? centerInside : 0.0;
+#elif COMPOSITE_STATIC_SHIFTED_SHADOW < 0
 	if (hasShadow && shiftedShadow)
 	{
 		shadowInside =
 			NativeCompositeInsideGlyph(shadowUv, input.glyphBounds);
-		drawableInside = max(drawableInside, shadowInside);
 	}
 #endif
-	const NativeCompositeSample center =
+	NativeCompositeSample center =
 		SampleNativeCompositeKnownInside(input.atlasUv, input.glyphBounds,
-			spread, antialiasWidth, centerInside);
+			spread, centerInside);
+	const float antialiasWidth =
+		ResolveNativeFontDistanceGradientAntialiasWidth(
+			center.gradientDistance, analyticAntialiasWidth, spread);
+	center = ResolveNativeCompositeBodyCoverage(center, antialiasWidth);
 	NativeCompositeSample shadowCenter = center;
 	if (shiftedShadow)
 	{
 		shadowCenter = SampleNativeCompositeKnownInside(
-			shadowUv, input.glyphBounds, spread, antialiasWidth,
-			shadowInside);
+			shadowUv, input.glyphBounds, spread, shadowInside);
+		shadowCenter = ResolveNativeCompositeBodyCoverage(
+			shadowCenter, antialiasWidth);
 	}
 
 	float fillCoverage = 0.0;
@@ -353,15 +350,19 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 #endif
 	for (int tap = 0; tap < 4; ++tap)
 	{
-		const NativeCompositeSample sample = SampleNativeComposite(
+		NativeCompositeSample sample = SampleNativeComposite(
 			input.atlasUv + effectOffsets[tap], input.glyphBounds,
-			spread, antialiasWidth);
+			spread);
+		sample = ResolveNativeCompositeBodyCoverage(
+			sample, antialiasWidth);
 		NativeCompositeSample shadowSample = sample;
 		if (shiftedShadow)
 		{
 			shadowSample = SampleNativeComposite(
 				shadowUv + effectOffsets[tap], input.glyphBounds,
-				spread, antialiasWidth);
+				spread);
+			shadowSample = ResolveNativeCompositeBodyCoverage(
+				shadowSample, antialiasWidth);
 		}
 #if COMPOSITE_STATIC_LAYER_MASK == 0 \
 	|| (COMPOSITE_STATIC_LAYER_MASK & 1)
@@ -425,9 +426,12 @@ float4 EvaluateNativeComposite(NativeFontPixelInput input)
 #endif
 	for (int extraTap = 0; extraTap < 4; ++extraTap)
 	{
-		extraFill += SampleNativeComposite(
+		NativeCompositeSample extraSample = SampleNativeComposite(
 			input.atlasUv + extraOffsets[extraTap],
-			input.glyphBounds, spread, antialiasWidth).bodyCoverage;
+			input.glyphBounds, spread);
+		extraSample = ResolveNativeCompositeBodyCoverage(
+			extraSample, antialiasWidth);
+		extraFill += extraSample.bodyCoverage;
 	}
 	fillCoverage = fillCoverage * 0.5 + extraFill * 0.125;
 #endif
@@ -492,10 +496,14 @@ float4 Main(NativeFontPixelInput input) : COLOR0
 #if COMPOSITE_STATIC_SHIFTED_SHADOW == 0
 	return EvaluateNativeComposite(input);
 #else
-	[branch]
-	if (NativeCompositeDrawableInside(input) >= 0.5)
-		return EvaluateNativeComposite(input);
-	clip(-1.0);
-	return float4(0.0, 0.0, 0.0, 0.0);
+	// D3D9 forbids dsx/dsy of a sampled temporary inside per-pixel varying
+	// flow. Evaluate the distance derivative in uniform shader flow, then reject
+	// pixels outside the center/shifted-shadow union. Active glyph pixels reuse
+	// the same center and tap samples as the unbranched profile; only the former
+	// transparent-union early exit is intentionally surrendered.
+	const float drawableInside = NativeCompositeDrawableInside(input);
+	const float4 result = EvaluateNativeComposite(input);
+	clip(drawableInside - 0.5);
+	return result;
 #endif
 }
