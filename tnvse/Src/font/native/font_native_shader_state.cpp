@@ -233,17 +233,26 @@ namespace fonthook::vectorfont
 			return renderState;
 		}
 
-		bool IsNativeMipFilterReady(
+		bool IsNativeSamplerMirrorReady(
 			const NiD3DRenderState* renderState)
 		{
-			// Retail NiDX9RenderState maps only ADDRESSU/V, MAG, MIN and MIP
-			// into the five software-mirror slots. MIPFILTER is slot 4
-			// (NiDX9RenderState::SetSamplerState at 0xE910A0).
-			constexpr size_t kMipFilterMirrorIndex = 4;
-			return renderState
-				&& renderState->m_akSamplerStateSettings[0]
-					[kMipFilterMirrorIndex].m_uiCurrValue
-						== D3DTEXF_NONE;
+			if (!renderState)
+				return false;
+			const auto& mirror = renderState->m_akSamplerStateSettings[0];
+			// Keep the per-packet proof branch-free apart from short-circuit
+			// failures. The table-driven loop belongs only to the cold publication
+			// path; spelling out five constant entries lets Release fold this into
+			// five direct mirror comparisons with no loop bookkeeping.
+			return mirror[kNativeFontSamplerContract[0].mirrorIndex].m_uiCurrValue
+					== kNativeFontSamplerContract[0].value
+				&& mirror[kNativeFontSamplerContract[1].mirrorIndex].m_uiCurrValue
+					== kNativeFontSamplerContract[1].value
+				&& mirror[kNativeFontSamplerContract[2].mirrorIndex].m_uiCurrValue
+					== kNativeFontSamplerContract[2].value
+				&& mirror[kNativeFontSamplerContract[3].mirrorIndex].m_uiCurrValue
+					== kNativeFontSamplerContract[3].value
+				&& mirror[kNativeFontSamplerContract[4].mirrorIndex].m_uiCurrValue
+					== kNativeFontSamplerContract[4].value;
 		}
 
 		bool ResolveEngineViewport(IDirect3DDevice9* device,
@@ -726,15 +735,15 @@ namespace fonthook::vectorfont
 
 			// Distance-field channels are numeric linear data and require the
 			// explicit level-zero sampler state below.
-			const bool mipFilterReady = IsNativeMipFilterReady(
+			const bool samplerMirrorReady = IsNativeSamplerMirrorReady(
 				ResolveSortedRenderState(device));
 			const bool sortedSamplerReady = sortedBatch.depth
 				&& sortedBatch.samplerReady
 				&& sortedBatch.device == device
 				&& sortedBatch.generation == generation->id
-				&& mipFilterReady;
+				&& samplerMirrorReady;
 			if ((!batchActive || !batch.samplerReady
-					|| !mipFilterReady)
+					|| !samplerMirrorReady)
 				&& !sortedSamplerReady)
 			{
 				bool samplerChanged = false;

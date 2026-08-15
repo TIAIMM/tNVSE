@@ -55,6 +55,32 @@ namespace fonthook::vectorfont::implementation::font_native_shader
 		static_assert(offsetof(
 			NiD3DRenderState, m_apkTextureStageTextures) == 0x10A0);
 
+		struct NativeSamplerContractEntry
+		{
+			D3DSAMPLERSTATETYPE state;
+			DWORD value;
+			size_t mirrorIndex;
+			const char* operation;
+		};
+
+		// Retail NiDX9RenderState::SetSamplerState (0xE910A0) maps exactly
+		// these D3D9 states into mirror slots 0..4. Distance-field atlas data
+		// is sampled bilinearly from level zero and must not wrap into an
+		// adjacent glyph allocation.
+		inline constexpr std::array<NativeSamplerContractEntry, 5>
+			kNativeFontSamplerContract = {{
+				{ D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP, 0,
+					"SetSamplerState(ADDRESSU)" },
+				{ D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP, 1,
+					"SetSamplerState(ADDRESSV)" },
+				{ D3DSAMP_MAGFILTER, D3DTEXF_LINEAR, 2,
+					"SetSamplerState(MAGFILTER)" },
+				{ D3DSAMP_MINFILTER, D3DTEXF_LINEAR, 3,
+					"SetSamplerState(MINFILTER)" },
+				{ D3DSAMP_MIPFILTER, D3DTEXF_NONE, 4,
+					"SetSamplerState(MIPFILTER)" },
+			}};
+
 		inline constexpr UInt32 kTileShaderCreateShader = 0xBCAE90;
 		inline constexpr UInt32 kTileShaderSetupGeometryTextures = 0xBCA760;
 		inline constexpr UInt32 kTileShaderSetupGeometryConstants = 0xBCA980;
@@ -442,7 +468,7 @@ namespace fonthook::vectorfont::implementation::font_native_shader
 	void ResetSortedShaderIdentity(NativeSortedShaderBatch& batch,
 		IDirect3DDevice9* device, UInt32 generation);
 	NiD3DRenderState* ResolveSortedRenderState(IDirect3DDevice9* device);
-	bool IsNativeMipFilterReady(const NiD3DRenderState* renderState);
+	bool IsNativeSamplerMirrorReady(const NiD3DRenderState* renderState);
 	bool ResolveEngineViewport(IDirect3DDevice9* device,
 		D3DVIEWPORT9& viewport);
 	HRESULT EnsureNativeSamplerState(IDirect3DDevice9* device,

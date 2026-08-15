@@ -20,9 +20,9 @@ namespace fonthook::vectorfont
 				return D3DERR_INVALIDCALL;
 			}
 			NativeSortedShaderBatch& batch = ShaderThread().sortedShaderBatch;
-			if (batch.depth && batch.device == device
-				&& batch.samplerReady
-				&& IsNativeMipFilterReady(renderState))
+			const bool deviceProofReady = batch.depth
+				&& batch.device == device && batch.samplerReady;
+			if (deviceProofReady && IsNativeSamplerMirrorReady(renderState))
 			{
 				return D3D_OK;
 			}
@@ -31,18 +31,43 @@ namespace fonthook::vectorfont
 			// through NiD3DRenderState is a no-op. Fallout's Tile texture path
 			// never publishes SRGBTEXTURE and D3D9 defaults it to FALSE, so do
 			// not pay for a redundant virtual call that cannot affect state.
-			// MIPFILTER is mirrored. Read that zero-driver-cost value first and
-			// enter the engine setter only when normalization is actually needed.
-			if (!IsNativeMipFilterReady(renderState))
+			//
+			// Retail 0xE910A0 suppresses its device call whenever the corresponding
+			// current-value mirror already matches. Plugins that write the D3D9
+			// device directly can therefore leave the mirror correct while the real
+			// sampler is not. On a new/invalidated execution segment, publish all
+			// five states without a costly GetSamplerState readback. Once this batch
+			// owns a device proof, a changed mirror identifies the exact state that
+			// must be republished; matching entries remain on the zero-driver path.
+			for (const NativeSamplerContractEntry& entry
+				: kNativeFontSamplerContract)
 			{
-				renderState->SetSamplerState(
-					0, D3DSAMP_MIPFILTER, D3DTEXF_NONE, false);
-				if (!IsNativeMipFilterReady(renderState))
+				auto& mirror = renderState->m_akSamplerStateSettings[0]
+					[entry.mirrorIndex];
+				if (deviceProofReady && mirror.m_uiCurrValue == entry.value)
+					continue;
+
+				const HRESULT result = device->SetSamplerState(
+					0, entry.state, entry.value);
+				if (FAILED(result))
 				{
-					operation = "SetSamplerState(mip-shadow)";
-					return E_FAIL;
+					if (batch.depth)
+						batch.samplerReady = false;
+					operation = entry.operation;
+					return result;
 				}
+				// bSave=false at retail 0xE910A0 changes only CurrValue. Publish
+				// the same mirror field after the observable D3D9 write succeeds,
+				// keeping later Gamebryo suppression decisions coherent.
+				mirror.m_uiCurrValue = entry.value;
 				changed = true;
+			}
+			if (!IsNativeSamplerMirrorReady(renderState))
+			{
+				if (batch.depth)
+					batch.samplerReady = false;
+				operation = "validate-sampler-contract-shadow";
+				return E_FAIL;
 			}
 			if (batch.depth)
 				batch.samplerReady = true;
@@ -338,11 +363,12 @@ namespace fonthook::vectorfont
 			}
 			if (sortedBatch.depth)
 			{
-				// SetupGeometryTextures may publish MIPFILTER. Preserve a ready
-				// result when the engine mirror already contains the native
-				// level-zero contract instead of invalidating it unconditionally.
-				sortedBatch.samplerReady =
-					IsNativeMipFilterReady(renderState);
+				// A matching engine mirror alone cannot promote samplerReady:
+				// direct D3D9 writers may have bypassed it. Preserve an existing
+				// device proof only while the complete five-state mirror agrees;
+				// otherwise EnsureNativeSamplerState rebuilds the proof below.
+				sortedBatch.samplerReady = sortedBatch.samplerReady
+					&& IsNativeSamplerMirrorReady(renderState);
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::CommandProgramSetup);
@@ -366,7 +392,7 @@ namespace fonthook::vectorfont
 					>= profile->privateRegisterCount
 				&& sortedBatch.vertexAa.aaConstantReady
 				&& sortedBatch.samplerReady
-				&& IsNativeMipFilterReady(renderState);
+				&& IsNativeSamplerMirrorReady(renderState);
 			const bool publishPacketState = publishPrograms
 				|| !programsReady || !packetStateReady;
 			if (publishPacketState)
@@ -405,7 +431,8 @@ namespace fonthook::vectorfont
 			else
 			{
 				// Same retained profile and unchanged engine mirrors prove that
-				// pixel c176-c183, vertex c208 and MIPFILTER all remain current.
+				// pixel c176-c183, vertex c208 and the complete stage-0 sampler
+				// contract all remain current.
 				// Account the implicit fast path without invoking three helper
 				// binders.
 				RecordFreeTypePerf(
