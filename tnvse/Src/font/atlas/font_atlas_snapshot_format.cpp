@@ -498,34 +498,6 @@ namespace fonthook::vectorfont
 		}
 
 		constexpr UInt32 kMinimumSnapshotPageExtent = 64;
-		constexpr UInt32 kMaximumSnapshotPageAspectRatio =
-			kAtlasHardLimit / kMinimumSnapshotPageExtent;
-		// Preserve the cache identity emitted by common modern adapters while
-		// canonicalizing every aspect-ratio cap that cannot constrain any legal
-		// snapshot page. This is an identity token, not a replacement device cap.
-		constexpr UInt32 kNonBindingSnapshotAspectRatioIdentity = 16384;
-
-		constexpr UInt32 GetSnapshotAspectRatioIdentity(
-			UInt32 reportedMaximumAspectRatio)
-		{
-			// A zero D3D9 cap means unrestricted. Values at or above the largest
-			// representable page ratio admit the same complete set of page shapes.
-			if (!reportedMaximumAspectRatio
-				|| reportedMaximumAspectRatio >= kMaximumSnapshotPageAspectRatio)
-			{
-				return kNonBindingSnapshotAspectRatioIdentity;
-			}
-
-			// A cap below the maximum legal page ratio can constrain packing and
-			// therefore remains part of the exact cache identity.
-			return reportedMaximumAspectRatio;
-		}
-
-		static_assert(kMaximumSnapshotPageAspectRatio == 128);
-		static_assert(GetSnapshotAspectRatioIdentity(0) == 16384);
-		static_assert(GetSnapshotAspectRatioIdentity(8192) == 16384);
-		static_assert(GetSnapshotAspectRatioIdentity(16384) == 16384);
-		static_assert(GetSnapshotAspectRatioIdentity(64) == 64);
 
 		SnapshotPackingCaps GetSnapshotPackingCaps()
 		{
@@ -663,17 +635,14 @@ namespace fonthook::vectorfont
 				g_bEnableFreeTypeDefaultPoolAtlas;
 			hash = HashAtlasBytes(&forceSingleAtlas,
 				sizeof(forceSingleAtlas), hash);
-			const SnapshotPackingCaps packingCaps = GetSnapshotPackingCaps();
+			// This is a logical lookup identity, not a producer-device identity.
+			// The stored pageContentHash covers the actual packed geometry and pixel
+			// payload, while the loader checks that geometry against the target
+			// device's current caps. Keeping capability maxima out of this hash lets
+			// another compatible device locate the snapshot even after .tnvfmask
+			// files have been discarded.
 			hash = HashAtlasBytes(&kAtlasPackingRevision,
 				sizeof(kAtlasPackingRevision), hash);
-			hash = HashAtlasBytes(&packingCaps.singleByteMaximum,
-				sizeof(packingCaps.singleByteMaximum), hash);
-			hash = HashAtlasBytes(&packingCaps.doubleByteMaximum,
-				sizeof(packingCaps.doubleByteMaximum), hash);
-			const UInt32 aspectRatioIdentity = GetSnapshotAspectRatioIdentity(
-				packingCaps.maximumAspectRatio);
-			hash = HashAtlasBytes(&aspectRatioIdentity,
-				sizeof(aspectRatioIdentity), hash);
 			PhysicalAtlasGroup physicalGroup;
 			const UInt64 physicalGroupIdentity =
 				BuildPhysicalAtlasGroup(config, key.scaleMilli, physicalGroup)
@@ -1261,6 +1230,7 @@ namespace fonthook::vectorfont
 			}
 			struct PageIdentity
 			{
+				UInt32 packingRevision;
 				UInt32 width;
 				UInt32 height;
 				UInt32 padding;
@@ -1271,6 +1241,7 @@ namespace fonthook::vectorfont
 				UInt8 levelZeroOnly;
 			};
 			const PageIdentity identity = {
+				kAtlasPackingRevision,
 				page.header.width, page.header.height,
 				page.header.padding, page.header.mipLevels,
 				page.header.pixelMode, page.header.renderMode,
@@ -1664,7 +1635,9 @@ namespace fonthook::vectorfont
 						* sizeof(AtlasSnapshotPlacement);
 				const UInt64 expectedFileBytes = sizeof(header) + placementBytes
 					+ header.storedPixelBytes;
-				const SnapshotPackingCaps packingCaps =
+				// Inspect the serialized page against this device. A different producer
+				// cap is irrelevant when the actual page fits.
+				const SnapshotPackingCaps targetCaps =
 					GetSnapshotPackingCaps();
 				const VectorFontByteClass packingByteClass =
 					(header.flags & kAtlasSnapshotFlagJointByteRoles)
@@ -1672,7 +1645,7 @@ namespace fonthook::vectorfont
 				const bool shapeValid = IsSnapshotPageShapeValid(
 					header.width, header.height,
 					GetSnapshotMaximumSize(
-						packingCaps, packingByteClass), packingCaps)
+						targetCaps, packingByteClass), targetCaps)
 					&& header.mipLevels >= 1
 					&& header.mipLevels <= kMaximumAtlasMipLevels;
 				const char* rejection = nullptr;
@@ -1710,7 +1683,22 @@ namespace fonthook::vectorfont
 				else if (header.padding != pageKey.padding)
 					rejection = "padding";
 				else if (!shapeValid)
-					rejection = "shape";
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: atlas snapshot target capability rejection font=%u role=%s page=%u stored=%ux%u targetMaximum=%u targetSingleMaximum=%u targetDoubleMaximum=%u targetAspectRatio=%u jointRoles=%u",
+						GetRuntimeConfig(runtime).fontId,
+						pageKey.byteClass == VectorFontByteClass::DoubleByte
+							? "doubleByte" : "singleByte",
+						pageIndex, header.width, header.height,
+						GetSnapshotMaximumSize(targetCaps, packingByteClass),
+						targetCaps.singleByteMaximum,
+						targetCaps.doubleByteMaximum,
+						targetCaps.maximumAspectRatio,
+						packingByteClass == VectorFontByteClass::DoubleByte
+							&& pageKey.byteClass == VectorFontByteClass::SingleByte
+								? 1u : 0u);
+					rejection = "shape-target-caps";
+				}
 				else if (header.mipLevels != GetAtlasMipLevelCount(
 					header.width, header.height, pageKey.levelZeroOnly))
 					rejection = "mip-levels";

@@ -123,7 +123,9 @@ namespace fonthook::vectorfont
 					<= std::numeric_limits<UInt64>::max() - payloadOffset
 				&& payloadOffset + header.storedPixelBytes
 					== payload.fileBytes;
-			const SnapshotPackingCaps packingCaps =
+			// Producer caps are intentionally not persisted or compared. Accept any
+			// snapshot whose actual stored page shape is legal on this device.
+			const SnapshotPackingCaps targetCaps =
 				GetSnapshotPackingCaps();
 			const VectorFontByteClass packingByteClass =
 				(header.flags & kAtlasSnapshotFlagJointByteRoles)
@@ -131,7 +133,7 @@ namespace fonthook::vectorfont
 			const bool shapeValid = IsSnapshotPageShapeValid(
 				header.width, header.height,
 				GetSnapshotMaximumSize(
-					packingCaps, packingByteClass), packingCaps)
+					targetCaps, packingByteClass), targetCaps)
 				&& header.mipLevels >= 1
 				&& header.mipLevels <= kMaximumAtlasMipLevels;
 			const size_t fullPixelBytes = shapeValid

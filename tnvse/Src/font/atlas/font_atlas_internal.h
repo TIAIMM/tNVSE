@@ -424,10 +424,12 @@ namespace fonthook::vectorfont
 	}
 
 	constexpr UInt32 kAtlasSnapshotVersion = 23;
-	// v23 changes only the on-disk ownership container. Keep the v22 payload
-	// identity so each configured v22 path is replaced in place instead of
-	// leaving a second full generation when unused-cache deletion is disabled.
-	constexpr UInt32 kAtlasSnapshotPayloadIdentityVersion = 22;
+	// Payload identity v23 separates the device-independent logical lookup key
+	// from the physical page identity. D3D9 capability maxima are validated
+	// against the stored page shape at load time and are never part of the
+	// lookup key, so a compatible device can restore the snapshot without the
+	// transient .tnvfmask files.
+	constexpr UInt32 kAtlasSnapshotPayloadIdentityVersion = 23;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlas = 1u << 1;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlasOverflow = 1u << 2;
@@ -476,6 +478,8 @@ namespace fonthook::vectorfont
 		UInt8 magic[8] = {};
 		UInt32 version = 0;
 		UInt32 headerSize = 0;
+		// Device-independent logical lookup identity. This must be computable from
+		// font/configuration data before the snapshot payload is opened.
 		UInt64 snapshotHash = 0;
 		UInt64 maskContentHash = 0;
 		UInt64 atlasContentHash = 0;
@@ -498,6 +502,8 @@ namespace fonthook::vectorfont
 		UInt64 pixelBytes = 0;
 		UInt64 storedPixelBytes = 0;
 		UInt64 payloadChecksum = 0;
+		// Physical page identity: packing revision, actual page geometry,
+		// placements, and serialized pixel content.
 		UInt64 pageContentHash = 0;
 		UInt64 checksum = 0;
 	};

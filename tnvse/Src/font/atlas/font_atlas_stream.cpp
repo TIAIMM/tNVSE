@@ -161,6 +161,7 @@ namespace fonthook::vectorfont
 		{
 			struct PageIdentity
 			{
+				UInt32 packingRevision;
 				UInt32 width;
 				UInt32 height;
 				UInt32 padding;
@@ -170,7 +171,8 @@ namespace fonthook::vectorfont
 				UInt8 storageMode;
 				UInt8 levelZeroOnly;
 			};
-			const PageIdentity identity = { header.width, header.height, header.padding,
+			const PageIdentity identity = { kAtlasPackingRevision,
+				header.width, header.height, header.padding,
 				header.mipLevels, header.pixelMode, header.renderMode,
 				header.storageMode,
 				static_cast<UInt8>(header.mipLevels == 1 ? 1 : 0) };
