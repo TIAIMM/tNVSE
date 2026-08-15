@@ -114,15 +114,18 @@ namespace fonthook::vectorfont
 		fontIds.reserve(g_configs.size());
 		for (const auto& entry : g_configs)
 			fontIds.push_back(entry.first);
+		const bool usesDbcsLayout = UsesDbcsTextLayout();
 		std::sort(fontIds.begin(), fontIds.end(),
-			[](UInt32 leftId, UInt32 rightId)
+			[usesDbcsLayout](UInt32 leftId, UInt32 rightId)
 			{
 				const FontConfig* left = FindConfig(leftId);
 				const FontConfig* right = FindConfig(rightId);
-				const bool leftAlias = left && IsMtsdfAtlasAlias(
-					*left, VectorFontByteClass::DoubleByte);
-				const bool rightAlias = right && IsMtsdfAtlasAlias(
-					*right, VectorFontByteClass::DoubleByte);
+				const bool leftAlias = usesDbcsLayout && left
+					&& IsMtsdfAtlasAlias(
+						*left, VectorFontByteClass::DoubleByte);
+				const bool rightAlias = usesDbcsLayout && right
+					&& IsMtsdfAtlasAlias(
+						*right, VectorFontByteClass::DoubleByte);
 				return leftAlias != rightAlias
 					? !leftAlias : leftId < rightId;
 			});

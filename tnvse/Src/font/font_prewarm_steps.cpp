@@ -175,7 +175,8 @@ namespace fonthook::vectorfont
 			{
 				active.shaderSdf = false;
 			}
-			active.sharedDoubleAlias = active.shaderSdf
+			active.sharedDoubleAlias = UsesDbcsTextLayout()
+				&& active.shaderSdf
 				&& IsMtsdfAtlasAlias(
 					*config, VectorFontByteClass::DoubleByte);
 			if (active.sharedDoubleAlias)

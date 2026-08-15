@@ -661,9 +661,11 @@ namespace fonthook::vectorfont
 			for (size_t roleIndex = 0; roleIndex < config.styles.size(); ++roleIndex)
 			{
 				const ByteStyle& style = config.styles[roleIndex];
+				const bool active = roleIndex == 0 || UsesDbcsTextLayout();
 				FreeTypeFontDebugLog(
-					"tnvse_freetype_font:   %s mask=%016llX size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
-					roleNames[roleIndex], static_cast<unsigned long long>(
+					"tnvse_freetype_font:   %s active=%d mask=%016llX size=%.2f tracking=%.2f fixedWidth=%.2f scale=(%.3f,%.3f) embolden=%.2f slant=%.2f baseline=%.2f faces=%u",
+					roleNames[roleIndex], active,
+					static_cast<unsigned long long>(
 						config.maskGenerationRoleHashes[roleIndex]),
 					style.pixelSize, style.tracking, style.fixedWidth,
 					style.scaleX, style.scaleY, style.embolden,
@@ -672,6 +674,14 @@ namespace fonthook::vectorfont
 				for (size_t faceIndex = 0; faceIndex < style.faces.size(); ++faceIndex)
 				{
 					const FaceConfig& face = style.faces[faceIndex];
+					if (!active)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font:     face[%u] path=%ls index=%ld exists=not-probed",
+							static_cast<UInt32>(faceIndex), face.path.c_str(),
+							face.faceIndex);
+						continue;
+					}
 					const DWORD attributes = GetFileAttributesW(face.path.c_str());
 					const bool exists = attributes != INVALID_FILE_ATTRIBUTES
 						&& !(attributes & FILE_ATTRIBUTE_DIRECTORY);

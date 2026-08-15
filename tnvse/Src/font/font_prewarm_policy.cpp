@@ -69,7 +69,8 @@ namespace fonthook::vectorfont
 		bool IsPrewarmJobDoubleByteAlias(const PrewarmJob& job)
 		{
 			const FontConfig* config = FindConfig(job.fontId);
-			return config
+			return UsesDbcsTextLayout()
+				&& config
 				&& job.route == FontAtlasRoute::ShaderDistanceField
 				&& IsMtsdfAtlasAlias(
 					*config, VectorFontByteClass::DoubleByte);

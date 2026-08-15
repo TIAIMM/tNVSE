@@ -755,16 +755,22 @@ namespace fonthook::vectorfont
 			// character's drop from FontLetter::fHeight - fTopEdge. Keep the visual
 			// correction face-local so BuildFontLetter and atlas placement move together;
 			// the existing verticalMetrics policy remains the sole owner of the line box.
+			const size_t activeRoleCount = UsesDbcsTextLayout()
+				? runtime.roles.size() : 1u;
 			RuntimeRole& single = runtime.roles[0];
-			RuntimeRole& doubleByte = runtime.roles[1];
+			if (single.faces.empty())
+				return;
 			const VisualReferenceSet singleReferences = GetSingleByteVisualReferences();
 			const VisualReferenceSet doubleReferences = GetDoubleByteVisualReferences();
 			VisualCenterMeasurement singlePrimary;
 			VisualCenterMeasurement doublePrimary;
-			if (!MeasureFaceVisualCenter(single, single.faces.front(), singleReferences,
-				rasterScale, singlePrimary)
-				|| !MeasureFaceVisualCenter(doubleByte, doubleByte.faces.front(),
-					doubleReferences, rasterScale, doublePrimary))
+			const bool singleMeasured = MeasureFaceVisualCenter(single,
+				single.faces.front(), singleReferences, rasterScale, singlePrimary);
+			const bool doubleMeasured = activeRoleCount == 1
+				|| MeasureFaceVisualCenter(runtime.roles[1],
+					runtime.roles[1].faces.front(), doubleReferences,
+					rasterScale, doublePrimary);
+			if (!singleMeasured || !doubleMeasured)
 			{
 				if (g_bEnableFreeTypeFontRenderingLog)
 				{
@@ -777,7 +783,7 @@ namespace fonthook::vectorfont
 			}
 
 			const float targetCenter = singlePrimary.center;
-			for (size_t roleIndex = 0; roleIndex < runtime.roles.size(); ++roleIndex)
+			for (size_t roleIndex = 0; roleIndex < activeRoleCount; ++roleIndex)
 			{
 				RuntimeRole& role = runtime.roles[roleIndex];
 				const VisualReferenceSet& references = roleIndex == 0
@@ -842,6 +848,11 @@ namespace fonthook::vectorfont
 	bool ResolveVectorGlyph(RuntimeFont& runtime, const VectorEncodedGlyph& glyph,
 		ResolvedGlyph& result)
 	{
+		if (glyph.byteClass == VectorFontByteClass::DoubleByte
+			&& !UsesDbcsTextLayout())
+		{
+			return false;
+		}
 		RuntimeRole& role = runtime.roles[static_cast<size_t>(glyph.byteClass)];
 		if (glyph.hasGlyphIdentity && glyph.faceIndex < role.faces.size())
 		{
@@ -862,12 +873,24 @@ namespace fonthook::vectorfont
 			runtime->config = &config;
 			for (RuntimeRole& role : runtime->roles)
 				role.owner = runtime.get();
+			const size_t activeRoleCount = UsesDbcsTextLayout()
+				? runtime->roles.size() : 1u;
 
 			for (size_t i = 0; i < runtime->roles.size(); ++i)
 			{
 				RuntimeRole& role = runtime->roles[i];
 				role.style = &config.styles[i];
 				role.resolvedBaselineOffset = role.style->baselineOffset;
+				if (i >= activeRoleCount)
+				{
+					if (g_bEnableFreeTypeFontRenderingLog)
+					{
+						FreeTypeFontDebugLog(
+							"tnvse_freetype_font: runtime role inactive font=%u role=doubleByte reason=single-byte-layout",
+							config.fontId);
+					}
+					continue;
+				}
 				for (size_t sourceFaceIndex = 0;
 					sourceFaceIndex < role.style->faces.size();
 					++sourceFaceIndex)
@@ -907,8 +930,9 @@ namespace fonthook::vectorfont
 
 			float maxTop = -std::numeric_limits<float>::infinity();
 			float minBottom = std::numeric_limits<float>::infinity();
-			for (const RuntimeRole& role : runtime->roles)
+			for (size_t roleIndex = 0; roleIndex < activeRoleCount; ++roleIndex)
 			{
+				const RuntimeRole& role = runtime->roles[roleIndex];
 				maxTop = std::max(maxTop, role.ascender + role.resolvedBaselineOffset);
 				minBottom = std::min(minBottom, role.descender + role.resolvedBaselineOffset);
 			}
@@ -1199,6 +1223,9 @@ namespace fonthook::vectorfont
 
 	FontLetter* EnsureDoubleByteMetrics(RuntimeFont& runtime, Font& font, UInt32 encodedCode)
 	{
+		if (!UsesDbcsTextLayout())
+			return nullptr;
+
 		const char encodedBytes[3] = {
 			static_cast<char>((encodedCode >> 8) & 0xFF),
 			static_cast<char>(encodedCode & 0xFF),
@@ -1343,7 +1370,8 @@ namespace fonthook::vectorfont
 	{
 		std::lock_guard<std::recursive_mutex> lock(State().mutex);
 		glyph = {};
-		if (!bytes || (length != 1 && length != 2))
+		if (!bytes || (length != 1 && length != 2)
+			|| (length == 2 && !UsesDbcsTextLayout()))
 			return false;
 
 		glyph.byteLength = static_cast<UInt8>(length);
