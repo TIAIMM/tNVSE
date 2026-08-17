@@ -1,3 +1,4 @@
+#include "dictionary.h"
 #include "font_engine.h"
 #include "font_manager.h"
 #include "font_vector.h"
@@ -11,6 +12,7 @@
 #include "text_hooks.h"
 #include "tnvse.h"
 
+#include "InterfaceManager.hpp"
 #include "TileText.hpp"
 
 #include <algorithm>
@@ -791,6 +793,7 @@ namespace fonthook
 
 		constexpr SIZE_T kTileTextMakeNodeVTableEntry = 0x1094880;
 		constexpr SIZE_T kVanillaTileTextMakeNode = 0xA21AF0;
+		constexpr SIZE_T kRetailHackingMenuInstance = 0x011D95B8;
 		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
@@ -846,6 +849,59 @@ namespace fonthook
 			return false;
 		}
 
+		bool IsHackingMenuText(const TileText* tile)
+		{
+			if (!tile)
+				return false;
+
+			// HackingMenu::Create (0x765B80) publishes the live Menu at
+			// 0x11D95B8 after binding hacking_menu.xml, while the menu registry
+			// exposes the same TileMenu root under ID 0x41F.  Test the concrete
+			// TileText owner instead of treating the menu lifetime as a global
+			// translation mode: HUD and other popup tiles can be rebuilt while the
+			// HackingMenu remains alive.
+			Menu* liveHackingMenu =
+				*reinterpret_cast<Menu**>(kRetailHackingMenuInstance);
+			Tile* registeredRoot = InterfaceManager::GetMenuByType(Hacking);
+			if (!liveHackingMenu && !registeredRoot)
+				return false;
+
+			if (liveHackingMenu && tile->GetMenu() == liveHackingMenu)
+				return true;
+
+			// Cover the short registration/publication transition without relying
+			// on tile names or text contents.  Bound the walk so corrupt third-party
+			// parent chains fail closed.
+			constexpr UInt32 kMaximumParentDepth = 32;
+			const Tile* current = tile;
+			for (UInt32 depth = 0;
+				registeredRoot && current && depth < kMaximumParentDepth;
+				++depth, current = current->pParent)
+			{
+				if (current == registeredRoot)
+					return true;
+			}
+			return false;
+		}
+
+		class ScopedDictionaryTranslationTileContext
+		{
+		public:
+			explicit ScopedDictionaryTranslationTileContext(bool suppress) noexcept
+				: m_previous(SetDictionaryTranslationSuppressedForCurrentTile(
+					suppress))
+			{
+			}
+
+			~ScopedDictionaryTranslationTileContext() noexcept
+			{
+				SetDictionaryTranslationSuppressedForCurrentTile(m_previous);
+			}
+
+		private:
+			bool m_previous;
+		};
+
 		class ScopedEffectSuppression
 		{
 		public:
@@ -886,13 +942,22 @@ namespace fonthook
 
 		NiNode* __fastcall TileTextMakeNodeHook(TileText* tile, void*)
 		{
-			const bool suppress = IsVuiEffectProxy(tile);
+			const bool freeTypeInstalled = s_fontHookInstallState.freeType;
+			const bool dictionaryTranslationInstalled =
+				s_fontHookInstallState.multibyte
+				&& g_bEnableDictionaryTranslation;
+			const bool suppress = freeTypeInstalled && IsVuiEffectProxy(tile);
 			Font* font = suppress ? ResolveVuiEffectProxyFont(tile) : nullptr;
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
-			const bool useNoPrecachePrewarmRoute = IsPrewarmOverlayText(tile);
+			const bool useNoPrecachePrewarmRoute = freeTypeInstalled
+				&& IsPrewarmOverlayText(tile);
+			const bool suppressDictionaryTranslation =
+				dictionaryTranslationInstalled && IsHackingMenuText(tile);
 
 			ScopedEffectSuppression scope(suppress);
 			ScopedVuiProxyMeasureOnly measureOnly(replaceProxy);
+			ScopedDictionaryTranslationTileContext dictionaryContext(
+				suppressDictionaryTranslation);
 			NiNode* node = nullptr;
 			if (useNoPrecachePrewarmRoute)
 			{
@@ -909,18 +974,18 @@ namespace fonthook
 
 			if (replaceProxy && node)
 				node->SetAppCulled(true);
-			if (node && g_bFixPipBoySearchIcon)
+			if (node && freeTypeInstalled && g_bFixPipBoySearchIcon)
 				pipboy_search_icon_compat::NormalizeInactiveEmptySearchWidth(tile);
 			return node;
 		}
 
-		bool InstallVuiEffectProxyCompatibility()
+		bool InstallTileTextMakeNodeCompatibility()
 		{
 			if (!hook_identity::IsAccessibleRegion(
 				kTileTextMakeNodeVTableEntry, sizeof(SIZE_T), false))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility skipped; TileText::MakeNode vtable entry is unreadable entry=%08X",
+					"tnvse_font_hook: TileText::MakeNode compatibility skipped; vtable entry is unreadable entry=%08X",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry));
 				return false;
 			}
@@ -939,7 +1004,7 @@ namespace fonthook
 			if (!hook_identity::IsExecutableTarget(currentHandler))
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility skipped; TileText::MakeNode target is not executable target=%08X",
+					"tnvse_font_hook: TileText::MakeNode compatibility skipped; target is not executable target=%08X",
 					static_cast<UInt32>(currentHandler));
 				return false;
 			}
@@ -960,7 +1025,7 @@ namespace fonthook
 						kTileTextMakeNodeVTableEntry);
 				s_tileTextMakeNode = previousMakeNode;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility CAS did not publish entry=%08X predecessor=%08X observed=%08X compared=%u protectionError=%lu",
+					"tnvse_font_hook: TileText::MakeNode compatibility CAS did not publish entry=%08X predecessor=%08X observed=%08X compared=%u protectionError=%lu",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
 					static_cast<UInt32>(currentHandler),
 					static_cast<UInt32>(observedHandler),
@@ -971,7 +1036,7 @@ namespace fonthook
 			if (!publication.PostconditionsComplete())
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
+					"tnvse_font_hook: TileText::MakeNode compatibility published with incomplete write postconditions protectionRestored=%u protectionError=%lu cacheFlushed=%u cacheError=%lu",
 					publication.protectionRestored ? 1u : 0u,
 					publication.protectionError,
 					publication.instructionCacheFlushed ? 1u : 0u,
@@ -982,10 +1047,13 @@ namespace fonthook
 			if (observedHandler == adapterHandler)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility installed entry=%08X target=%08X chained=%d",
+					"tnvse_font_hook: TileText::MakeNode compatibility installed entry=%08X target=%08X chained=%d dictionaryOwnerScope=%u freeType=%u",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
 					static_cast<UInt32>(currentHandler),
-					currentHandler != kVanillaTileTextMakeNode ? 1 : 0);
+					currentHandler != kVanillaTileTextMakeNode ? 1 : 0,
+					s_fontHookInstallState.multibyte
+						&& g_bEnableDictionaryTranslation ? 1u : 0u,
+					s_fontHookInstallState.freeType ? 1u : 0u);
 				return true;
 			}
 
@@ -993,7 +1061,7 @@ namespace fonthook
 			{
 				s_tileTextMakeNode = previousMakeNode;
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: VUI+ effect proxy compatibility was published but the slot returned to its predecessor entry=%08X predecessor=%08X",
+					"tnvse_font_hook: TileText::MakeNode compatibility was published but the slot returned to its predecessor entry=%08X predecessor=%08X",
 					static_cast<UInt32>(kTileTextMakeNodeVTableEntry),
 					static_cast<UInt32>(currentHandler));
 				return false;
@@ -1002,7 +1070,7 @@ namespace fonthook
 			// A later vtable owner may already use this hook as its predecessor.
 			// Keep that predecessor alive and do not overwrite the new top slot.
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: VUI+ effect proxy compatibility may be retained below observed handler=%08X predecessor=%08X executable=%u; reachability unverified",
+				"tnvse_font_hook: TileText::MakeNode compatibility may be retained below observed handler=%08X predecessor=%08X executable=%u; reachability unverified",
 				static_cast<UInt32>(observedHandler),
 				static_cast<UInt32>(currentHandler),
 				hook_identity::IsExecutableTarget(observedHandler) ? 1u : 0u);
@@ -1067,8 +1135,8 @@ namespace fonthook
 
 			s_fontHookInstallState.multibyte = multibyte;
 			s_fontHookInstallState.freeType = freeType;
-			if (freeType)
-				InstallVuiEffectProxyCompatibility();
+			if (freeType || (multibyte && g_bEnableDictionaryTranslation))
+				InstallTileTextMakeNodeCompatibility();
 			return s_fontHookInstallState;
 		}
 
@@ -1132,6 +1200,8 @@ namespace fonthook
 
 	bool IsPrewarmOverlayMakeNodeRouteInstalled()
 	{
+		if (!s_fontHookInstallState.freeType)
+			return false;
 		if (!hook_identity::IsAccessibleRegion(
 			kTileTextMakeNodeVTableEntry, sizeof(SIZE_T), false))
 		{

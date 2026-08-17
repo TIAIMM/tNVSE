@@ -1,6 +1,5 @@
 #include "dictionary_internal.h"
 #include "encoding.h"
-#include "InterfaceManager.hpp"
 #include "load_config.h"
 #include "native_calls.h"
 
@@ -10,25 +9,29 @@
 
 namespace fonthook
 {
+	namespace
+	{
+		thread_local bool s_suppressDictionaryTranslationForCurrentTile = false;
+	}
+
+	bool SetDictionaryTranslationSuppressedForCurrentTile(
+		bool suppress) noexcept
+	{
+		const bool previous = s_suppressDictionaryTranslationForCurrentTile;
+		s_suppressDictionaryTranslationForCurrentTile = suppress;
+		return previous;
+	}
+
+	bool IsDictionaryTranslationSuppressedForCurrentTile() noexcept
+	{
+		return s_suppressDictionaryTranslationForCurrentTile;
+	}
+
 	namespace implementation::dictionary_translate {}
 	using namespace implementation::dictionary_translate;
 
 	namespace implementation::dictionary_translate
 	{
-		inline constexpr SIZE_T kRetailHackingMenuInstance = 0x011D95B8;
-
-		bool IsHackingMenuTranslationContext()
-		{
-			// Retail HackingMenu::Create (0x765B80) publishes the instance at
-			// 0x11D95B8 before constructing its fixed terminal grid; its destructor
-			// (0x7658E0) clears that pointer.  The grid logic later indexes strings
-			// and 46 AnimatingText slots using the vanilla byte layout, so dictionary
-			// substitutions must never reach a shared font translation entry point
-			// during that lifetime.  Keep the registry check for transition edges.
-			return *reinterpret_cast<Menu**>(kRetailHackingMenuInstance) != nullptr
-				|| InterfaceManager::GetMenuByType(Hacking) != nullptr;
-		}
-
 		struct PreparedTranslationMatch
 		{
 			std::string translated;
@@ -1381,7 +1384,7 @@ namespace fonthook
 	bool TranslateText(const char* source, std::string& translated)
 	{
 		if (!g_bEnableDictionaryTranslation
-			|| IsHackingMenuTranslationContext())
+			|| IsDictionaryTranslationSuppressedForCurrentTile())
 			return false;
 		const bool result = TranslateInternal(source, translated, 0);
 		return result;
