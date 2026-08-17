@@ -292,7 +292,9 @@ namespace fonthook::vectorfont
 			const CompositeConstructionProfile* constructionProfile)
 		{
 			spans.clear();
-			if (!effects.shaderEffects || sources.empty() || !pageCount)
+			if (!effects.shaderEffects || sources.empty() || !pageCount
+				|| pageCount > std::numeric_limits<UInt16>::max()
+				|| vertices.size() > std::numeric_limits<UInt32>::max())
 				return false;
 			const UInt32 sourceVertexCount =
 				static_cast<UInt32>(vertices.size());
@@ -308,7 +310,8 @@ namespace fonthook::vectorfont
 				&& pageCount == 1u
 				&& IsValidCompositeConstructionProfile(*constructionProfile);
 			bool canAliasSource = pageCount == 1 && !shiftedShadow
-				&& sources.size() * 4u == vertices.size();
+				&& static_cast<UInt64>(sources.size()) * 4u
+					== vertices.size();
 			UInt64 fusedAliasProofVisits = 0;
 			for (size_t sourceIndex = 0; sourceIndex < sources.size();
 				++sourceIndex)
@@ -364,8 +367,8 @@ namespace fonthook::vectorfont
 			const UInt64 totalVertexCount =
 				static_cast<UInt64>(vertices.size())
 				+ static_cast<UInt64>(sources.size()) * 4u;
-			if (totalVertexCount
-				> static_cast<UInt64>(kNativeFontMaximumQuads) * 4u)
+			if (totalVertexCount > std::numeric_limits<UInt32>::max()
+				|| totalVertexCount > vertices.max_size())
 			{
 				return false;
 			}

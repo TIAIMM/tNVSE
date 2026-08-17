@@ -27,6 +27,11 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<AtlasResource>>& atlases,
 			const NiPoint3& origin, const NativeFontEffectShapeConfig& effects)
 		{
+			if (quads.empty()
+				|| quads.size() > kNativeFontMaximumArtifactQuads)
+			{
+				return {};
+			}
 			AtlasState& state = State();
 			RecordFreeTypePerf(FreeTypePerfCounter::TextArtifactCompile);
 			FreeTypePerfScope artifactCompilePerf(
@@ -286,12 +291,28 @@ namespace fonthook::vectorfont
 			const NativeFontEffectShapeConfig* effectConfig, const NiPoint3& origin)
 		{
 			if (atlases.empty() || !atlases[0] || quads.empty()
-				|| quads.size() > kMaximumQuads)
+				|| quads.size() > kNativeFontMaximumArtifactQuads)
 				return nullptr;
 			const bool needsNativeRangeRouting = useNativeFontShader
-				|| atlases.size() > 1;
+				|| atlases.size() > 1 || quads.size() > kMaximumQuads;
 			NativeFontEffectShapeConfig resolvedEffect = effectConfig
 				? *effectConfig : NativeFontEffectShapeConfig{};
+			const UInt32 profileKinds =
+				(resolvedEffect.shaderEffects ? 1u : 0u)
+				+ (resolvedEffect.bakedCoverage ? 1u : 0u)
+				+ (resolvedEffect.precomposedArgb ? 1u : 0u);
+			if (needsNativeRangeRouting && profileKinds == 0u)
+			{
+				const bool allArgb = std::all_of(atlases.begin(), atlases.end(),
+					[](const std::shared_ptr<AtlasResource>& atlas)
+					{
+						return atlas
+							&& atlas->pixelMode == AtlasPixelMode::Argb32;
+					});
+				if (!allArgb)
+					return nullptr;
+				resolvedEffect.precomposedArgb = true;
+			}
 			resolvedEffect.atlasProperties.clear();
 			resolvedEffect.atlasTextures.clear();
 			resolvedEffect.atlasInverseSizes.clear();

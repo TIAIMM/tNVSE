@@ -203,18 +203,20 @@ namespace fonthook::vectorfont
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
-			result.glyphCount = static_cast<UInt32>(std::count_if(
+			const size_t drawableGlyphCount = static_cast<size_t>(std::count_if(
 				batch.glyphs.begin(), batch.glyphs.end(),
 				[](const DirectAtlasBatchGlyph& glyph)
 				{
 					return !glyph.knownEmpty
 						&& (glyph.placement || glyph.vanillaLetter);
 				}));
-			if (!result.glyphCount || result.glyphCount > kMaximumQuads)
+			if (!drawableGlyphCount
+				|| drawableGlyphCount > kNativeFontMaximumArtifactQuads)
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
+			result.glyphCount = static_cast<UInt32>(drawableGlyphCount);
 
 			UInt64 rangeInitializationBytesAvoided = 0;
 			if (precomposed)
@@ -249,7 +251,8 @@ namespace fonthook::vectorfont
 				// only when the complete aggressive artifact fits on one page.
 				// Multi-page ARGB falls through to the native packet payload so
 				// the accumulator still receives exactly one facade.
-				if (usedPageCount == 1)
+				if (usedPageCount == 1
+					&& result.glyphCount <= kMaximumQuads)
 				{
 					NiTriShape* pageShape = nullptr;
 					for (UInt16 page = 0; page < atlases.size(); ++page)
@@ -393,12 +396,18 @@ namespace fonthook::vectorfont
 			{
 				for (size_t page = 0; page < atlases.size(); ++page)
 				{
+					if (counts[kind][page]
+						> kNativeFontMaximumArtifactQuads - physicalQuads)
+					{
+						result.outcome = DirectAtlasShapeOutcome::Failed;
+						return result;
+					}
 					offsets[kind][page] = physicalQuads;
 					cursors[kind][page] = physicalQuads;
 					physicalQuads += counts[kind][page];
 				}
 			}
-			if (!physicalQuads || physicalQuads > kMaximumQuads)
+			if (!physicalQuads)
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;

@@ -32,6 +32,13 @@ namespace fonthook::vectorfont
 	struct NativeFontCompiledPacketCommand;
 	inline constexpr UInt32 kNativeFontMaximumQuads =
 		std::numeric_limits<UInt16>::max() / 4u;
+	inline constexpr UInt32 kNativeFontMaximumPacketVertices =
+		kNativeFontMaximumQuads * 4u;
+	// Draw ranges retain the engine's 32-bit start-index convention.  The
+	// immutable text artifact may contain many packets, but its source geometry
+	// must remain representable before those ranges are split.
+	inline constexpr UInt32 kNativeFontMaximumArtifactQuads =
+		std::numeric_limits<UInt32>::max() / 6u;
 
 	template <class T, size_t InlineCapacity = 1>
 	class NativeFontInlineVector
@@ -463,7 +470,10 @@ namespace fonthook::vectorfont
 	// Tile does not rescan every glyph vertex and packet.
 	struct NativeFontPayloadValidationSeal
 	{
-		static constexpr UInt32 kAbi = 3;
+		// ABI 4 permits one immutable artifact to contain more than 16383 quads.
+		// Every published packet remains independently bounded by the UInt16
+		// canonical-index contract.
+		static constexpr UInt32 kAbi = 4;
 
 		UInt32 abi = 0;
 		UInt32 pageCount = 0;

@@ -385,7 +385,7 @@ namespace fonthook::vectorfont
 				offsets[layer][page] = quadCount;
 				cursors[layer][page] = quadCount;
 				if (counts[layer][page]
-					> kMaximumQuads - quadCount)
+					> kNativeFontMaximumArtifactQuads - quadCount)
 				{
 					result.outcome =
 						DirectAtlasShapeOutcome::Failed;
@@ -394,7 +394,7 @@ namespace fonthook::vectorfont
 				quadCount += counts[layer][page];
 			}
 		}
-		if (!quadCount || quadCount > kMaximumQuads)
+		if (!quadCount)
 		{
 			result.outcome = DirectAtlasShapeOutcome::Failed;
 			return result;

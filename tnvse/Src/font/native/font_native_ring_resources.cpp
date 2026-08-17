@@ -324,9 +324,14 @@ namespace fonthook::vectorfont
 			{
 				if (requiredVertices <= state.vertexCapacity)
 					return true;
-				operation = "ring-capacity";
-				result = D3DERR_NOTAVAILABLE;
-				return false;
+				if (state.sortedFrameLeases.load(std::memory_order_acquire)
+					|| state.activeSubmissions.load(std::memory_order_acquire))
+				{
+					operation = "ring-busy";
+					result = D3DERR_WASSTILLDRAWING;
+					return false;
+				}
+				ReleaseRingResourcesLocked(state);
 			}
 			if (state.vertexBuffer || state.staticVertexBuffer || state.indexBuffer)
 			{
@@ -340,9 +345,15 @@ namespace fonthook::vectorfont
 				ReleaseRingResourcesLocked(state);
 			}
 
-			const UInt64 capLimit = static_cast<UInt64>(
+			const UInt64 indexCap = static_cast<UInt64>(
 				renderer->m_kD3DCaps9.MaxVertexIndex) + 1u;
-			UInt64 desired = std::min<UInt64>(kRingTargetVertexCapacity, capLimit);
+			const UInt64 byteCap = std::numeric_limits<UINT>::max()
+				/ sizeof(NativeFontGpuVertex);
+			const UInt64 capLimit = std::min<UInt64>(indexCap,
+				std::min<UInt64>(byteCap, std::numeric_limits<UInt32>::max()));
+			UInt64 desired = std::min<UInt64>(
+				std::max<UInt64>(kRingTargetVertexCapacity, requiredVertices),
+				capLimit);
 			desired &= ~static_cast<UInt64>(3u);
 			UInt64 staticDesired = std::min<UInt64>(
 				kStaticInitialVertexCapacity, capLimit);

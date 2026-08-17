@@ -70,7 +70,8 @@ namespace fonthook::vectorfont
 		if (packet.atlasPage != 0 || packet.firstVertex != 0
 			|| !packet.vertexCount
 			|| packet.vertexCount != artifact.gpuVertices.size()
-			|| (packet.vertexCount & 3u))
+			|| (packet.vertexCount & 3u)
+			|| packet.vertexCount / 4u > kNativeFontMaximumQuads)
 		{
 			return NativeFontFallbackReason::PacketBuild;
 		}
@@ -166,6 +167,7 @@ namespace fonthook::vectorfont
 			+ packet.vertexCount;
 		if (!packet.vertexCount || (packet.firstVertex & 3u)
 			|| (packet.vertexCount & 3u)
+			|| packet.vertexCount / 4u > kNativeFontMaximumQuads
 			|| vertexEnd > artifactVertexCount)
 		{
 			return NativeFontFallbackReason::PacketBuild;
@@ -499,6 +501,7 @@ namespace fonthook::vectorfont
 		const UInt64 baseVertex = static_cast<UInt64>(
 			submission.payloadBaseVertex) + source.firstVertex;
 		if (!vertexCount || (vertexCount & 3u)
+			|| vertexCount / 4u > kNativeFontMaximumQuads
 			|| baseVertex + vertexCount > submission.endVertex)
 		{
 			return NativeFontFallbackReason::PacketBuild;
@@ -594,6 +597,7 @@ namespace fonthook::vectorfont
 		const UInt64 end = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
 		if (!packet.vertexCount || (packet.vertexCount & 3u)
+			|| packet.vertexCount / 4u > kNativeFontMaximumQuads
 			|| end > payload.payloadTemplate->gpuVertices.size())
 		{
 			return NativeFontFallbackReason::PacketBuild;
@@ -705,6 +709,7 @@ namespace fonthook::vectorfont
 		const UInt64 packetEnd = static_cast<UInt64>(packet.firstVertex)
 			+ packet.vertexCount;
 		if (!packet.vertexCount || (packet.vertexCount & 3u)
+			|| packet.vertexCount / 4u > kNativeFontMaximumQuads
 			|| packetEnd > artifact.gpuVertices.size())
 		{
 			return false;

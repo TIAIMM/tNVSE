@@ -194,7 +194,10 @@ namespace fonthook::vectorfont
 			}
 			const UInt32 vertexCount = static_cast<UInt32>(
 				payloadTemplate->gpuVertices.size());
-			if ((vertexCount & 3u) || vertexCount / 4u > kNativeFontMaximumQuads)
+			if ((vertexCount & 3u)
+				|| static_cast<UInt64>(vertexCount)
+					* sizeof(NativeFontGpuVertex)
+					> std::numeric_limits<UINT>::max())
 				continue;
 			maximumVertices = std::max(maximumVertices, vertexCount);
 		}
@@ -224,8 +227,9 @@ namespace fonthook::vectorfont
 				&& payloadTemplate->gpuVertices.size()
 					<= std::numeric_limits<UInt32>::max()
 				&& !(payloadTemplate->gpuVertices.size() & 3u)
-				&& payloadTemplate->gpuVertices.size() / 4u
-					<= kNativeFontMaximumQuads;
+				&& static_cast<UInt64>(payloadTemplate->gpuVertices.size())
+					* sizeof(NativeFontGpuVertex)
+					<= std::numeric_limits<UINT>::max();
 		};
 		size_t validatedStaticPayloads = 0;
 		size_t residentStaticPayloads = 0;

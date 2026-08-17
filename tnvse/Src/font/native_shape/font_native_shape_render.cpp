@@ -376,12 +376,13 @@ namespace fonthook::vectorfont
 				// the shared_ptr<const>, eliminating this O(vertex + packet) work from
 				// registration without weakening the fallback contract.
 				if (!payloadTemplate->quadCount
-					|| payloadTemplate->quadCount > kNativeFontMaximumQuads
+					|| payloadTemplate->quadCount
+						> kNativeFontMaximumArtifactQuads
 					|| payloadTemplate->gpuVertices.size()
 						< static_cast<size_t>(payloadTemplate->quadCount) * 4u
 					|| (payloadTemplate->gpuVertices.size() & 3u)
-					|| payloadTemplate->gpuVertices.size() / 4u
-						> kNativeFontMaximumQuads
+					|| payloadTemplate->gpuVertices.size()
+						> std::numeric_limits<UInt32>::max()
 					|| payloadTemplate->packets.empty()
 					|| payloadTemplate->pageCount
 						!= payloadTemplate->atlasProperties.size()
@@ -405,6 +406,8 @@ namespace fonthook::vectorfont
 						+ packet.vertexCount;
 					if (!packet.vertexCount || (packet.firstVertex & 3u)
 						|| (packet.vertexCount & 3u)
+						|| packet.vertexCount / 4u
+							> kNativeFontMaximumQuads
 						|| vertexEnd > payloadTemplate->gpuVertices.size()
 						|| packet.layer > 3 || !IsFiniteBound(packet.bound)
 						|| !std::all_of(packet.constants.begin(),
@@ -423,6 +426,8 @@ namespace fonthook::vectorfont
 						+ packet.vertexCount;
 					if (!packet.vertexCount || (packet.firstVertex & 3u)
 						|| (packet.vertexCount & 3u)
+						|| packet.vertexCount / 4u
+							> kNativeFontMaximumQuads
 						|| vertexEnd > payloadTemplate->gpuVertices.size()
 						|| packet.layer > 3 || !IsFiniteBound(packet.bound)
 						|| packet.shaderClass
@@ -681,8 +686,9 @@ namespace fonthook::vectorfont
 			const NiVBChip* chip = slot.bindingChip;
 			if (!slot.bound || !slot.shape || !data || !buffer || !chip
 				|| !slot.bindingStride || !slot.bindingChipMemory
-				|| !source.active || !shader
-				|| (source.vertexCount & 3u))
+				|| !source.active || !shader || !source.vertexCount
+				|| (source.vertexCount & 3u)
+				|| source.vertexCount / 4u > kNativeFontMaximumQuads)
 			{
 				return false;
 			}

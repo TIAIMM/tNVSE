@@ -373,8 +373,8 @@ namespace fonthook::vectorfont
 				}
 				return nullptr;
 			}
-			const bool shaderQuadCountValid = shaderQuadsBuilt && !shaderQuads.empty()
-				&& shaderQuads.size() <= kMaximumQuads;
+			const bool shaderQuadCountValid =
+				shaderQuadsBuilt && !shaderQuads.empty();
 			bool shaderAtlasOrShapeFailed = false;
 			if (shaderQuadCountValid)
 			{
@@ -410,7 +410,6 @@ namespace fonthook::vectorfont
 					font.iFontNum,
 					!shaderQuadsBuilt ? "mask-build"
 						: shaderQuads.empty() ? "empty-batch"
-						: shaderQuads.size() > kMaximumQuads ? "quad-limit"
 						: shaderAtlasOrShapeFailed ? "atlas-or-shape"
 						: "unknown",
 					GetConfiguredDistanceFieldMethodName(),
@@ -557,7 +556,6 @@ namespace fonthook::vectorfont
 				}
 				return nullptr;
 			}
-			if (quads.size() <= kMaximumQuads)
 			{
 				if (requestsBakedComposite)
 				{
@@ -674,10 +672,6 @@ namespace fonthook::vectorfont
 				}
 				if (diagnostics)
 					diagnostics->outcome = GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
-			}
-			else if (diagnostics)
-			{
-				diagnostics->outcome = GlyphAtlasBuildOutcome::QuadLimit;
 			}
 			if (attempt < degradationOrder.size())
 			{

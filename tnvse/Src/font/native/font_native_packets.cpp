@@ -107,12 +107,10 @@ namespace fonthook::vectorfont
 		{
 			if (!payload.pageCount || !payload.quadCount
 				|| !payload.sourceRangeCount
-				|| payload.quadCount > kNativeFontMaximumQuads
+				|| payload.quadCount > kNativeFontMaximumArtifactQuads
 				|| payload.gpuVertices.size()
 					< static_cast<size_t>(payload.quadCount) * 4u
 				|| (payload.gpuVertices.size() & 3u)
-				|| payload.gpuVertices.size() / 4u
-					> kNativeFontMaximumQuads
 				|| payload.gpuVertices.size()
 					> std::numeric_limits<UInt32>::max()
 				|| payload.packets.empty()
@@ -336,14 +334,15 @@ namespace fonthook::vectorfont
 		bool SamePacketTarget(const PacketSpan& span,
 			const NativeFontCompiledRange& compiledRange,
 			NativeFontShaderClass shaderClass,
-			NativeFontSampling sampling)
+			NativeFontSampling sampling, UInt32 firstVertex,
+			UInt32 startIndex)
 		{
 			const UInt64 expectedVertex = static_cast<UInt64>(span.firstVertex)
 				+ span.vertexCount;
 			const UInt64 expectedIndex = static_cast<UInt64>(span.startIndex)
 				+ span.indexCount;
-			return expectedVertex == compiledRange.drawRange.firstVertex
-				&& expectedIndex == compiledRange.drawRange.startIndex
+			return expectedVertex == firstVertex
+				&& expectedIndex == startIndex
 				&& span.shaderClass == shaderClass
 				&& span.sampling == sampling
 				&& span.layer == compiledRange.drawRange.layer
@@ -508,7 +507,8 @@ namespace fonthook::vectorfont
 		{
 			spans.clear();
 			if (effects.ranges.empty() || effects.atlasProperties.empty()
-				|| effects.atlasProperties.size() != effects.atlasTextures.size())
+				|| effects.atlasProperties.size() != effects.atlasTextures.size()
+				|| !vertexCount || (vertexCount & 3u))
 				return false;
 			const UInt64 sourceIndexCount = static_cast<UInt64>(vertexCount / 4u) * 6u;
 			for (size_t rangeIndex = 0; rangeIndex < effects.ranges.size(); ++rangeIndex)
@@ -530,33 +530,59 @@ namespace fonthook::vectorfont
 				if (!ResolveNativeShaderClass(compiled.shaderClass, shaderClass))
 					return false;
 				const NativeFontSampling sampling = ResolveSampling(compiled);
-				if (!spans.empty()
-					&& SamePacketTarget(spans.back(), compiled, shaderClass, sampling))
+				UInt32 remainingVertices = range.vertexCount;
+				UInt32 nextVertex = range.firstVertex;
+				UInt32 nextIndex = range.startIndex;
+				while (remainingVertices)
 				{
-					PacketSpan& span = spans.back();
-					++span.rangeCount;
-					span.vertexCount += range.vertexCount;
-					span.indexCount += static_cast<UInt32>(indexCount);
-					RecordFreeTypePerf(FreeTypePerfCounter::MergedPacketRange);
-				}
-				else
-				{
-					PacketSpan span;
-					span.firstRange = rangeIndex;
-					span.rangeCount = 1;
-					span.firstVertex = range.firstVertex;
-					span.vertexCount = range.vertexCount;
-					span.startIndex = range.startIndex;
-					span.indexCount = static_cast<UInt32>(indexCount);
-					span.shaderClass = shaderClass;
-					span.sampling = sampling;
-					span.layer = range.layer;
-					span.atlasPage = range.atlasPage;
-					span.usesSdf = range.usesSdf;
-					span.staticSmoothSampling = compiled.staticSmoothSampling;
-					span.usesLiveTileRgb = range.usesLiveTileRgb;
-					span.constants = compiled.constants;
-					spans.push_back(span);
+					const bool appendToPrevious = !spans.empty()
+						&& spans.back().vertexCount
+							< kNativeFontMaximumPacketVertices
+						&& SamePacketTarget(spans.back(), compiled,
+							shaderClass, sampling, nextVertex, nextIndex);
+					const UInt32 availableVertices = appendToPrevious
+						? kNativeFontMaximumPacketVertices
+							- spans.back().vertexCount
+						: kNativeFontMaximumPacketVertices;
+					const UInt32 chunkVertices = std::min(
+						remainingVertices, availableVertices);
+					const UInt32 chunkIndices = chunkVertices / 4u * 6u;
+					if (!chunkVertices || (chunkVertices & 3u))
+						return false;
+
+					if (appendToPrevious)
+					{
+						PacketSpan& span = spans.back();
+						++span.rangeCount;
+						span.vertexCount += chunkVertices;
+						span.indexCount += chunkIndices;
+						RecordFreeTypePerf(
+							FreeTypePerfCounter::MergedPacketRange);
+					}
+					else
+					{
+						PacketSpan span;
+						span.firstRange = rangeIndex;
+						span.rangeCount = 1;
+						span.firstVertex = nextVertex;
+						span.vertexCount = chunkVertices;
+						span.startIndex = nextIndex;
+						span.indexCount = chunkIndices;
+						span.shaderClass = shaderClass;
+						span.sampling = sampling;
+						span.layer = range.layer;
+						span.atlasPage = range.atlasPage;
+						span.usesSdf = range.usesSdf;
+						span.staticSmoothSampling =
+							compiled.staticSmoothSampling;
+						span.usesLiveTileRgb = range.usesLiveTileRgb;
+						span.constants = compiled.constants;
+						spans.push_back(span);
+					}
+
+					remainingVertices -= chunkVertices;
+					nextVertex += chunkVertices;
+					nextIndex += chunkIndices;
 				}
 			}
 			return !spans.empty();
@@ -790,11 +816,11 @@ namespace fonthook::vectorfont
 		const NativeFontEffectShapeConfig& effects, const NiBound& bound,
 		std::vector<NativeFontCompositeSpan>&& compositeSpans)
 	{
-		if (!quadCount || quadCount > kNativeFontMaximumQuads
+		if (!quadCount || quadCount > kNativeFontMaximumArtifactQuads
 			|| glyphCount > quadCount
 			|| vertices.size() < static_cast<size_t>(quadCount) * 4u
 			|| (vertices.size() & 3u)
-			|| vertices.size() / 4u > kNativeFontMaximumQuads
+			|| vertices.size() > std::numeric_limits<UInt32>::max()
 			|| effects.atlasProperties.empty()
 			|| effects.atlasProperties.size() != effects.atlasTextures.size()
 			|| effects.atlasProperties.size() > std::numeric_limits<UInt32>::max()
@@ -805,7 +831,7 @@ namespace fonthook::vectorfont
 		}
 
 		std::vector<PacketSpan> spans;
-		if (!BuildPacketSpans(effects, static_cast<UInt32>(vertices.size()), spans))
+		if (!BuildPacketSpans(effects, quadCount * 4u, spans))
 			return {};
 
 		auto payload = std::make_shared<NativeFontPayloadTemplate>();
@@ -850,38 +876,55 @@ namespace fonthook::vectorfont
 		if (effects.shaderEffects && !compositeSpans.empty())
 		{
 			payload->compositePackets.reserve(compositeSpans.size());
-			for (const NativeFontCompositeSpan& span : compositeSpans)
+			for (const NativeFontCompositeSpan& sourceSpan : compositeSpans)
 			{
-				const UInt64 end = static_cast<UInt64>(span.firstVertex)
-					+ span.vertexCount;
-				if (!span.vertexCount || (span.firstVertex & 3u)
-					|| (span.vertexCount & 3u)
-					|| span.vertexCount / 4u > kNativeFontMaximumQuads
+				const UInt64 end = static_cast<UInt64>(sourceSpan.firstVertex)
+					+ sourceSpan.vertexCount;
+				if (!sourceSpan.vertexCount || (sourceSpan.firstVertex & 3u)
+					|| (sourceSpan.vertexCount & 3u)
 					|| end > payload->gpuVertices.size()
-					|| span.atlasPage >= payload->pageCount)
+					|| sourceSpan.atlasPage >= payload->pageCount)
 				{
 					payload->compositePackets.clear();
 					break;
 				}
 				const bool collectValidationWitness =
 					compositeSpans.size() == 1u
-					&& span.firstVertex == 0
-					&& span.vertexCount == payload->gpuVertices.size();
-				const CompositeVertexProfile profile =
-					ResolveCompositeVertexProfile(
-						payload->gpuVertices, span,
-						collectValidationWitness);
+					&& sourceSpan.firstVertex == 0
+					&& sourceSpan.vertexCount == payload->gpuVertices.size();
+				const CompositeVertexProfile sourceProfile =
+					collectValidationWitness
+						? ResolveCompositeVertexProfile(payload->gpuVertices,
+							sourceSpan, true)
+						: CompositeVertexProfile{};
 				if (collectValidationWitness
-					&& profile.validationWitness.complete)
+					&& sourceProfile.validationWitness.complete)
 				{
-					constructionWitness = profile.validationWitness;
+					constructionWitness = sourceProfile.validationWitness;
 					hasConstructionWitness = true;
 				}
-				payload->compositePackets.push_back(
-					BuildCompositePacket(effects, span, bound,
-						profile.staticLayerMask,
-						profile.uniformSdfSpread,
-						profile.uniformDistanceParameterScale));
+
+				UInt32 remainingVertices = sourceSpan.vertexCount;
+				UInt32 firstVertex = sourceSpan.firstVertex;
+				while (remainingVertices)
+				{
+					NativeFontCompositeSpan packetSpan = sourceSpan;
+					packetSpan.firstVertex = firstVertex;
+					packetSpan.vertexCount = std::min(
+						remainingVertices, kNativeFontMaximumPacketVertices);
+					const CompositeVertexProfile packetProfile =
+						collectValidationWitness
+							? sourceProfile
+							: ResolveCompositeVertexProfile(
+								payload->gpuVertices, packetSpan, false);
+					payload->compositePackets.push_back(
+						BuildCompositePacket(effects, packetSpan, bound,
+							packetProfile.staticLayerMask,
+							packetProfile.uniformSdfSpread,
+							packetProfile.uniformDistanceParameterScale));
+					remainingVertices -= packetSpan.vertexCount;
+					firstVertex += packetSpan.vertexCount;
+				}
 			}
 		}
 		if (!SealNativeFontPayloadValidation(*payload,
