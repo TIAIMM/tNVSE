@@ -6,8 +6,10 @@
 #include "font_vector.h"
 #include "font_vector_internal.h"
 #include "native_calls.h"
+#include <atomic>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <unordered_set>
 #include <vector>
@@ -15,6 +17,8 @@
 namespace fonthook
 {
 	static constexpr UInt32 kInitialRenderAddCharLogCount = 0;
+	static constexpr size_t kLongTextTraceMinimumBytes = 4096;
+	static std::atomic<UInt32> s_longTextTraceSequence = 0;
 
 	static float GetFreeTypeLineOffset(FontEx* font, const char* text,
 		float requestedWrapWidth, UInt32 flags, UInt32 startCharIndex)
@@ -521,6 +525,32 @@ namespace fonthook
 		int aiLineStart, int aiLineEnd, int aiFlags, char aiLineBreakChar,
 		const NiColorA* axFontColor, NiTriShape** apTextShape, NiTriShape** apIconShape)
 	{
+		size_t sourceBytes = 0;
+		if (g_bEnableFreeTypeFontRenderingLog && axTextString
+			&& axTextString->pString)
+		{
+			sourceBytes = std::strlen(axTextString->pString);
+		}
+		const bool traceLongText =
+			sourceBytes >= kLongTextTraceMinimumBytes;
+		const UInt32 traceId = traceLongText
+			? s_longTextTraceSequence.fetch_add(
+				1, std::memory_order_relaxed) + 1
+			: 0;
+		const DWORD traceStartTick = traceLongText ? GetTickCount() : 0;
+		if (traceLongText)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_long_text: id=%u stage=enter font=%d bytes=%u width=%d height=%d lineStart=%d lineEnd=%d flags=%d lineSep=0x%02X uiEncoding=%u codePage=%u dictionary=%u multibyteInput=%u",
+				traceId, this ? this->iFontNum : -1,
+				static_cast<UInt32>(sourceBytes),
+				aiWidth ? *aiWidth : 0, aiHeight ? *aiHeight : 0,
+				aiLineStart, aiLineEnd, aiFlags,
+				static_cast<UInt8>(aiLineBreakChar),
+				g_uiEncoding, g_usingWinEncoding,
+				g_bEnableDictionaryTranslation ? 1u : 0u,
+				g_bMultibyteInput ? 1u : 0u);
+		}
 		const float rasterScale = GetCanonicalFreeTypeRasterScale();
 		const bool freeTypeActive = IsFreeTypeFontActive(this);
 		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
@@ -546,6 +576,12 @@ namespace fonthook
 
 		if (g_bEnableMultibyteFontHook)
 		{
+			if (traceLongText)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=preprocess-begin elapsedMs=%u",
+					traceId, GetTickCount() - traceStartTick);
+			}
 			const char* pStr = axTextString->pString;
 			std::string sConvertedStr;
 			if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
@@ -553,10 +589,25 @@ namespace fonthook
 			std::string sTranslatedStr;
 			if (TranslateText(axTextString->pString, sTranslatedStr))
 				axTextString->Set(sTranslatedStr.c_str());
+			if (traceLongText)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=preprocess-end bytes=%u elapsedMs=%u",
+					traceId,
+					static_cast<UInt32>(std::strlen(
+						axTextString->pString ? axTextString->pString : "")),
+					GetTickCount() - traceStartTick);
+			}
 		}
 
 		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar;
 		{
+			if (traceLongText)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=layout-begin elapsedMs=%u",
+					traceId, GetTickCount() - traceStartTick);
+			}
 			PreparedTextSidecarCapture capture(&textData, this);
 			if (g_bEnableMultibyteFontHook)
 			{
@@ -568,6 +619,19 @@ namespace fonthook
 				PrepText(axTextString->pString, &textData);
 			}
 			preparedSidecar = capture.Take();
+		}
+		if (traceLongText)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_long_text: id=%u stage=layout-end preparedBytes=%u chars=%d lines=%d width=%d height=%d sidecar=%u elapsedMs=%u",
+				traceId,
+				static_cast<UInt32>(std::strlen(
+					textData.xNewText.pString
+						? textData.xNewText.pString : "")),
+				textData.iCharCount, textData.iLineEnd,
+				textData.iWidth, textData.iHeight,
+				preparedSidecar ? 1u : 0u,
+				GetTickCount() - traceStartTick);
 		}
 
 		*aiWidth = textData.iWidth;
@@ -594,16 +658,40 @@ namespace fonthook
 				}
 				ThisStdCall<void>(0x7593E0,
 					reinterpret_cast<char*>(&textData));
+				if (traceLongText)
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_long_text: id=%u stage=measure-only-end elapsedMs=%u",
+						traceId, GetTickCount() - traceStartTick);
+				}
 				return;
 			}
 		}
 
 		if (freeTypeActive)
 		{
+			if (traceLongText)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=geometry-begin chars=%d elapsedMs=%u",
+					traceId, textData.iCharCount,
+					GetTickCount() - traceStartTick);
+			}
 			CreateFreeTypePreparedText(this, textData,
 				std::move(preparedSidecar), aiWidth,
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
 				rasterScale);
+			if (traceLongText)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=geometry-end textShape=0x%08X iconShape=0x%08X elapsedMs=%u",
+					traceId,
+					reinterpret_cast<UInt32>(
+						apTextShape ? *apTextShape : nullptr),
+					reinterpret_cast<UInt32>(
+						apIconShape ? *apIconShape : nullptr),
+					GetTickCount() - traceStartTick);
+			}
 			return;
 		}
 		int alignmentOffset = 0;

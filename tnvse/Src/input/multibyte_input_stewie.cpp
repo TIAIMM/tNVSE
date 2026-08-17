@@ -3,6 +3,10 @@
 #include "plugin_dependencies.h"
 #include "Utils/SafeWrite.h"
 
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+
 // Shared Stewie Tweaks UTF-8 input engine and StewMenu integration.
 
 namespace fonthook
@@ -14,6 +18,7 @@ namespace fonthook
 		constexpr UInt32 kStewMenu_SubsettingInputFieldText = 103;
 		constexpr UInt32 kStewieMaxShadowBytes = 1023;
 		constexpr UInt32 kMenuHandleKeyboardInputVTableOffset = 0x30;
+		constexpr size_t kMaximumStewieTileTraversalNodes = 16384;
 		// Stewie Tweaks 9.95 defines the two editable InputField members at these
 		// offsets. The 9.95 private symbols describe a 0x190-byte
 		// StewMenu with subSettingInput at 0xE8 and searchBar at 0x118.
@@ -164,15 +169,54 @@ namespace fonthook
 			if (!tile)
 				return nullptr;
 
-			if (TileID(tile) == canonicalID)
-				return tile;
-
-			for (Tile* child : tile->GetChildren())
+			std::vector<Tile*> pending;
+			std::vector<Tile*> children;
+			std::unordered_set<Tile*> visited;
+			pending.reserve(128);
+			children.reserve(64);
+			visited.reserve(256);
+			pending.push_back(tile);
+			while (!pending.empty()
+				&& visited.size() < kMaximumStewieTileTraversalNodes)
 			{
-				if (Tile* result = FindTileByCanonicalID(child, canonicalID))
-					return result;
+				Tile* current = pending.back();
+				pending.pop_back();
+				if (!current || !visited.insert(current).second)
+					continue;
+				if (TileID(current) == canonicalID)
+					return current;
+
+				children.clear();
+				const size_t queuedAndVisited = std::min(
+					kMaximumStewieTileTraversalNodes,
+					visited.size() + pending.size());
+				UInt32 remaining = static_cast<UInt32>(
+					kMaximumStewieTileTraversalNodes - queuedAndVisited);
+				remaining = std::min(remaining,
+					current->kChildren.GetSize());
+				NiTListIterator childPosition =
+					current->kChildren.GetHeadPos();
+				while (childPosition && remaining--)
+				{
+					Tile* child = current->kChildren.GetNext(
+						childPosition);
+					if (child)
+						children.push_back(child);
+				}
+				for (auto child = children.rbegin();
+					child != children.rend(); ++child)
+				{
+					pending.push_back(*child);
+				}
 			}
 
+			if (!pending.empty())
+			{
+				DebugLog(
+					"tnvse_multibyte_input_debug: bounded Tile id traversal aborted root=0x%08X id=%u visited=%u",
+					reinterpret_cast<UInt32>(tile), canonicalID,
+					static_cast<UInt32>(visited.size()));
+			}
 			return nullptr;
 		}
 

@@ -1309,6 +1309,35 @@ namespace fonthook
 			return true;
 		}
 
+		constexpr size_t kLargeMultilineDocumentBytes = 4096;
+		const bool largeMultilineDocument = depth == 0
+			&& raw.size() >= kLargeMultilineDocumentBytes
+			&& (raw.find('\n') != std::string::npos
+				|| raw.find('\r') != std::string::npos);
+		if (largeMultilineDocument)
+		{
+			// Notes and terminal documents are complete prose blocks, not one UI
+			// label. Whole-document wildcard, regex, fuzzy and shrinking searches
+			// have super-linear worst cases and can monopolize the game's UI thread.
+			// Preserve useful translation semantics by accepting the full exact/ID
+			// matches above and exact per-line matches here, then cache the result.
+			if (!sourceContainsDbcs
+				&& g_bEnableDictionaryBeforeLinebreakTranslation
+				&& TryTranslateBeforeLinebreakText(raw, translated, depth))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_dictionary: large multiline document used bounded exact-only policy bytes=%u",
+					static_cast<UInt32>(raw.size()));
+			}
+			StoreNegativeCache(cacheKey);
+			return false;
+		}
+
 		if (!sourceContainsDbcs && g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
 		{
 			StorePositiveCache(cacheKey, translated);

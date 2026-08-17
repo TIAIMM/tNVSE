@@ -2,6 +2,10 @@
 #include "hook_identity.h"
 #include "Utils/SafeWrite.h"
 
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+
 // Stewie Tweaks MenuSearch integration for vanilla game menus.
 
 namespace fonthook
@@ -19,6 +23,7 @@ namespace fonthook
 		constexpr DWORD kStewieMenuSearchStateSyncTimeoutMs = 1000;
 		constexpr DWORD kStewieMenuHandlerStableDelayMs = 1000;
 		constexpr DWORD kStewieMenuSearchDiscoveryIntervalMs = 50;
+		constexpr size_t kMaximumMenuTileTraversalNodes = 16384;
 		constexpr UInt8 kStewieMenuSearchSync_None = 0;
 		constexpr UInt8 kStewieMenuSearchSync_Toggle = 1;
 		constexpr UInt8 kStewieMenuSearchSync_Deactivate = 2;
@@ -130,7 +135,7 @@ namespace fonthook
 			return trait;
 		}
 
-		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth = 0);
+		bool TileTreeContains(Tile* root, Tile* target);
 
 		bool IsStartMenuSaveListEnabled(Menu* menu)
 		{
@@ -204,19 +209,52 @@ namespace fonthook
 			site.stateSyncDueTick = 0;
 		}
 
-		bool TileTreeContains(Tile* root, Tile* target, UInt32 depth)
+		bool TileTreeContains(Tile* root, Tile* target)
 		{
-			if (!root || !target || depth > 64)
+			if (!root || !target)
 				return false;
-			if (root == target)
-				return true;
 
-			for (Tile* child : root->GetChildren())
+			std::vector<Tile*> pending;
+			std::unordered_set<Tile*> visited;
+			pending.reserve(128);
+			visited.reserve(256);
+			pending.push_back(root);
+			while (!pending.empty()
+				&& visited.size() < kMaximumMenuTileTraversalNodes)
 			{
-				if (TileTreeContains(child, target, depth + 1))
+				Tile* current = pending.back();
+				pending.pop_back();
+				if (!current || !visited.insert(current).second)
+					continue;
+				if (current == target)
 					return true;
+
+				const size_t queuedAndVisited = std::min(
+					kMaximumMenuTileTraversalNodes,
+					visited.size() + pending.size());
+				UInt32 remaining = static_cast<UInt32>(
+					kMaximumMenuTileTraversalNodes - queuedAndVisited);
+				remaining = std::min(remaining,
+					current->kChildren.GetSize());
+				NiTListIterator childPosition =
+					current->kChildren.GetHeadPos();
+				while (childPosition && remaining--)
+				{
+					Tile* child = current->kChildren.GetNext(
+						childPosition);
+					if (child)
+						pending.push_back(child);
+				}
 			}
 
+			if (!pending.empty())
+			{
+				DebugLog(
+					"tnvse_multibyte_input_debug: bounded Tile containment traversal aborted root=0x%08X target=0x%08X visited=%u",
+					reinterpret_cast<UInt32>(root),
+					reinterpret_cast<UInt32>(target),
+					static_cast<UInt32>(visited.size()));
+			}
 			return false;
 		}
 
@@ -362,6 +400,20 @@ namespace fonthook
 
 		void DiscoverMenuSearchTiles()
 		{
+			const bool needsActiveMaintenance = std::any_of(
+				std::begin(s_menuSearchSites), std::end(s_menuSearchSites),
+				[](const StewieMenuSearchAdapterSite& site)
+				{
+					return site.keyboardActive || site.stateSyncPending;
+				});
+			// Before publication, discovery is used only to prove that Stewie has
+			// finished injecting its search tiles. Once the adapters are installed,
+			// an inactive menu has no tNVSE text-input target and must stay entirely
+			// on the predecessor path. In particular, do not walk MapMenu while it is
+			// rebuilding the Data/Notes subtree.
+			if (s_menuSearchAdaptersInstalled && !needsActiveMaintenance)
+				return;
+
 			const DWORD now = GetTickCount();
 			if (s_lastMenuSearchDiscoveryTick
 				&& now - s_lastMenuSearchDiscoveryTick
@@ -373,6 +425,11 @@ namespace fonthook
 
 			for (StewieMenuSearchAdapterSite& site : s_menuSearchSites)
 			{
+				if (s_menuSearchAdaptersInstalled
+					&& !site.keyboardActive && !site.stateSyncPending)
+				{
+					continue;
+				}
 				if (!IsGameMenuVisible(site.menuID))
 					continue;
 
@@ -645,40 +702,6 @@ namespace fonthook
 
 		void ProcessStewieMenuSearchPendingStateSync()
 		{
-			// The three Pip-Boy searches use Stewie's InputField. _IsActive is a
-			// presentation trait written by InputField::SetActive(), not the
-			// IsSearchMode flag that the menu keyboard handler actually tests.
-			// Keep it only as a recovery hint when our explicit Ctrl+F state was
-			// unavailable (for example, after a tab becomes visible again).
-			for (StewieMenuSearchAdapterSite& site : s_menuSearchSites)
-			{
-				if (!site.adapterInstalled
-					|| site.stateSyncPending
-					|| site.keyboardActive
-					|| !MenuSearchUsesInputField(site.menuID)
-					|| !IsGameMenuVisible(site.menuID))
-				{
-					continue;
-				}
-
-				Menu* menu = GetOpenMenu(site.menuID);
-				Tile* searchTile = menu ? GetTrackedMenuSearchTile(menu) : nullptr;
-				if (!searchTile && menu)
-					searchTile = FindTileByID(MenuRoot(menu), kStewieMenuSearch_TextTile);
-				if (!MenuSearchOwnerReportsActive(site, menu, searchTile))
-					continue;
-
-				site.keyboardActive = true;
-				site.targetReported = false;
-				ClearStewieInputState();
-				RefreshTextInputSessionForActiveTarget(
-					"menusearch_input_field_reactivate");
-				DebugLog(
-					"tnvse_multibyte_input_event: source=MainLoop action=menusearch_input_field_reactivate menu=%u tile=0x%08X",
-					site.menuID,
-					reinterpret_cast<UInt32>(searchTile));
-			}
-
 			const bool needsMaintenance = std::any_of(std::begin(s_menuSearchSites),
 				std::end(s_menuSearchSites), [](const StewieMenuSearchAdapterSite& site)
 				{
@@ -686,6 +709,10 @@ namespace fonthook
 				});
 			if (!needsMaintenance)
 				return;
+			// Stewie's own IsSearchMode and the chained Ctrl+F/Ctrl+R handler are
+			// authoritative. _IsActive is only a presentation trait; probing it on
+			// every frame made tNVSE recursively inspect unrelated menu subtrees and
+			// could race MapMenu's Notes rebuild.
 			const DWORD now = GetTickCount();
 			for (StewieMenuSearchAdapterSite& site : s_menuSearchSites)
 			{
@@ -889,6 +916,18 @@ namespace fonthook
 				return true;
 			if (!IsStewieTweaksAvailable())
 				return CallStewiePredecessorInput(menu, input);
+
+			StewieMenuSearchAdapterSite* site =
+				FindMenuSearchSiteByMenu(menu);
+			const UInt32 loweredInput = input | 0x20;
+			const bool searchControlInput = IsCtrlKeyDown()
+				&& (loweredInput == 'f' || loweredInput == 'r');
+			if (!site
+				|| (!site->keyboardActive && !site->stateSyncPending
+					&& !searchControlInput))
+			{
+				return CallStewiePredecessorInput(menu, input);
+			}
 
 			bool controlHandled = false;
 			if (HandleMenuSearchControlInput(menu, input, controlHandled))
