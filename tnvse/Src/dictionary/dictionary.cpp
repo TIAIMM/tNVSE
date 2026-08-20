@@ -8,6 +8,7 @@ namespace fonthook
 	std::vector<DictionaryEntry> s_entries;
 	std::unordered_map<std::string, std::vector<size_t>> s_exactIndex;
 	std::unordered_map<std::string, std::vector<size_t>> s_windows1252ExactIndex;
+	std::vector<Windows1252WildcardAlias> s_windows1252WildcardIndex;
 	std::vector<size_t> s_wildcardIndex;
 	std::unordered_map<std::string, std::vector<size_t>> s_wildcardPrefixIndex;
 	std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;

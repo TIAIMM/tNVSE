@@ -9,26 +9,32 @@ namespace fonthook
 	{
 		std::string TranslateCapture(const std::string& capture, int depth)
 		{
+			std::string translated;
+			if (depth < 4 &&
+				TryTranslateWindows1252Text(capture, translated, depth + 1))
+			{
+				return translated;
+			}
 			if (ContainsDbcs(capture))
 				return capture;
 
-			std::string translated;
 			if (depth < 4 && TranslateInternal(capture.c_str(), translated, depth + 1))
 				return translated;
 			return capture;
 		}
 	}
 
-	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures)
+	bool MatchWildcardTokens(const std::vector<std::string>& tokens, size_t bindCount,
+		const std::string& key, std::vector<std::string>& captures)
 	{
 		captures.clear();
 		size_t cursor = 0;
-		const bool startsWithBind = entry.tokens.size() > 0 && entry.tokens.front().empty();
-		const bool endsWithBind = entry.tokens.size() > 0 && entry.tokens.back().empty();
+		const bool startsWithBind = !tokens.empty() && tokens.front().empty();
+		const bool endsWithBind = !tokens.empty() && tokens.back().empty();
 
-		for (size_t i = 0; i < entry.tokens.size(); ++i)
+		for (size_t i = 0; i < tokens.size(); ++i)
 		{
-			const std::string& token = entry.tokens[i];
+			const std::string& token = tokens[i];
 			if (token.empty())
 				continue;
 
@@ -50,9 +56,14 @@ namespace fonthook
 		if (endsWithBind)
 			captures.push_back(key.substr(cursor));
 
-		while (captures.size() < entry.bindCount)
+		while (captures.size() < bindCount)
 			captures.emplace_back();
-		return captures.size() == entry.bindCount;
+		return captures.size() == bindCount;
+	}
+
+	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures)
+	{
+		return MatchWildcardTokens(entry.tokens, entry.bindCount, key, captures);
 	}
 
 	bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth)

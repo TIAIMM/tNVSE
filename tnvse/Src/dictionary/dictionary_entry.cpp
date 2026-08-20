@@ -20,10 +20,9 @@ namespace fonthook
 				});
 		}
 
-		void RegisterWindows1252ExactAlias(std::string source, size_t entryIndex)
+		void RegisterWindows1252Alias(std::string source, size_t entryIndex)
 		{
 			if (entryIndex >= s_entries.size()
-				|| !s_entries[entryIndex].isExact
 				|| !ContainsWindows1252ExtendedByte(source))
 			{
 				return;
@@ -34,12 +33,23 @@ namespace fonthook
 			if (key.empty()
 				|| key == s_entries[entryIndex].key
 				|| !HasAlphabet(key)
-				|| CountToken(key, kBindSymbol) != 0)
+				|| CountToken(key, kBindSymbol) != s_entries[entryIndex].bindCount)
 			{
 				return;
 			}
 
-			s_windows1252ExactIndex[std::move(key)].push_back(entryIndex);
+			if (s_entries[entryIndex].isExact)
+			{
+				s_windows1252ExactIndex[std::move(key)].push_back(entryIndex);
+				return;
+			}
+
+			Windows1252WildcardAlias alias;
+			alias.entryIndex = entryIndex;
+			alias.tokens = SplitByToken(key, kBindSymbol);
+			alias.lengthWithoutBinds = LengthWithoutBinds(key);
+			if (alias.lengthWithoutBinds != 0)
+				s_windows1252WildcardIndex.push_back(std::move(alias));
 		}
 
 		void RemoveBraceComments(std::string& text)
@@ -274,7 +284,7 @@ namespace fonthook
 		target = PrepareTarget(std::move(target));
 		const bool registered = AddEntry(source, target, priority, id);
 		if (registered)
-			RegisterWindows1252ExactAlias(std::move(windows1252Source), entryIndex);
+			RegisterWindows1252Alias(std::move(windows1252Source), entryIndex);
 		return registered;
 	}
 
@@ -283,6 +293,7 @@ namespace fonthook
 	// ---- XML record-type-aware registration ----
 
 	void GenerateAutoEntries(const std::string& cleanSource,
+	                         const std::string& windows1252Source,
 	                         const std::string& cleanTarget,
 	                         RecordType type,
 	                         int priority)
@@ -322,7 +333,19 @@ namespace fonthook
 					typeKey, autoSource.c_str(), logTarget.c_str());
 			}
 
-		RegisterText(std::move(autoSource), std::move(autoTarget), priority, {});
+		std::string autoWindows1252Source;
+		if (!windows1252Source.empty())
+		{
+			autoWindows1252Source = sourceFormat;
+			ReplaceAll(autoWindows1252Source, "{}", windows1252Source);
+		}
+		const size_t entryIndex = s_entries.size();
+		if (RegisterText(std::move(autoSource), std::move(autoTarget), priority, {}) &&
+			!autoWindows1252Source.empty())
+		{
+			RegisterWindows1252Alias(
+				std::move(autoWindows1252Source), entryIndex);
+		}
 	}
 
 	bool RegisterXmlEntry(const std::string& source, const std::string& target,
@@ -350,10 +373,11 @@ namespace fonthook
 		const size_t entryIndex = s_entries.size();
 		const bool registered = RegisterText(cleanSource, cleanTarget, priority, id);
 		if (registered)
-			RegisterWindows1252ExactAlias(std::move(windows1252Source), entryIndex);
+			RegisterWindows1252Alias(windows1252Source, entryIndex);
 
 		if (registered && type != RecordType::Unknown)
-			GenerateAutoEntries(cleanSource, cleanTarget, type, priority);
+			GenerateAutoEntries(
+				cleanSource, windows1252Source, cleanTarget, type, priority);
 
 		return registered;
 	}
@@ -402,6 +426,13 @@ namespace fonthook
 		for (auto& pair : s_exactIndex)
 			SortIndexVector(pair.second);
 		SortIndexMap(s_windows1252ExactIndex);
+		std::sort(s_windows1252WildcardIndex.begin(), s_windows1252WildcardIndex.end(),
+			[](const Windows1252WildcardAlias& left,
+				const Windows1252WildcardAlias& right)
+			{
+				return EntryLess(
+					s_entries[left.entryIndex], s_entries[right.entryIndex]);
+			});
 
 		SortIndexVector(s_wildcardIndex);
 		SortIndexMap(s_wildcardPrefixIndex);

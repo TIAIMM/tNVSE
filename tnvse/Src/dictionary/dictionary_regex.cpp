@@ -224,7 +224,9 @@ namespace fonthook
 				return {};
 
 			std::string translated;
-			if (depth < 4 && TranslateInternal(text.c_str(), translated, depth + 1))
+			if (depth < 4 &&
+				(TryTranslateWindows1252Text(text, translated, depth + 1) ||
+					TranslateInternal(text.c_str(), translated, depth + 1)))
 				return translated;
 			return text;
 		}
@@ -349,8 +351,11 @@ namespace fonthook
 						static_cast<size_t>(match.length(i)));
 				}
 				std::string translatedCapture;
-				if (!ContainsDbcs(capture))
+				if (!TryTranslateWindows1252Text(capture, translatedCapture, 0) &&
+					!ContainsDbcs(capture))
+				{
 					TranslateInternal(capture.c_str(), translatedCapture, 0);
+				}
 				const std::string& replacement = translatedCapture.empty() ? capture : translatedCapture;
 				ReplaceAll(result, "$" + std::to_string(i), replacement);
 			}
@@ -411,7 +416,8 @@ namespace fonthook
 		}
 
 		std::string stemTranslated;
-		if (!TranslateInternal(stem.c_str(), stemTranslated, depth + 1))
+		if (!TryTranslateWindows1252Text(stem, stemTranslated, depth + 1) &&
+			!TranslateInternal(stem.c_str(), stemTranslated, depth + 1))
 		{
 			if (g_bEnableDictionaryTranslationLog) {
 				gLog.FormattedMessage("tnvse_dictionary: TryTranslateFuzzyText fail: stem \"%s\" not translated", stem.c_str());

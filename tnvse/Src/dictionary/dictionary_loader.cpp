@@ -538,6 +538,7 @@ namespace fonthook
 		s_entries.clear();
 		s_exactIndex.clear();
 		s_windows1252ExactIndex.clear();
+		s_windows1252WildcardIndex.clear();
 		s_wildcardIndex.clear();
 		s_wildcardPrefixIndex.clear();
 		s_wildcardSuffixIndex.clear();
@@ -617,9 +618,10 @@ namespace fonthook
 		for (const auto& pair : s_windows1252ExactIndex)
 			windows1252AliasCount += pair.second.size();
 		gLog.FormattedMessage(
-			"tnvse_dictionary: Windows-1252 raw exact index keys=%u aliases=%u",
+			"tnvse_dictionary: Windows-1252 raw index exact_keys=%u exact_aliases=%u wildcard_aliases=%u",
 			static_cast<UInt32>(s_windows1252ExactIndex.size()),
-			static_cast<UInt32>(windows1252AliasCount));
+			static_cast<UInt32>(windows1252AliasCount),
+			static_cast<UInt32>(s_windows1252WildcardIndex.size()));
 		gLog.FormattedMessage("tnvse_dictionary: loaded %u entries, %u regex rules",
 			static_cast<UInt32>(s_entries.size()),
 			static_cast<UInt32>(GetTranslationRegexRuleCount()));

@@ -326,7 +326,8 @@ namespace fonthook
 			translated.clear();
 			if (name.empty() || depth >= 4)
 				return false;
-			return TranslateInternal(name.c_str(), translated, depth + 1);
+			return TryTranslateWindows1252Text(name, translated, depth + 1) ||
+				TranslateInternal(name.c_str(), translated, depth + 1);
 		}
 
 		bool TranslateEffectNameExact(const std::string& name, std::string& translated, int depth)
@@ -380,7 +381,8 @@ namespace fonthook
 			translated.clear();
 			if (text.empty() || depth >= 4)
 				return false;
-			return TranslateInternal(text.c_str(), translated, depth + 1);
+			return TryTranslateWindows1252Text(text, translated, depth + 1) ||
+				TranslateInternal(text.c_str(), translated, depth + 1);
 		}
 
 		bool TrySplitMultiplierText(const std::string& source, MultiplierTextParts& parts)
@@ -432,7 +434,8 @@ namespace fonthook
 			translated.clear();
 			if (source.empty() || depth >= 4)
 				return false;
-			return TranslateInternal(source.c_str(), translated, depth + 1);
+			return TryTranslateWindows1252Text(source, translated, depth + 1) ||
+				TranslateInternal(source.c_str(), translated, depth + 1);
 		}
 	}
 

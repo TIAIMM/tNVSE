@@ -61,6 +61,13 @@ namespace fonthook
 		bool hasAsciiLiteralAnchor = false;
 	};
 
+	struct Windows1252WildcardAlias
+	{
+		size_t entryIndex = 0;
+		std::vector<std::string> tokens;
+		size_t lengthWithoutBinds = 0;
+	};
+
 	// ---- record type for XML auto-entry generation ----
 	enum class RecordType : UInt8
 	{
@@ -85,6 +92,7 @@ namespace fonthook
 	extern std::vector<DictionaryEntry> s_entries;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_exactIndex;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_windows1252ExactIndex;
+	extern std::vector<Windows1252WildcardAlias> s_windows1252WildcardIndex;
 	extern std::vector<size_t> s_wildcardIndex;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardPrefixIndex;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;
@@ -153,8 +161,11 @@ namespace fonthook
 	RecordType DetectRecordTypeFromRec(const char* rec);
 
 	// ---- translation ----
+	bool MatchWildcardTokens(const std::vector<std::string>& tokens, size_t bindCount,
+		const std::string& key, std::vector<std::string>& captures);
 	bool MatchWildcard(const DictionaryEntry& entry, const std::string& key, std::vector<std::string>& captures);
 	bool ExpandTarget(const DictionaryEntry& entry, const std::vector<std::string>& captures, std::string& translated, int depth);
+	bool TryTranslateWindows1252Text(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateExactText(const std::string& source, std::string& translated, int depth);
 	bool TranslateInternal(const char* source, std::string& translated, int depth);
 	bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);

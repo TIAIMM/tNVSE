@@ -70,6 +70,8 @@ namespace fonthook
 		};
 
 		constexpr char kDbcsLookupUnit = '\x1F';
+		constexpr size_t kWindows1252StructuredMaxBytes = 2048;
+		thread_local UInt64 s_windows1252MatchSerial = 0;
 
 		struct RichTextTag
 		{
@@ -142,6 +144,84 @@ namespace fonthook
 			return true;
 		}
 
+		bool IsKnownRichTextTagName(std::string_view name)
+		{
+			static constexpr std::string_view names[] =
+			{
+				"a", "b", "br", "center", "color", "div", "em", "face",
+				"font", "hr", "i", "img", "left", "p", "right", "span",
+				"strong", "u",
+			};
+			for (std::string_view candidate : names)
+			{
+				if (candidate == name)
+					return true;
+			}
+			return false;
+		}
+
+		bool IsRichTextAttributeNameChar(char ch)
+		{
+			return IsAsciiAlpha(ch) || (ch >= '0' && ch <= '9') ||
+				ch == '_' || ch == '-' || ch == ':';
+		}
+
+		bool HasValidRichTextTagRemainder(
+			const std::string& text, size_t pos, size_t end)
+		{
+			while (pos < end && IsSourceWhitespace(text[pos]))
+				++pos;
+			if (pos == end)
+				return true;
+			if (text[pos] == '/')
+				return pos + 1 == end;
+
+			while (pos < end)
+			{
+				const size_t nameBegin = pos;
+				while (pos < end && IsRichTextAttributeNameChar(text[pos]))
+					++pos;
+				if (pos == nameBegin)
+					return false;
+				while (pos < end && IsSourceWhitespace(text[pos]))
+					++pos;
+				if (pos == end || text[pos] != '=')
+					return false;
+				++pos;
+				while (pos < end && IsSourceWhitespace(text[pos]))
+					++pos;
+				if (pos == end)
+					return false;
+
+				if (text[pos] == '"' || text[pos] == '\'')
+				{
+					const char quote = text[pos++];
+					while (pos < end && text[pos] != quote)
+						++pos;
+					if (pos == end)
+						return false;
+					++pos;
+				}
+				else
+				{
+					const size_t valueBegin = pos;
+					while (pos < end && !IsSourceWhitespace(text[pos]) &&
+						text[pos] != '/')
+					{
+						++pos;
+					}
+					if (pos == valueBegin)
+						return false;
+				}
+
+				while (pos < end && IsSourceWhitespace(text[pos]))
+					++pos;
+				if (pos < end && text[pos] == '/')
+					return pos + 1 == end;
+			}
+			return true;
+		}
+
 		bool TryDecodeDoubleByteAt(const std::string& text, size_t pos, UInt32& outCode)
 		{
 			return pos + 1 < text.size() && TryDecodeDoubleByte(&text[pos], outCode);
@@ -209,7 +289,10 @@ namespace fonthook
 				tag.name.push_back(ToLowerAsciiChar(text[pos]));
 				++pos;
 			}
-			if (pos == nameBegin)
+			if (pos == nameBegin ||
+				(text[begin] == '<' &&
+					(!IsKnownRichTextTagName(tag.name) ||
+						!HasValidRichTextTagRemainder(text, pos, end))))
 				return tag;
 
 			size_t trim = end;
@@ -665,16 +748,32 @@ namespace fonthook
 			return changed;
 		}
 
-		std::string StripLeadingId(std::string text, std::string& id)
+		bool IsExplicitDictionaryMetadataId(std::string_view tag)
+		{
+			if (tag.rfind("tNVSE ", 0) == 0)
+				return true;
+			if (tag.size() <= 3 || tag.rfind("GID", 0) != 0)
+				return false;
+			return std::all_of(tag.begin() + 3, tag.end(), [](char ch)
+				{
+					return ch >= '0' && ch <= '9';
+				});
+		}
+
+		std::string StripLeadingId(
+			std::string text, std::string& id, bool& explicitMetadata)
 		{
 			id.clear();
-			if (text.empty() || text[0] != '<')
+			explicitMetadata = false;
+			if (text.empty() || text[0] != '<' ||
+				(text.size() > 1 && text[1] == '<'))
 				return text;
 			const size_t end = text.find('>');
 			if (end == std::string::npos)
 				return text;
 
 			std::string tag = text.substr(1, end - 1);
+			explicitMetadata = IsExplicitDictionaryMetadataId(tag);
 			if (tag.rfind("tNVSE ", 0) == 0)
 				tag.erase(0, 6);
 			id = tag;
@@ -845,15 +944,20 @@ namespace fonthook
 			return false;
 		}
 
+		bool ContainsWindows1252ExtendedByte(std::string_view source)
+		{
+			return std::any_of(source.begin(), source.end(), [](char ch)
+				{
+					return static_cast<UInt8>(ch) >= 0x80;
+				});
+		}
+
 		bool TryTranslateWindows1252ExactSource(
 			const std::string& source, PreparedTranslationMatch& match, int depth)
 		{
 			match = PreparedTranslationMatch{};
 			if (s_windows1252ExactIndex.empty()
-				|| std::none_of(source.begin(), source.end(), [](char ch)
-					{
-						return static_cast<UInt8>(ch) >= 0x80;
-					}))
+				|| !ContainsWindows1252ExtendedByte(source))
 			{
 				return false;
 			}
@@ -870,10 +974,267 @@ namespace fonthook
 					match.entryIndex = index;
 					match.exact = true;
 					match.found = true;
+					++s_windows1252MatchSerial;
 					return true;
 				}
 			}
 			return false;
+		}
+
+		bool TryTranslateWindows1252WildcardSource(
+			const std::string& source, PreparedTranslationMatch& match, int depth)
+		{
+			match = PreparedTranslationMatch{};
+			if (!g_bEnableDictionaryWildcardTranslation ||
+				s_windows1252WildcardIndex.empty() ||
+				!ContainsWindows1252ExtendedByte(source))
+			{
+				return false;
+			}
+
+			const std::string key = PrepareSourceForWindows1252ExactLookup(source);
+			std::vector<std::string> captures;
+			for (const Windows1252WildcardAlias& alias : s_windows1252WildcardIndex)
+			{
+				if (alias.entryIndex >= s_entries.size() ||
+					key.size() < alias.lengthWithoutBinds)
+				{
+					continue;
+				}
+
+				const DictionaryEntry& entry = s_entries[alias.entryIndex];
+				if (MatchWildcardTokens(alias.tokens, entry.bindCount, key, captures) &&
+					ExpandTarget(entry, captures, match.translated, depth))
+				{
+					match.entryIndex = alias.entryIndex;
+					match.exact = false;
+					match.found = true;
+					++s_windows1252MatchSerial;
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool TryTranslateWindows1252Source(
+			const std::string& source, PreparedTranslationMatch& match, int depth)
+		{
+			if (TryTranslateWindows1252ExactSource(source, match, depth))
+				return true;
+			return TryTranslateWindows1252WildcardSource(source, match, depth);
+		}
+
+		bool IsInlineCountWhitespace(char ch)
+		{
+			return ch == ' ' || ch == '\t';
+		}
+
+		bool IsAsciiCountDigit(char ch)
+		{
+			return ch >= '0' && ch <= '9';
+		}
+
+		bool TrySplitCountDecoratedSource(
+			const std::string& source, size_t& coreBegin, size_t& coreEnd)
+		{
+			coreBegin = 0;
+			coreEnd = 0;
+
+			size_t visibleBegin = 0;
+			while (visibleBegin < source.size() &&
+				IsInlineCountWhitespace(source[visibleBegin]))
+			{
+				++visibleBegin;
+			}
+			size_t visibleEnd = source.size();
+			while (visibleEnd > visibleBegin &&
+				IsInlineCountWhitespace(source[visibleEnd - 1]))
+			{
+				--visibleEnd;
+			}
+			if (visibleBegin == visibleEnd)
+				return false;
+
+			// FalloutNV.exe carries both "%s (%d)" and "(%d) %s" display
+			// formats. Accept only those bounded decimal-count decorations.
+			if (source[visibleEnd - 1] == ')')
+			{
+				size_t digitsBegin = visibleEnd - 1;
+				while (digitsBegin > visibleBegin &&
+					IsAsciiCountDigit(source[digitsBegin - 1]))
+				{
+					--digitsBegin;
+				}
+				if (digitsBegin < visibleEnd - 1 &&
+					digitsBegin > visibleBegin &&
+					source[digitsBegin - 1] == '(')
+				{
+					const size_t openParen = digitsBegin - 1;
+					size_t whitespaceBegin = openParen;
+					while (whitespaceBegin > visibleBegin &&
+						IsInlineCountWhitespace(source[whitespaceBegin - 1]))
+					{
+						--whitespaceBegin;
+					}
+					if (whitespaceBegin < openParen && whitespaceBegin > visibleBegin)
+					{
+						coreBegin = visibleBegin;
+						coreEnd = whitespaceBegin;
+						return true;
+					}
+				}
+			}
+
+			if (source[visibleBegin] != '(')
+				return false;
+			size_t pos = visibleBegin + 1;
+			const size_t digitsBegin = pos;
+			while (pos < visibleEnd && IsAsciiCountDigit(source[pos]))
+				++pos;
+			if (pos == digitsBegin || pos >= visibleEnd || source[pos] != ')')
+				return false;
+			++pos;
+			const size_t whitespaceBegin = pos;
+			while (pos < visibleEnd && IsInlineCountWhitespace(source[pos]))
+				++pos;
+			if (pos == whitespaceBegin || pos == visibleEnd)
+				return false;
+
+			coreBegin = pos;
+			coreEnd = visibleEnd;
+			return true;
+		}
+
+		bool TryTranslateWindows1252CountDecoratedSource(
+			const std::string& source, PreparedTranslationMatch& match, int depth)
+		{
+			size_t coreBegin = 0;
+			size_t coreEnd = 0;
+			if (!TrySplitCountDecoratedSource(source, coreBegin, coreEnd) ||
+				!TryTranslateWindows1252Source(
+					source.substr(coreBegin, coreEnd - coreBegin), match, depth))
+			{
+				return false;
+			}
+
+			std::string translated;
+			translated.reserve(
+				coreBegin + match.translated.size() + source.size() - coreEnd);
+			translated.append(source, 0, coreBegin);
+			translated += match.translated;
+			translated.append(source, coreEnd, std::string::npos);
+			match.translated = std::move(translated);
+			return true;
+		}
+
+		bool TryGetWholeVisibleWrapper(
+			const std::string& source, size_t& coreBegin, size_t& coreEnd)
+		{
+			coreBegin = 0;
+			coreEnd = 0;
+			size_t begin = 0;
+			while (begin < source.size() && IsSourceWhitespace(source[begin]))
+				++begin;
+			size_t end = source.size();
+			while (end > begin && IsSourceWhitespace(source[end - 1]))
+				--end;
+			if (end - begin < 3)
+				return false;
+
+			const char open = source[begin];
+			const char close = open == '<' ? '>' : (open == '[' ? ']' : 0);
+			if (!close || source[end - 1] != close)
+				return false;
+
+			size_t nesting = 0;
+			for (size_t i = begin; i < end; ++i)
+			{
+				if (source[i] == open)
+				{
+					++nesting;
+				}
+				else if (source[i] == close)
+				{
+					if (nesting == 0)
+						return false;
+					--nesting;
+					if (nesting == 0 && i + 1 != end)
+						return false;
+				}
+			}
+			if (nesting != 0)
+				return false;
+
+			coreBegin = begin + 1;
+			coreEnd = end - 1;
+			return coreBegin < coreEnd;
+		}
+
+		bool TryTranslateTrimmedComponent(
+			const std::string& source, std::string& translated, int depth)
+		{
+			size_t begin = 0;
+			while (begin < source.size() && IsSourceWhitespace(source[begin]))
+				++begin;
+			size_t end = source.size();
+			while (end > begin && IsSourceWhitespace(source[end - 1]))
+				--end;
+			if (begin == end || depth >= 4 ||
+				!TranslateInternal(source.substr(begin, end - begin).c_str(),
+					translated, depth + 1))
+			{
+				return false;
+			}
+
+			translated = source.substr(0, begin) + translated + source.substr(end);
+			return true;
+		}
+
+		bool TryTranslateVisibleWrapper(
+			const std::string& source, std::string& translated, int depth)
+		{
+			if (depth >= 4 || source.size() > kWindows1252StructuredMaxBytes)
+				return false;
+			size_t coreBegin = 0;
+			size_t coreEnd = 0;
+			if (!TryGetWholeVisibleWrapper(source, coreBegin, coreEnd))
+				return false;
+
+			const std::string core = source.substr(coreBegin, coreEnd - coreBegin);
+			std::string translatedCore;
+			if (!TryTranslateTrimmedComponent(core, translatedCore, depth))
+			{
+				std::string rebuilt;
+				bool changed = false;
+				size_t cursor = 0;
+				while (cursor <= core.size())
+				{
+					const size_t colon = core.find(':', cursor);
+					const size_t partEnd = colon == std::string::npos ? core.size() : colon;
+					const std::string part = core.substr(cursor, partEnd - cursor);
+					std::string translatedPart;
+					if (TryTranslateTrimmedComponent(part, translatedPart, depth))
+					{
+						rebuilt += translatedPart;
+						changed = true;
+					}
+					else
+					{
+						rebuilt += part;
+					}
+					if (colon == std::string::npos)
+						break;
+					rebuilt.push_back(':');
+					cursor = colon + 1;
+				}
+				if (!changed)
+					return false;
+				translatedCore = std::move(rebuilt);
+			}
+
+			translated = source.substr(0, coreBegin) + translatedCore +
+				source.substr(coreEnd);
+			return translated != source;
 		}
 
 		struct FormattedLine
@@ -1061,16 +1422,23 @@ namespace fonthook
 					continue;
 				}
 
-				const std::string key = PrepareSourceForLookup(line.text);
 				PreparedTranslationMatch match;
-				if (!key.empty() && TryTranslateExactKey(key, match, depth))
+				const bool windows1252Match =
+					TryTranslateWindows1252ExactSource(line.text, match, depth);
+				const std::string key = windows1252Match
+					? std::string{}
+					: PrepareSourceForLookup(line.text);
+				if (windows1252Match ||
+					(!key.empty() && TryTranslateExactKey(key, match, depth)))
 				{
 					result += match.translated;
 					changed = true;
 
 					if (g_bEnableDictionaryTranslationLog)
 					{
-						gLog.FormattedMessage("tnvse_dictionary: before-linebreak exact hit:");
+						gLog.FormattedMessage(
+							"tnvse_dictionary: before-linebreak %sexact hit:",
+							windows1252Match ? "Windows-1252 raw " : "");
 						gLog.FormattedMessage("tnvse_dictionary:   line=\"%s\"", line.text.c_str());
 						gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 							s_entries[match.entryIndex].key.c_str(), match.translated.c_str());
@@ -1116,16 +1484,27 @@ namespace fonthook
 			if (!HasAlphabet(candidateText))
 				return false;
 
-			MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(candidateText);
-			std::string key = mappedSource.key;
-			if (key.empty() || key == fullKey)
-				return false;
-			if (!searchedKeys.insert(key).second)
-				return false;
-
 			PreparedTranslationMatch match;
-			if (!TryTranslatePreparedKey(key, match, depth, &mappedSource))
-				return false;
+			const bool windows1252Match =
+				TryTranslateWindows1252Source(candidateText, match, depth);
+			std::string key;
+			if (windows1252Match)
+			{
+				key = PrepareSourceForWindows1252ExactLookup(candidateText);
+				key.insert(key.begin(), '\x1E');
+			}
+			else
+			{
+				MappedPreparedSource mappedSource =
+					PrepareSourceForLookupMapped(candidateText);
+				key = mappedSource.key;
+				if (key.empty() || key == fullKey ||
+					!searchedKeys.insert(key).second ||
+					!TryTranslatePreparedKey(key, match, depth, &mappedSource))
+				{
+					return false;
+				}
+			}
 
 			result.side = side;
 			result.candidateText = std::move(candidateText);
@@ -1137,7 +1516,8 @@ namespace fonthook
 
 			if (g_bEnableDictionaryTranslationLog)
 			{
-				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy hit[%s]:", result.side.c_str());
+				gLog.FormattedMessage("tnvse_dictionary: shrink fuzzy %shit[%s]:",
+					windows1252Match ? "Windows-1252 raw " : "", result.side.c_str());
 				gLog.FormattedMessage("tnvse_dictionary:   candidate=\"%s\"", result.candidateText.c_str());
 				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 					s_entries[result.entryIndex].key.c_str(), result.translated.c_str());
@@ -1261,6 +1641,25 @@ namespace fonthook
 	}
 
 	// ---- main translation engine ----
+	bool TryTranslateWindows1252Text(
+		const std::string& source, std::string& translated, int depth)
+	{
+		translated.clear();
+		if (source.empty() || depth >= 4 || !s_dictionaryLoaded ||
+			!HasAlphabet(source))
+		{
+			return false;
+		}
+
+		PreparedTranslationMatch match;
+		if (!TryTranslateWindows1252Source(source, match, depth) &&
+			!TryTranslateWindows1252CountDecoratedSource(source, match, depth))
+		{
+			return false;
+		}
+		translated = std::move(match.translated);
+		return true;
+	}
 
 	bool TryTranslateExactText(const std::string& source, std::string& translated, int depth)
 	{
@@ -1294,6 +1693,36 @@ namespace fonthook
 
 		std::string raw(source);
 		PreResolveGameVariables(raw);
+		const std::string originalRaw = raw;
+		const std::string_view cacheKey(originalRaw);
+
+		const auto tryWindows1252Direct = [&](const std::string& candidate)
+			{
+				PreparedTranslationMatch match;
+				const bool direct =
+					TryTranslateWindows1252Source(candidate, match, depth);
+				const bool countDecorated = !direct &&
+					TryTranslateWindows1252CountDecoratedSource(
+						candidate, match, depth);
+				if (!direct && !countDecorated)
+					return false;
+
+				translated = match.translated;
+				if (g_bEnableDictionaryTranslationLog)
+				{
+					const char* method = countDecorated
+						? "count-decorated"
+						: (match.exact ? "exact" : "wildcard");
+					gLog.FormattedMessage(
+						"tnvse_dictionary: TranslateInternal Windows-1252 raw %s match:",
+						method);
+					gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+					gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+						s_entries[match.entryIndex].key.c_str(), translated.c_str());
+				}
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			};
 
 		// Cache by the original text because wildcard captures preserve source casing.
 		const std::string_view cacheLookup(raw);
@@ -1305,11 +1734,10 @@ namespace fonthook
 		}
 		if (s_negativeCache.find(cacheLookup) != s_negativeCache.end())
 			return false;
-		const std::string originalRaw = raw;
-		const std::string_view cacheKey(originalRaw);
 
 		std::string id;
-		std::string withoutId = StripLeadingId(raw, id);
+		bool explicitMetadataId = false;
+		std::string withoutId = StripLeadingId(raw, id, explicitMetadataId);
 		if (!id.empty())
 		{
 			auto idIt = s_idIndex.find(id);
@@ -1321,25 +1749,12 @@ namespace fonthook
 					return true;
 				}
 			}
-			raw = withoutId;
+			if (explicitMetadataId)
+				raw = withoutId;
 		}
 
-		PreparedTranslationMatch windows1252Match;
-		if (TryTranslateWindows1252ExactSource(raw, windows1252Match, depth))
-		{
-			translated = windows1252Match.translated;
-			if (g_bEnableDictionaryTranslationLog)
-			{
-				gLog.FormattedMessage(
-					"tnvse_dictionary: TranslateInternal Windows-1252 raw exact match:");
-				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
-				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
-					s_entries[windows1252Match.entryIndex].key.c_str(),
-					translated.c_str());
-			}
-			StorePositiveCache(cacheKey, translated);
+		if (tryWindows1252Direct(raw))
 			return true;
-		}
 
 		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);
 		std::string key = mappedSource.key;
@@ -1362,11 +1777,50 @@ namespace fonthook
 			return true;
 		}
 
+		if (TryTranslateVisibleWrapper(raw, translated, depth))
+		{
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_dictionary: TranslateInternal visible-wrapper match:");
+				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+				gLog.FormattedMessage("tnvse_dictionary:   result=\"%s\"",
+					translated.c_str());
+			}
+			StorePositiveCache(cacheKey, translated);
+			return true;
+		}
+
 		constexpr size_t kLargeMultilineDocumentBytes = 4096;
 		const bool largeMultilineDocument = depth == 0
 			&& raw.size() >= kLargeMultilineDocumentBytes
 			&& (raw.find('\n') != std::string::npos
 				|| raw.find('\r') != std::string::npos);
+		const bool hasWindows1252CandidateByte =
+			ContainsWindows1252ExtendedByte(raw);
+		const bool hasWindows1252Aliases = !s_windows1252ExactIndex.empty() ||
+			!s_windows1252WildcardIndex.empty();
+		const auto tryWindows1252Backed = [&](const char* method, auto&& attempt)
+			{
+				if (!sourceContainsDbcs || !hasWindows1252CandidateByte ||
+					!hasWindows1252Aliases)
+					return false;
+				const UInt64 serialBefore = s_windows1252MatchSerial;
+				std::string candidate;
+				if (!attempt(candidate) ||
+					s_windows1252MatchSerial == serialBefore)
+				{
+					return false;
+				}
+				translated = std::move(candidate);
+				if (g_bEnableDictionaryTranslationLog)
+				{
+					gLog.FormattedMessage(
+						"tnvse_dictionary: Windows-1252-backed structured match method=%s",
+						method);
+				}
+				return true;
+			};
 		if (largeMultilineDocument)
 		{
 			// Notes and terminal documents are complete prose blocks, not one UI
@@ -1374,9 +1828,17 @@ namespace fonthook
 			// have super-linear worst cases and can monopolize the game's UI thread.
 			// Preserve useful translation semantics by accepting the full exact/ID
 			// matches above and exact per-line matches here, then cache the result.
-			if (!sourceContainsDbcs
-				&& g_bEnableDictionaryBeforeLinebreakTranslation
-				&& TryTranslateBeforeLinebreakText(raw, translated, depth))
+			const bool beforeLinebreakMatch =
+				g_bEnableDictionaryBeforeLinebreakTranslation &&
+				((!sourceContainsDbcs &&
+					TryTranslateBeforeLinebreakText(raw, translated, depth)) ||
+					tryWindows1252Backed("large-before-linebreak",
+						[&](std::string& candidate)
+						{
+							return TryTranslateBeforeLinebreakText(
+								raw, candidate, depth);
+						}));
+			if (beforeLinebreakMatch)
 			{
 				StorePositiveCache(cacheKey, translated);
 				return true;
@@ -1389,6 +1851,114 @@ namespace fonthook
 			}
 			StoreNegativeCache(cacheKey);
 			return false;
+		}
+
+		if (sourceContainsDbcs && hasWindows1252CandidateByte &&
+			raw.size() <= kWindows1252StructuredMaxBytes)
+		{
+			if (g_bEnableMuxQuestPromptTranslation &&
+				tryWindows1252Backed("mux-quest",
+					[&](std::string& candidate)
+					{
+						return TryTranslateMuxQuestPrompt(raw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryPerkDescriptionTranslation &&
+				tryWindows1252Backed("perk-description",
+					[&](std::string& candidate)
+					{
+						return TryTranslatePerkDescription(raw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryItemEffectTranslation &&
+				tryWindows1252Backed("item-effect",
+					[&](std::string& candidate)
+					{
+						return TryTranslateItemEffectList(raw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryMultiplierTextTranslation &&
+				tryWindows1252Backed("multiplier",
+					[&](std::string& candidate)
+					{
+						return TryTranslateMultiplierText(raw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryWildcardTranslation &&
+				tryWindows1252Backed("wildcard-capture",
+					[&](std::string& candidate)
+					{
+						PreparedTranslationMatch match;
+						if (!TryTranslateWildcardKey(
+							key, match, depth, &mappedSource))
+						{
+							return false;
+						}
+						candidate = std::move(match.translated);
+						return true;
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryTrimBypassFuzzyTranslation &&
+				tryWindows1252Backed("trim-bypass-fuzzy",
+					[&](std::string& candidate)
+					{
+						return TryTranslateFuzzyText(
+							originalRaw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryRegexTranslation &&
+				tryWindows1252Backed("regex-capture",
+					[&](std::string& candidate)
+					{
+						return TryTranslateRegexText(
+							raw, candidate, sourceIsMixed);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+			if (g_bEnableDictionaryShrinkFuzzyTranslation &&
+				tryWindows1252Backed("shrink-fuzzy",
+					[&](std::string& candidate)
+					{
+						return TryTranslateShrinkText(raw, candidate, depth);
+					}))
+			{
+				StorePositiveCache(cacheKey, translated);
+				return true;
+			}
+		}
+
+		// Per-line exact lookup is linear and remains safe for longer documents;
+		// the wildcard/regex/fuzzy probes above stay bounded to short UI text.
+		if (sourceContainsDbcs && hasWindows1252CandidateByte &&
+			g_bEnableDictionaryBeforeLinebreakTranslation &&
+			tryWindows1252Backed("before-linebreak",
+				[&](std::string& candidate)
+				{
+					return TryTranslateBeforeLinebreakText(raw, candidate, depth);
+				}))
+		{
+			StorePositiveCache(cacheKey, translated);
+			return true;
 		}
 
 		if (!sourceContainsDbcs && g_bEnableMuxQuestPromptTranslation && TryTranslateMuxQuestPrompt(raw, translated, depth))
@@ -1475,7 +2045,8 @@ namespace fonthook
 	bool TranslateRichText(const char* source, std::string& translated)
 	{
 		translated.clear();
-		if (!g_bEnableDictionaryTranslation || !source || !*source)
+		if (!g_bEnableDictionaryTranslation || !source || !*source ||
+			IsDictionaryTranslationSuppressedForCurrentTile())
 			return false;
 
 		const RichTextParts parts = ExtractRichTextParts(source);

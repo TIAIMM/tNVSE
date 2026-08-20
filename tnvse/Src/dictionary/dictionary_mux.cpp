@@ -120,7 +120,8 @@ namespace fonthook
 				return text;
 
 			std::string translated;
-			if (TranslateInternal(text.c_str(), translated, depth + 1))
+			if (TryTranslateWindows1252Text(text, translated, depth + 1) ||
+				TranslateInternal(text.c_str(), translated, depth + 1))
 				return translated;
 			return text;
 		}
