@@ -84,6 +84,7 @@ namespace fonthook
 	// ---- global state (defined in dictionary.cpp) ----
 	extern std::vector<DictionaryEntry> s_entries;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_exactIndex;
+	extern std::unordered_map<std::string, std::vector<size_t>> s_windows1252ExactIndex;
 	extern std::vector<size_t> s_wildcardIndex;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardPrefixIndex;
 	extern std::unordered_map<std::string, std::vector<size_t>> s_wildcardSuffixIndex;
@@ -105,6 +106,8 @@ namespace fonthook
 	bool DirectoryExists(const std::string& path);
 	std::string WideToUtf8(const std::wstring& value);
 	std::wstring Utf8ToWide(const std::string& str);
+	bool TryEncodeWindows1252Exact(const std::wstring& value, std::string& encoded);
+	bool TryResolveWindows1252ExactSource(std::string_view value, std::string& encoded);
 	bool ReadWholeFile(const std::string& path, std::string& out);
 	std::vector<std::string> FindFiles(const std::string& directory, const char* pattern);
 
@@ -133,6 +136,8 @@ namespace fonthook
 	void ConvertFormatSpecifiersToBind(std::string& str);
 	std::string PrepareSourceForRegistration(std::string text);
 	std::string PrepareSourceForLookup(std::string text);
+	std::string PrepareSourceForWindows1252ExactRegistration(std::string text);
+	std::string PrepareSourceForWindows1252ExactLookup(std::string text);
 	std::string PrepareTarget(std::string text);
 
 	// ---- entry management (dictionary_entry.cpp) ----

@@ -598,6 +598,33 @@ namespace fonthook
 		return text;
 	}
 
+	std::string PrepareSourceForWindows1252ExactRegistration(std::string text)
+	{
+		NormalizeSourceMarkup(text);
+		NormalizeSourceWhitespace(text);
+		RemoveControlChars(text);
+		ConvertGameVariablesToBind(text);
+		ConvertFormatSpecifiersToBind(text);
+		NormalizeEscapedSourceWhitespace(text);
+		ReplaceAll(text, "%%", "%");
+		RemoveAlignmentTag(text);
+		ReplaceAll(text, "[QUOTE]", "\"");
+		NormalizeSourceWhitespace(text);
+		ToLowerAscii(text);
+		return text;
+	}
+
+	std::string PrepareSourceForWindows1252ExactLookup(std::string text)
+	{
+		NormalizeSourceMarkup(text);
+		NormalizeEscapedSourceWhitespace(text);
+		NormalizeSourceWhitespace(text);
+		RemoveControlChars(text);
+		NormalizeSourceWhitespace(text);
+		ToLowerAscii(text);
+		return text;
+	}
+
 	std::string PrepareTarget(std::string text)
 	{
 		StripUtf8Bom(text);

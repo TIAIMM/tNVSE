@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 
 namespace fonthook
@@ -17,6 +18,34 @@ namespace fonthook
 
 	namespace implementation::dictionary_utils
 	{
+		bool TryDecodeUtf8Exact(std::string_view value, std::wstring& decoded)
+		{
+			decoded.clear();
+			if (value.empty()
+				|| value.size() > static_cast<size_t>(std::numeric_limits<int>::max())
+				|| value.find('\0') != std::string_view::npos)
+			{
+				return false;
+			}
+
+			const int required = MultiByteToWideChar(
+				CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+				static_cast<int>(value.size()), nullptr, 0);
+			if (required <= 0)
+				return false;
+
+			decoded.assign(static_cast<size_t>(required), L'\0');
+			const int written = MultiByteToWideChar(
+				CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+				static_cast<int>(value.size()), decoded.data(), required);
+			if (written != required)
+			{
+				decoded.clear();
+				return false;
+			}
+			return true;
+		}
+
 		std::string WideToMultiByte(const std::wstring& value, UINT codePage)
 		{
 			if (value.empty())
@@ -117,6 +146,91 @@ namespace fonthook
 		std::wstring result(size - 1, L'\0');
 		MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], size);
 		return result;
+	}
+
+	bool TryEncodeWindows1252Exact(const std::wstring& value, std::string& encoded)
+	{
+		encoded.clear();
+		if (value.empty()
+			|| value.size() > static_cast<size_t>(std::numeric_limits<int>::max())
+			|| value.find(L'\0') != std::wstring::npos)
+		{
+			return false;
+		}
+		if (std::none_of(value.begin(), value.end(), [](wchar_t ch)
+			{
+				return ch > 0x7F;
+			}))
+		{
+			return false;
+		}
+
+		BOOL usedDefault = FALSE;
+		const int required = WideCharToMultiByte(
+			static_cast<UINT>(kWindows1252CodePage), WC_NO_BEST_FIT_CHARS,
+			value.data(), static_cast<int>(value.size()), nullptr, 0,
+			nullptr, &usedDefault);
+		if (required <= 0 || usedDefault)
+			return false;
+
+		encoded.assign(static_cast<size_t>(required), '\0');
+		usedDefault = FALSE;
+		const int written = WideCharToMultiByte(
+			static_cast<UINT>(kWindows1252CodePage), WC_NO_BEST_FIT_CHARS,
+			value.data(), static_cast<int>(value.size()), encoded.data(), required,
+			nullptr, &usedDefault);
+		if (written != required || usedDefault)
+		{
+			encoded.clear();
+			return false;
+		}
+		return true;
+	}
+
+	bool TryResolveWindows1252ExactSource(std::string_view value, std::string& encoded)
+	{
+		encoded.clear();
+		if (value.size() >= 3
+			&& static_cast<UInt8>(value[0]) == 0xEF
+			&& static_cast<UInt8>(value[1]) == 0xBB
+			&& static_cast<UInt8>(value[2]) == 0xBF)
+		{
+			value.remove_prefix(3);
+		}
+		if (value.empty()
+			|| value.find('\0') != std::string_view::npos
+			|| std::none_of(value.begin(), value.end(), [](char ch)
+				{
+					return static_cast<UInt8>(ch) >= 0x80;
+				}))
+		{
+			return false;
+		}
+
+		std::wstring decoded;
+		if (implementation::dictionary_utils::TryDecodeUtf8Exact(value, decoded))
+			return TryEncodeWindows1252Exact(decoded, encoded);
+
+		// A non-UTF-8 TXT source is treated as already carrying the original
+		// Windows-1252 bytes. Reject the five undefined byte values so arbitrary
+		// binary data cannot enter the exact index.
+		for (char ch : value)
+		{
+			switch (static_cast<UInt8>(ch))
+			{
+			case 0x81:
+			case 0x8D:
+			case 0x8F:
+			case 0x90:
+			case 0x9D:
+				return false;
+			default:
+				break;
+			}
+		}
+
+		encoded.assign(value.data(), value.size());
+		return true;
 	}
 
 	// ---- basic string utilities ----

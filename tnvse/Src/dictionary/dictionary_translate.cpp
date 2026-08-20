@@ -845,6 +845,37 @@ namespace fonthook
 			return false;
 		}
 
+		bool TryTranslateWindows1252ExactSource(
+			const std::string& source, PreparedTranslationMatch& match, int depth)
+		{
+			match = PreparedTranslationMatch{};
+			if (s_windows1252ExactIndex.empty()
+				|| std::none_of(source.begin(), source.end(), [](char ch)
+					{
+						return static_cast<UInt8>(ch) >= 0x80;
+					}))
+			{
+				return false;
+			}
+
+			const std::string key = PrepareSourceForWindows1252ExactLookup(source);
+			const auto exactIt = s_windows1252ExactIndex.find(key);
+			if (exactIt == s_windows1252ExactIndex.end())
+				return false;
+
+			for (size_t index : exactIt->second)
+			{
+				if (ExpandTarget(s_entries[index], {}, match.translated, depth))
+				{
+					match.entryIndex = index;
+					match.exact = true;
+					match.found = true;
+					return true;
+				}
+			}
+			return false;
+		}
+
 		struct FormattedLine
 		{
 			std::string leadingWhitespace;
@@ -1237,11 +1268,16 @@ namespace fonthook
 		if (source.empty() || depth >= 4 || !s_dictionaryLoaded || !HasAlphabet(source))
 			return false;
 
+		PreparedTranslationMatch match;
+		if (TryTranslateWindows1252ExactSource(source, match, depth))
+		{
+			translated = std::move(match.translated);
+			return true;
+		}
+
 		const MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(source);
 		if (mappedSource.key.empty())
 			return false;
-
-		PreparedTranslationMatch match;
 		if (!TryTranslateExactKey(mappedSource.key, match, depth))
 			return false;
 
@@ -1286,6 +1322,23 @@ namespace fonthook
 				}
 			}
 			raw = withoutId;
+		}
+
+		PreparedTranslationMatch windows1252Match;
+		if (TryTranslateWindows1252ExactSource(raw, windows1252Match, depth))
+		{
+			translated = windows1252Match.translated;
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_dictionary: TranslateInternal Windows-1252 raw exact match:");
+				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+					s_entries[windows1252Match.entryIndex].key.c_str(),
+					translated.c_str());
+			}
+			StorePositiveCache(cacheKey, translated);
+			return true;
 		}
 
 		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);

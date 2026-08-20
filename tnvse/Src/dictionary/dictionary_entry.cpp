@@ -12,6 +12,36 @@ namespace fonthook
 
 	namespace implementation::dictionary_entry
 	{
+		bool ContainsWindows1252ExtendedByte(std::string_view text)
+		{
+			return std::any_of(text.begin(), text.end(), [](char ch)
+				{
+					return static_cast<UInt8>(ch) >= 0x80;
+				});
+		}
+
+		void RegisterWindows1252ExactAlias(std::string source, size_t entryIndex)
+		{
+			if (entryIndex >= s_entries.size()
+				|| !s_entries[entryIndex].isExact
+				|| !ContainsWindows1252ExtendedByte(source))
+			{
+				return;
+			}
+
+			std::string key =
+				PrepareSourceForWindows1252ExactRegistration(std::move(source));
+			if (key.empty()
+				|| key == s_entries[entryIndex].key
+				|| !HasAlphabet(key)
+				|| CountToken(key, kBindSymbol) != 0)
+			{
+				return;
+			}
+
+			s_windows1252ExactIndex[std::move(key)].push_back(entryIndex);
+		}
+
 		void RemoveBraceComments(std::string& text)
 		{
 			std::string result;
@@ -237,9 +267,15 @@ namespace fonthook
 
 	bool RegisterText(std::string source, std::string target, int priority, const std::string& id)
 	{
+		std::string windows1252Source;
+		TryResolveWindows1252ExactSource(source, windows1252Source);
+		const size_t entryIndex = s_entries.size();
 		source = PrepareSourceForRegistration(std::move(source));
 		target = PrepareTarget(std::move(target));
-		return AddEntry(source, target, priority, id);
+		const bool registered = AddEntry(source, target, priority, id);
+		if (registered)
+			RegisterWindows1252ExactAlias(std::move(windows1252Source), entryIndex);
+		return registered;
 	}
 
 	// ---- XML helpers ----
@@ -305,11 +341,16 @@ namespace fonthook
 
 		std::wstring sourceWide = Utf8ToWide(sourceText);
 		std::wstring targetWide = Utf8ToWide(targetText);
+		std::string windows1252Source;
+		TryEncodeWindows1252Exact(sourceWide, windows1252Source);
 		Replace1252ForXml(sourceWide);
 		std::string cleanSource = WideToUtf8(sourceWide);
 		std::string cleanTarget = WideToUtf8(targetWide);
 
+		const size_t entryIndex = s_entries.size();
 		const bool registered = RegisterText(cleanSource, cleanTarget, priority, id);
+		if (registered)
+			RegisterWindows1252ExactAlias(std::move(windows1252Source), entryIndex);
 
 		if (registered && type != RecordType::Unknown)
 			GenerateAutoEntries(cleanSource, cleanTarget, type, priority);
@@ -360,6 +401,7 @@ namespace fonthook
 	{
 		for (auto& pair : s_exactIndex)
 			SortIndexVector(pair.second);
+		SortIndexMap(s_windows1252ExactIndex);
 
 		SortIndexVector(s_wildcardIndex);
 		SortIndexMap(s_wildcardPrefixIndex);
