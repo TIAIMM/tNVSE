@@ -197,6 +197,7 @@ namespace fonthook
 	PreparedTextSidecarCapture::PreparedTextSidecarCapture(
 		const Font::TextData* data, const Font* font)
 		: m_data(data), m_font(font),
+		m_trace(vectorfont::GetActiveFreeTypeLongTextTrace()),
 		m_previous(s_activePreparedTextSidecarCapture)
 	{
 		s_activePreparedTextSidecarCapture = this;
@@ -235,6 +236,17 @@ namespace fonthook
 		m_preparedText = data->xNewText.c_str();
 		m_lineSeparator = data->cLineSep;
 		m_sidecar = std::move(sidecar);
+		if (m_trace)
+		{
+			m_trace->sidecarPublished = true;
+			m_trace->sidecarRejected = m_sidecar
+				&& m_sidecar->rejectBatch;
+			m_trace->sidecarUnitCount = m_sidecar
+				? static_cast<UInt32>(std::min<size_t>(
+					m_sidecar->units.size(),
+					std::numeric_limits<UInt32>::max()))
+				: 0;
+		}
 	}
 
 	std::shared_ptr<const PreparedDirectTextSidecar>
@@ -243,22 +255,65 @@ namespace fonthook
 		std::shared_ptr<const PreparedDirectTextSidecar> sidecar =
 			std::move(m_sidecar);
 		if (!sidecar)
+		{
+			if (m_trace && m_trace->sidecarReason
+				== vectorfont::PreparedTextSidecarReason::Pending)
+			{
+				m_trace->sidecarReason = vectorfont::
+					PreparedTextSidecarReason::NoSidecarProduced;
+			}
 			return {};
+		}
 
 		const char* preparedText = m_data
 			? m_data->xNewText.c_str() : nullptr;
 		UInt64 layoutIdentity = 0;
-		if (!preparedText || preparedText != m_preparedText
-			|| m_lineSeparator != m_data->cLineSep
-			|| sidecar->textLength
-				!= static_cast<size_t>(m_data->xNewText.sLen)
-			|| !GetFreeTypeLayoutIdentity(m_font, layoutIdentity)
-			|| sidecar->layoutIdentity != layoutIdentity)
+		auto rejectCapture = [&](vectorfont::PreparedTextSidecarReason reason)
 		{
+			if (m_trace)
+				m_trace->sidecarReason = reason;
 			vectorfont::RecordFreeTypePerf(
 				vectorfont::FreeTypePerfCounter::
 					PreparedSidecarCaptureFallback);
-			return {};
+			return std::shared_ptr<const PreparedDirectTextSidecar>();
+		};
+		if (!preparedText || preparedText != m_preparedText)
+		{
+			return rejectCapture(vectorfont::PreparedTextSidecarReason::
+				CapturePreparedPointerChanged);
+		}
+		if (m_lineSeparator != m_data->cLineSep)
+		{
+			return rejectCapture(vectorfont::PreparedTextSidecarReason::
+				CaptureLineSeparatorChanged);
+		}
+		if (sidecar->textLength
+			!= static_cast<size_t>(m_data->xNewText.sLen))
+		{
+			return rejectCapture(vectorfont::PreparedTextSidecarReason::
+				CaptureLengthChanged);
+		}
+		if (!GetFreeTypeLayoutIdentity(m_font, layoutIdentity))
+		{
+			return rejectCapture(vectorfont::PreparedTextSidecarReason::
+				CaptureLayoutIdentityUnavailable);
+		}
+		if (sidecar->layoutIdentity != layoutIdentity)
+		{
+			return rejectCapture(vectorfont::PreparedTextSidecarReason::
+				CaptureLayoutIdentityChanged);
+		}
+		if (m_trace)
+		{
+			m_trace->sidecarCaptured = true;
+			m_trace->sidecarRejected = sidecar->rejectBatch;
+			if (m_trace->sidecarReason
+				== vectorfont::PreparedTextSidecarReason::Pending)
+			{
+				m_trace->sidecarReason = sidecar->rejectBatch
+					? vectorfont::PreparedTextSidecarReason::RejectedBatch
+					: vectorfont::PreparedTextSidecarReason::Produced;
+			}
 		}
 		return sidecar;
 	}
@@ -364,6 +419,47 @@ namespace fonthook
 			|| (value >= 'a' && value <= 'z');
 	}
 
+	static void RecordPreparedSidecarReason(
+		vectorfont::PreparedTextSidecarReason reason,
+		UInt32 byteOffset = std::numeric_limits<UInt32>::max(),
+		UInt32 encodedCode = 0, UInt8 byteLength = 0,
+		UInt8 byteClass = 0,
+		vectorfont::PreparedTextSidecarOffsetDomain offsetDomain =
+			vectorfont::PreparedTextSidecarOffsetDomain::PreparedText)
+	{
+		vectorfont::FreeTypeLongTextTrace* trace =
+			vectorfont::GetActiveFreeTypeLongTextTrace();
+		if (!trace || trace->sidecarReason
+			!= vectorfont::PreparedTextSidecarReason::Pending)
+		{
+			return;
+		}
+		trace->sidecarReason = reason;
+		trace->sidecarFailureByteOffset = byteOffset;
+		trace->sidecarFailureEncodedCode = encodedCode;
+		trace->sidecarFailureByteLength = byteLength;
+		trace->sidecarFailureByteClass = byteClass;
+		trace->sidecarFailureOffsetDomain =
+			byteOffset == std::numeric_limits<UInt32>::max()
+				? vectorfont::PreparedTextSidecarOffsetDomain::None
+				: offsetDomain;
+	}
+
+	static void RecordPreparedSidecarLookupFailure(
+		vectorfont::PreparedTextSidecarReason unavailableReason,
+		vectorfont::PreparedTextSidecarReason invalidReason,
+		vectorfont::SealedDirectGlyphLookup lookup, UInt32 byteOffset,
+		const VectorEncodedGlyph& glyph,
+		vectorfont::PreparedTextSidecarOffsetDomain offsetDomain =
+			vectorfont::PreparedTextSidecarOffsetDomain::LayoutSource)
+	{
+		RecordPreparedSidecarReason(
+			lookup == vectorfont::SealedDirectGlyphLookup::Unavailable
+				? unavailableReason : invalidReason,
+			byteOffset, glyph.encodedCode, glyph.byteLength,
+			static_cast<UInt8>(glyph.byteClass), offsetDomain);
+	}
+
 	static std::shared_ptr<const PreparedDirectTextSidecar>
 		BuildPreparedDirectTextSidecar(
 			FontEx* font, const Font::TextData& data,
@@ -371,26 +467,64 @@ namespace fonthook
 	{
 		const char* text = data.xNewText.c_str();
 		if (!font || !text)
+		{
+			RecordPreparedSidecarReason(
+				vectorfont::PreparedTextSidecarReason::InvalidArguments);
 			return {};
+		}
 		UInt64 layoutIdentity = 0;
 		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
+		{
+			RecordPreparedSidecarReason(vectorfont::
+				PreparedTextSidecarReason::LayoutIdentityUnavailable);
 			return {};
+		}
 		UInt32 previousEnd = 0;
 		for (const DirectTextUnit& unit : units)
 		{
 			const UInt32 end = unit.byteOffset + unit.byteLength;
-			if (!unit.byteLength || unit.byteOffset != previousEnd
-				|| end > textLength)
+			if (!unit.byteLength)
 			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::UnitZeroLength,
+					unit.byteOffset, unit.encodedCode, unit.byteLength,
+					unit.byteClass);
+				return {};
+			}
+			if (unit.byteOffset != previousEnd)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::UnitNonContiguous,
+					unit.byteOffset, unit.encodedCode, unit.byteLength,
+					unit.byteClass);
+				return {};
+			}
+			if (end < unit.byteOffset || end > textLength)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::UnitOutOfRange,
+					unit.byteOffset, unit.encodedCode, unit.byteLength,
+					unit.byteClass);
 				return {};
 			}
 			const UInt8 first = static_cast<UInt8>(
 				text[unit.byteOffset]);
 			if (unit.kind == DirectTextUnitKind::Glyph
-				&& (unit.directSlot
-						== std::numeric_limits<UInt16>::max()
-					|| unit.byteClass >= 2))
+				&& unit.directSlot == std::numeric_limits<UInt16>::max())
 			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::GlyphSlotInvalid,
+					unit.byteOffset, unit.encodedCode, unit.byteLength,
+					unit.byteClass);
+				return {};
+			}
+			if (unit.kind == DirectTextUnitKind::Glyph
+				&& unit.byteClass >= 2)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::GlyphByteClassInvalid,
+					unit.byteOffset, unit.encodedCode, unit.byteLength,
+					unit.byteClass);
 				return {};
 			}
 			if (unit.kind == DirectTextUnitKind::Glyph)
@@ -402,7 +536,13 @@ namespace fonthook
 							text[unit.byteOffset + 1]))
 					: first;
 				if (encoded != unit.encodedCode)
+				{
+					RecordPreparedSidecarReason(vectorfont::
+						PreparedTextSidecarReason::GlyphEncodingMismatch,
+						unit.byteOffset, encoded, unit.byteLength,
+						unit.byteClass);
 					return {};
+				}
 			}
 			else if ((unit.kind == DirectTextUnitKind::LineBreak
 						&& first
@@ -412,17 +552,35 @@ namespace fonthook
 				|| (unit.kind == DirectTextUnitKind::Icon
 					&& first != 1))
 			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::ControlEncodingMismatch,
+					unit.byteOffset, first, unit.byteLength,
+					unit.byteClass);
 				return {};
 			}
 			previousEnd = end;
 		}
 		if (previousEnd != textLength)
+		{
+			RecordPreparedSidecarReason(vectorfont::
+				PreparedTextSidecarReason::IncompleteCoverage,
+				previousEnd);
 			return {};
+		}
 		auto sidecar =
 			std::make_shared<PreparedDirectTextSidecar>();
 		sidecar->layoutIdentity = layoutIdentity;
 		sidecar->textLength = textLength;
 		sidecar->units = std::move(units);
+		vectorfont::FreeTypeLongTextTrace* trace =
+			vectorfont::GetActiveFreeTypeLongTextTrace();
+		if (trace)
+		{
+			trace->sidecarReason =
+				vectorfont::PreparedTextSidecarReason::Produced;
+			trace->sidecarUnitCount = static_cast<UInt32>(std::min<size_t>(
+				sidecar->units.size(), std::numeric_limits<UInt32>::max()));
+		}
 		return sidecar;
 	}
 
@@ -431,13 +589,25 @@ namespace fonthook
 			FontEx* font, const Font::TextData& data)
 	{
 		if (!font)
+		{
+			RecordPreparedSidecarReason(
+				vectorfont::PreparedTextSidecarReason::InvalidArguments);
 			return {};
+		}
 		UInt64 layoutIdentity = 0;
 		if (!GetFreeTypeLayoutIdentity(font, layoutIdentity))
+		{
+			RecordPreparedSidecarReason(vectorfont::
+				PreparedTextSidecarReason::LayoutIdentityUnavailable);
 			return {};
+		}
 		const char* text = data.xNewText.c_str();
 		if (!text)
+		{
+			RecordPreparedSidecarReason(
+				vectorfont::PreparedTextSidecarReason::InvalidArguments);
 			return {};
+		}
 		const size_t textLength = strlen(text);
 		auto sidecar =
 			std::make_shared<PreparedDirectTextSidecar>();
@@ -464,8 +634,19 @@ namespace fonthook
 	{
 		vectorfont::FreeTypePerfScope perf(
 			vectorfont::FreeTypePerfPhase::Layout);
+		vectorfont::FreeTypeLongTextTrace* longTextTrace =
+			vectorfont::GetActiveFreeTypeLongTextTrace();
+		if (longTextTrace && captureSidecar)
+			longTextTrace->sidecarRequested = true;
 		if (!font || !font->pFontData || !source || !data)
+		{
+			if (captureSidecar)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::InvalidArguments);
+			}
 			return {};
+		}
 
 		data->xLineWidths.RemoveAll();
 		std::vector<char>& output = scratch.processed;
@@ -491,6 +672,24 @@ namespace fonthook
 					? vectorfont::AcquireSealedDirectLayoutProfile(
 						*directRuntime)
 					: nullptr;
+		if (captureSidecar)
+		{
+			if (longTextTrace)
+			{
+				longTextTrace->sidecarDirectProfileAcquired =
+					directProfile != nullptr;
+			}
+			if (!directRuntime)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::NoActiveRuntime);
+			}
+			else if (!directProfile)
+			{
+				RecordPreparedSidecarReason(vectorfont::
+					PreparedTextSidecarReason::NoSealedDirectProfile);
+			}
+		}
 		bool directRecordInvalid = false;
 		std::vector<DirectTextUnit> directUnits;
 		if (captureSidecar && directProfile)
@@ -568,6 +767,14 @@ namespace fonthook
 						!= std::numeric_limits<UInt16>::max();
 				if (!directHyphenResolved)
 				{
+					RecordPreparedSidecarLookupFailure(
+						vectorfont::PreparedTextSidecarReason::
+							DirectHyphenUnavailable,
+						vectorfont::PreparedTextSidecarReason::
+							DirectHyphenInvalid,
+						lookup, outputLength, directHyphen,
+						vectorfont::PreparedTextSidecarOffsetDomain::
+							PreparedText);
 					if (lookup
 						== vectorfont::SealedDirectGlyphLookup::Invalid)
 					{
@@ -865,6 +1072,12 @@ namespace fonthook
 					== vectorfont::SealedDirectGlyphLookup::Resolved;
 				if (!decoded)
 				{
+					RecordPreparedSidecarLookupFailure(
+						vectorfont::PreparedTextSidecarReason::
+							DirectGlyphUnavailable,
+						vectorfont::PreparedTextSidecarReason::
+							DirectGlyphInvalid,
+						lookup, sourceOffset, glyph);
 					directProfile.reset();
 					directUnits.clear();
 					if (lookup
@@ -970,6 +1183,13 @@ namespace fonthook
 					GetVectorGlyphRenderAdvance(space), &space);
 				return;
 			}
+			RecordPreparedSidecarLookupFailure(
+				vectorfont::PreparedTextSidecarReason::
+					DirectSpaceUnavailable,
+				vectorfont::PreparedTextSidecarReason::
+					DirectSpaceInvalid,
+				lookup, 0, space,
+				vectorfont::PreparedTextSidecarOffsetDomain::PreparedText);
 			if (lookup
 				== vectorfont::SealedDirectGlyphLookup::Invalid)
 			{

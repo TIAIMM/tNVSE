@@ -37,6 +37,7 @@ namespace fonthook::vectorfont
 		};
 
 		thread_local PerfCounterBatchState s_perfCounterBatch;
+		thread_local FreeTypeLongTextTrace* s_activeLongTextTrace = nullptr;
 
 		enum class GpuTimingCounter : size_t
 		{
@@ -816,6 +817,173 @@ namespace fonthook::vectorfont
 			return result;
 		}
 
+	}
+
+	ScopedFreeTypeLongTextTrace::ScopedFreeTypeLongTextTrace(
+		FreeTypeLongTextTrace* trace) noexcept
+		: m_previous(s_activeLongTextTrace),
+		m_active(trace != m_previous)
+	{
+		if (m_active)
+			s_activeLongTextTrace = trace;
+	}
+
+	ScopedFreeTypeLongTextTrace::~ScopedFreeTypeLongTextTrace() noexcept
+	{
+		if (m_active)
+			s_activeLongTextTrace = m_previous;
+	}
+
+	FreeTypeLongTextTrace* GetActiveFreeTypeLongTextTrace() noexcept
+	{
+		return s_activeLongTextTrace;
+	}
+
+	const char* PreparedTextSidecarReasonName(
+		PreparedTextSidecarReason reason) noexcept
+	{
+		switch (reason)
+		{
+		case PreparedTextSidecarReason::Pending:
+			return "pending";
+		case PreparedTextSidecarReason::Produced:
+			return "produced";
+		case PreparedTextSidecarReason::InvalidArguments:
+			return "invalid-arguments";
+		case PreparedTextSidecarReason::NoActiveRuntime:
+			return "no-active-runtime";
+		case PreparedTextSidecarReason::NoSealedDirectProfile:
+			return "no-sealed-direct-profile";
+		case PreparedTextSidecarReason::DirectHyphenUnavailable:
+			return "direct-hyphen-unavailable";
+		case PreparedTextSidecarReason::DirectHyphenInvalid:
+			return "direct-hyphen-invalid";
+		case PreparedTextSidecarReason::DirectGlyphUnavailable:
+			return "direct-glyph-unavailable";
+		case PreparedTextSidecarReason::DirectGlyphInvalid:
+			return "direct-glyph-invalid";
+		case PreparedTextSidecarReason::DirectSpaceUnavailable:
+			return "direct-space-unavailable";
+		case PreparedTextSidecarReason::DirectSpaceInvalid:
+			return "direct-space-invalid";
+		case PreparedTextSidecarReason::LayoutIdentityUnavailable:
+			return "layout-identity-unavailable";
+		case PreparedTextSidecarReason::UnitZeroLength:
+			return "unit-zero-length";
+		case PreparedTextSidecarReason::UnitNonContiguous:
+			return "unit-noncontiguous";
+		case PreparedTextSidecarReason::UnitOutOfRange:
+			return "unit-out-of-range";
+		case PreparedTextSidecarReason::GlyphSlotInvalid:
+			return "glyph-slot-invalid";
+		case PreparedTextSidecarReason::GlyphByteClassInvalid:
+			return "glyph-byte-class-invalid";
+		case PreparedTextSidecarReason::GlyphEncodingMismatch:
+			return "glyph-encoding-mismatch";
+		case PreparedTextSidecarReason::ControlEncodingMismatch:
+			return "control-encoding-mismatch";
+		case PreparedTextSidecarReason::IncompleteCoverage:
+			return "incomplete-coverage";
+		case PreparedTextSidecarReason::NoSidecarProduced:
+			return "no-sidecar-produced";
+		case PreparedTextSidecarReason::RejectedBatch:
+			return "rejected-batch";
+		case PreparedTextSidecarReason::CapturePreparedPointerChanged:
+			return "capture-prepared-pointer-changed";
+		case PreparedTextSidecarReason::CaptureLineSeparatorChanged:
+			return "capture-line-separator-changed";
+		case PreparedTextSidecarReason::CaptureLengthChanged:
+			return "capture-length-changed";
+		case PreparedTextSidecarReason::CaptureLayoutIdentityUnavailable:
+			return "capture-layout-identity-unavailable";
+		case PreparedTextSidecarReason::CaptureLayoutIdentityChanged:
+			return "capture-layout-identity-changed";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* VectorTextBuildRouteName(VectorTextBuildRoute route) noexcept
+	{
+		switch (route)
+		{
+		case VectorTextBuildRoute::Unknown:
+			return "unknown";
+		case VectorTextBuildRoute::Unavailable:
+			return "unavailable";
+		case VectorTextBuildRoute::SealedDirect:
+			return "sealed-direct";
+		case VectorTextBuildRoute::Generic:
+			return "generic";
+		case VectorTextBuildRoute::SealedToGeneric:
+			return "sealed-to-generic";
+		case VectorTextBuildRoute::SealedToGenericFailed:
+			return "sealed-to-generic-failed";
+		case VectorTextBuildRoute::MeasureOnly:
+			return "measure-only";
+		case VectorTextBuildRoute::Vanilla:
+			return "vanilla";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* VectorTextBuildReasonName(VectorTextBuildReason reason) noexcept
+	{
+		switch (reason)
+		{
+		case VectorTextBuildReason::None:
+			return "none";
+		case VectorTextBuildReason::BuilderUnavailable:
+			return "builder-unavailable";
+		case VectorTextBuildReason::NoActiveRuntime:
+			return "no-active-runtime";
+		case VectorTextBuildReason::WhiteTextureUnavailable:
+			return "white-texture-unavailable";
+		case VectorTextBuildReason::NoSealedDirectProfile:
+			return "no-sealed-direct-profile";
+		case VectorTextBuildReason::PreparedSidecarRejected:
+			return "prepared-sidecar-rejected";
+		case VectorTextBuildReason::PreparedSidecarIgnoredNoProfile:
+			return "prepared-sidecar-ignored-no-profile";
+		case VectorTextBuildReason::DirectGlyphMetricsUnavailable:
+			return "direct-glyph-metrics-unavailable";
+		case VectorTextBuildReason::DirectLookupUnavailable:
+			return "direct-lookup-unavailable";
+		case VectorTextBuildReason::DirectLookupInvalid:
+			return "direct-lookup-invalid";
+		case VectorTextBuildReason::DirectReplayDecodeFailed:
+			return "direct-replay-decode-failed";
+		case VectorTextBuildReason::SealedArtifactFailed:
+			return "sealed-artifact-failed";
+		case VectorTextBuildReason::GenericArtifactFailed:
+			return "generic-artifact-failed";
+		default:
+			return "unknown";
+		}
+	}
+
+	const char* VectorTextBuildOutcomeName(UInt8 outcome) noexcept
+	{
+		switch (static_cast<GlyphAtlasBuildOutcome>(outcome))
+		{
+		case GlyphAtlasBuildOutcome::Created:
+			return "created";
+		case GlyphAtlasBuildOutcome::EmptyInput:
+			return "empty-input";
+		case GlyphAtlasBuildOutcome::NoDrawableShaderQuads:
+			return "no-drawable-shader-quads";
+		case GlyphAtlasBuildOutcome::NoDrawableCpuQuads:
+			return "no-drawable-cpu-quads";
+		case GlyphAtlasBuildOutcome::CpuMaskBuildFailure:
+			return "cpu-mask-build-failure";
+		case GlyphAtlasBuildOutcome::QuadLimit:
+			return "quad-limit";
+		case GlyphAtlasBuildOutcome::AtlasOrShapeFailure:
+			return "atlas-or-shape-failure";
+		default:
+			return "unknown";
+		}
 	}
 
 	void RecordFreeTypeGpuEnvelopeForeignPass()

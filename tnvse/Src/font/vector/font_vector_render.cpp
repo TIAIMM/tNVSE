@@ -387,6 +387,7 @@ namespace fonthook
 	{
 		Font* font = nullptr;
 		vectorfont::RuntimeFont* runtime = nullptr;
+		vectorfont::FreeTypeLongTextTrace* longTextTrace = nullptr;
 		bool prepareObject = false;
 		bool available = false;
 		bool finished = false;
@@ -399,10 +400,71 @@ namespace fonthook
 		std::vector<vectorfont::DirectGlyphCommand> directGlyphs;
 		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
 
+		void RecordBuildReason(vectorfont::VectorTextBuildReason reason,
+			const VectorEncodedGlyph* glyph = nullptr)
+		{
+			if (!longTextTrace)
+				return;
+			const vectorfont::VectorTextBuildReason current =
+				longTextTrace->builderReason;
+			if (current != vectorfont::VectorTextBuildReason::None
+				&& current
+					!= vectorfont::VectorTextBuildReason::NoSealedDirectProfile)
+			{
+				return;
+			}
+			longTextTrace->builderReason = reason;
+			if (glyph)
+			{
+				longTextTrace->builderFailureEncodedCode = glyph->encodedCode;
+				longTextTrace->builderFailureByteLength = glyph->byteLength;
+				longTextTrace->builderFailureByteClass =
+					static_cast<UInt8>(glyph->byteClass);
+			}
+		}
+
+		void MarkGenericRoute()
+		{
+			if (!longTextTrace)
+				return;
+			longTextTrace->builderFinalRoute =
+				longTextTrace->builderInitialRoute
+					== vectorfont::VectorTextBuildRoute::SealedDirect
+					? vectorfont::VectorTextBuildRoute::SealedToGeneric
+					: vectorfont::VectorTextBuildRoute::Generic;
+		}
+
+		void PublishBuildTrace(
+			const vectorfont::GlyphAtlasBuildDiagnostics* diagnostics,
+			bool shapeCreated)
+		{
+			if (!longTextTrace)
+				return;
+			longTextTrace->builderDirectGlyphCount = std::max(
+				longTextTrace->builderDirectGlyphCount,
+				static_cast<UInt32>(std::min<size_t>(directGlyphs.size(),
+					std::numeric_limits<UInt32>::max())));
+			longTextTrace->builderGenericGlyphCount = std::max(
+				longTextTrace->builderGenericGlyphCount,
+				static_cast<UInt32>(std::min<size_t>(glyphs.size(),
+					std::numeric_limits<UInt32>::max())));
+			longTextTrace->builderAtlasOutcome = diagnostics
+				? static_cast<UInt8>(diagnostics->outcome) : 0;
+			longTextTrace->builderShapeCreated = shapeCreated;
+		}
+
 		bool ConvertDirectGlyphsToGeneric()
 		{
 			if (!font)
 				return false;
+			if (longTextTrace)
+			{
+				longTextTrace->builderDirectGlyphCount = std::max(
+					longTextTrace->builderDirectGlyphCount,
+					static_cast<UInt32>(std::min<size_t>(
+						directGlyphs.size(),
+						std::numeric_limits<UInt32>::max())));
+			}
 			glyphs.clear();
 			glyphs.reserve(directGlyphs.size() + 1u);
 			for (const vectorfont::DirectGlyphCommand& command : directGlyphs)
@@ -420,9 +482,25 @@ namespace fonthook
 				VectorEncodedGlyph replayGlyph;
 				if (!DecodeFreeTypeGlyph(font, replay, replayGlyph))
 				{
+					RecordBuildReason(vectorfont::VectorTextBuildReason::
+						DirectReplayDecodeFailed, &replayGlyph);
+					if (longTextTrace)
+					{
+						longTextTrace->builderFailureEncodedCode =
+							command.encodedCode;
+						longTextTrace->builderFailureByteLength =
+							command.byteLength;
+						longTextTrace->builderFailureByteClass =
+							command.byteClass;
+					}
 					sealedBatchInvalid = true;
 					glyphs.clear();
 					sealedProfile.reset();
+					if (longTextTrace)
+					{
+						longTextTrace->builderFinalRoute = vectorfont::
+							VectorTextBuildRoute::SealedToGenericFailed;
+					}
 					return false;
 				}
 				glyphs.push_back({ replayGlyph, command.pen,
@@ -431,6 +509,13 @@ namespace fonthook
 			directGlyphs.clear();
 			sealedProfile.reset();
 			sealedBatchInvalid = false;
+			MarkGenericRoute();
+			if (longTextTrace)
+			{
+				longTextTrace->builderGenericGlyphCount =
+					static_cast<UInt32>(std::min<size_t>(glyphs.size(),
+						std::numeric_limits<UInt32>::max()));
+			}
 			return true;
 		}
 
@@ -444,15 +529,50 @@ namespace fonthook
 				tileColor(apTileColor ? *apTileColor
 					: NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f })
 		{
+			longTextTrace = vectorfont::GetActiveFreeTypeLongTextTrace();
+			if (longTextTrace)
+			{
+				longTextTrace->builderInitialRoute =
+					vectorfont::VectorTextBuildRoute::Unavailable;
+				longTextTrace->builderFinalRoute =
+					vectorfont::VectorTextBuildRoute::Unavailable;
+			}
 			if (!font)
+			{
+				RecordBuildReason(vectorfont::VectorTextBuildReason::
+					BuilderUnavailable);
 				return;
+			}
 			runtime = vectorfont::FindActiveRuntime(font);
-			if (!runtime || !InitializeWhiteTexture())
+			if (!runtime)
+			{
+				RecordBuildReason(vectorfont::VectorTextBuildReason::
+					NoActiveRuntime);
 				return;
+			}
+			if (!InitializeWhiteTexture())
+			{
+				RecordBuildReason(vectorfont::VectorTextBuildReason::
+					WhiteTextureUnavailable);
+				return;
+			}
 			sealedProfile =
 				vectorfont::AcquireSealedDirectFontProfile(
 					*runtime, rasterScale);
 			available = true;
+			if (longTextTrace)
+			{
+				const vectorfont::VectorTextBuildRoute route = sealedProfile
+					? vectorfont::VectorTextBuildRoute::SealedDirect
+					: vectorfont::VectorTextBuildRoute::Generic;
+				longTextTrace->builderInitialRoute = route;
+				longTextTrace->builderFinalRoute = route;
+				if (!sealedProfile)
+				{
+					RecordBuildReason(vectorfont::VectorTextBuildReason::
+						NoSealedDirectProfile);
+				}
+			}
 		}
 	};
 
@@ -527,6 +647,9 @@ namespace fonthook
 					== std::numeric_limits<UInt16>::max()
 				|| static_cast<size_t>(glyph.byteClass) >= 2)
 			{
+				m_impl->RecordBuildReason(vectorfont::
+					VectorTextBuildReason::DirectGlyphMetricsUnavailable,
+					&glyph);
 				vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
 					*m_impl->runtime, m_impl->sealedProfile);
 				if (!m_impl->ConvertDirectGlyphsToGeneric())
@@ -567,6 +690,13 @@ namespace fonthook
 					encodedText, glyph);
 			if (lookup != vectorfont::SealedDirectGlyphLookup::Resolved)
 			{
+				m_impl->RecordBuildReason(
+					lookup == vectorfont::SealedDirectGlyphLookup::Unavailable
+						? vectorfont::VectorTextBuildReason::
+							DirectLookupUnavailable
+						: vectorfont::VectorTextBuildReason::
+							DirectLookupInvalid,
+					&glyph);
 				if (lookup == vectorfont::SealedDirectGlyphLookup::Invalid)
 				{
 					vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
@@ -597,9 +727,19 @@ namespace fonthook
 			return nullptr;
 		m_impl->finished = true;
 		if (!m_impl->font)
+		{
+			m_impl->RecordBuildReason(vectorfont::VectorTextBuildReason::
+				BuilderUnavailable);
+			m_impl->PublishBuildTrace(nullptr, false);
 			return nullptr;
+		}
 		if (!m_impl->available)
-			return CreateEmptyVectorShape(m_impl->font, m_impl->prepareObject);
+		{
+			NiTriShape* unavailableShape = CreateEmptyVectorShape(
+				m_impl->font, m_impl->prepareObject);
+			m_impl->PublishBuildTrace(nullptr, false);
+			return unavailableShape;
+		}
 
 		vectorfont::GlyphAtlasBuildDiagnostics atlasDiagnosticsStorage;
 		vectorfont::GlyphAtlasBuildDiagnostics* diagnostics =
@@ -647,20 +787,36 @@ namespace fonthook
 			&& !m_impl->sealedBatchInvalid
 			&& diagnostics->outcome
 				== vectorfont::GlyphAtlasBuildOutcome::AtlasOrShapeFailure
-			&& m_impl->ConvertDirectGlyphsToGeneric())
+		)
 		{
-			atlasShape = vectorfont::TryCreateGlyphAtlasShape(
-				*m_impl->font, *m_impl->runtime, m_impl->glyphs,
-				m_impl->rasterScale, m_impl->prepareObject,
-				m_impl->tileColor, m_impl->suppressEffects,
-				diagnostics);
+			m_impl->RecordBuildReason(vectorfont::VectorTextBuildReason::
+				SealedArtifactFailed);
+			if (m_impl->ConvertDirectGlyphsToGeneric())
+			{
+				atlasShape = vectorfont::TryCreateGlyphAtlasShape(
+					*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+					m_impl->rasterScale, m_impl->prepareObject,
+					m_impl->tileColor, m_impl->suppressEffects,
+					diagnostics);
+			}
 		}
 		if (atlasShape)
 		{
+			m_impl->PublishBuildTrace(diagnostics, true);
 			return atlasShape;
+		}
+		if (diagnostics && !diagnostics->expectedEmpty)
+		{
+			const bool sealedRoute = m_impl->longTextTrace
+				&& m_impl->longTextTrace->builderFinalRoute
+					== vectorfont::VectorTextBuildRoute::SealedDirect;
+			m_impl->RecordBuildReason(sealedRoute
+				? vectorfont::VectorTextBuildReason::SealedArtifactFailed
+				: vectorfont::VectorTextBuildReason::GenericArtifactFailed);
 		}
 		NiTriShape* emptyShape = CreateEmptyVectorShape(
 			m_impl->font, m_impl->prepareObject);
+		m_impl->PublishBuildTrace(diagnostics, false);
 		if (g_bEnableFreeTypeFontRenderingLog && diagnostics)
 		{
 			const vectorfont::GlyphAtlasBuildDiagnostics&

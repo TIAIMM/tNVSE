@@ -61,6 +61,142 @@ namespace fonthook
 			: glyph.metrics ? glyph.metrics->fTopEdge : 0.0f;
 	}
 
+	namespace vectorfont
+	{
+		enum class PreparedTextSidecarReason : UInt8
+		{
+			Pending = 0,
+			Produced,
+			InvalidArguments,
+			NoActiveRuntime,
+			NoSealedDirectProfile,
+			DirectHyphenUnavailable,
+			DirectHyphenInvalid,
+			DirectGlyphUnavailable,
+			DirectGlyphInvalid,
+			DirectSpaceUnavailable,
+			DirectSpaceInvalid,
+			LayoutIdentityUnavailable,
+			UnitZeroLength,
+			UnitNonContiguous,
+			UnitOutOfRange,
+			GlyphSlotInvalid,
+			GlyphByteClassInvalid,
+			GlyphEncodingMismatch,
+			ControlEncodingMismatch,
+			IncompleteCoverage,
+			NoSidecarProduced,
+			RejectedBatch,
+			CapturePreparedPointerChanged,
+			CaptureLineSeparatorChanged,
+			CaptureLengthChanged,
+			CaptureLayoutIdentityUnavailable,
+			CaptureLayoutIdentityChanged,
+		};
+
+		enum class VectorTextBuildRoute : UInt8
+		{
+			Unknown = 0,
+			Unavailable,
+			SealedDirect,
+			Generic,
+			SealedToGeneric,
+			SealedToGenericFailed,
+			MeasureOnly,
+			Vanilla,
+		};
+
+		enum class PreparedTextSidecarOffsetDomain : UInt8
+		{
+			None = 0,
+			LayoutSource,
+			PreparedText,
+		};
+
+		enum class VectorTextBuildReason : UInt8
+		{
+			None = 0,
+			BuilderUnavailable,
+			NoActiveRuntime,
+			WhiteTextureUnavailable,
+			NoSealedDirectProfile,
+			PreparedSidecarRejected,
+			PreparedSidecarIgnoredNoProfile,
+			DirectGlyphMetricsUnavailable,
+			DirectLookupUnavailable,
+			DirectLookupInvalid,
+			DirectReplayDecodeFailed,
+			SealedArtifactFailed,
+			GenericArtifactFailed,
+		};
+
+		struct FreeTypeLongTextTrace
+		{
+			UInt32 traceId = 0;
+			SInt32 fontId = -1;
+			UInt32 sourceByteCount = 0;
+			UInt32 preparedByteCount = 0;
+			UInt32 preparedCharCount = 0;
+			UInt32 preparedLineCount = 0;
+			PreparedTextSidecarReason sidecarReason =
+				PreparedTextSidecarReason::Pending;
+			UInt32 sidecarFailureByteOffset =
+				std::numeric_limits<UInt32>::max();
+			UInt32 sidecarFailureEncodedCode = 0;
+			UInt32 sidecarUnitCount = 0;
+			UInt8 sidecarFailureByteLength = 0;
+			UInt8 sidecarFailureByteClass = 0;
+			PreparedTextSidecarOffsetDomain sidecarFailureOffsetDomain =
+				PreparedTextSidecarOffsetDomain::None;
+			bool sidecarRequested = false;
+			bool sidecarDirectProfileAcquired = false;
+			bool sidecarPublished = false;
+			bool sidecarCaptured = false;
+			bool sidecarRejected = false;
+			bool sidecarConsumed = false;
+
+			VectorTextBuildRoute builderInitialRoute =
+				VectorTextBuildRoute::Unknown;
+			VectorTextBuildRoute builderFinalRoute =
+				VectorTextBuildRoute::Unknown;
+			VectorTextBuildReason builderReason =
+				VectorTextBuildReason::None;
+			UInt32 builderFailureEncodedCode = 0;
+			UInt32 builderDirectGlyphCount = 0;
+			UInt32 builderGenericGlyphCount = 0;
+			UInt8 builderFailureByteLength = 0;
+			UInt8 builderFailureByteClass = 0;
+			UInt8 builderAtlasOutcome = 0;
+			bool builderShapeCreated = false;
+		};
+
+		class ScopedFreeTypeLongTextTrace final
+		{
+		public:
+			explicit ScopedFreeTypeLongTextTrace(
+				FreeTypeLongTextTrace* apTrace) noexcept;
+			~ScopedFreeTypeLongTextTrace() noexcept;
+
+			ScopedFreeTypeLongTextTrace(
+				const ScopedFreeTypeLongTextTrace&) = delete;
+			ScopedFreeTypeLongTextTrace& operator=(
+				const ScopedFreeTypeLongTextTrace&) = delete;
+
+		private:
+			FreeTypeLongTextTrace* m_previous = nullptr;
+			bool m_active = false;
+		};
+
+		FreeTypeLongTextTrace* GetActiveFreeTypeLongTextTrace() noexcept;
+		const char* PreparedTextSidecarReasonName(
+			PreparedTextSidecarReason aeReason) noexcept;
+		const char* VectorTextBuildRouteName(
+			VectorTextBuildRoute aeRoute) noexcept;
+		const char* VectorTextBuildReasonName(
+			VectorTextBuildReason aeReason) noexcept;
+		const char* VectorTextBuildOutcomeName(UInt8 aeOutcome) noexcept;
+	}
+
 	enum class DirectTextUnitKind : UInt8
 	{
 		Glyph = 0,
@@ -116,6 +252,7 @@ namespace fonthook
 		const char* m_preparedText = nullptr;
 		char m_lineSeparator = 0;
 		std::shared_ptr<const PreparedDirectTextSidecar> m_sidecar;
+		vectorfont::FreeTypeLongTextTrace* m_trace = nullptr;
 		PreparedTextSidecarCapture* m_previous = nullptr;
 	};
 

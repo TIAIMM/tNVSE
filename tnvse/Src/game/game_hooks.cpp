@@ -787,7 +787,7 @@ namespace fonthook
 			}
 			s_coreFontTrampolines = trampolines;
 			gLog.FormattedMessage(
-				"tnvse_font_hook: core entries installed Font::CreateText=00A12880 route=caller-independent-thiscall prepared_sidecar=scoped-capture-no-hash");
+				"tnvse_font_hook: core entries installed Font::CreateText=00A12880 route=caller-independent-thiscall prepared_sidecar=scoped-capture-reason-trace");
 			return true;
 		}
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -19,6 +20,112 @@ namespace fonthook
 	static constexpr UInt32 kInitialRenderAddCharLogCount = 0;
 	static constexpr size_t kLongTextTraceMinimumBytes = 4096;
 	static std::atomic<UInt32> s_longTextTraceSequence = 0;
+
+	struct LongTextGeometryTiming
+	{
+		SInt64 scanTicks = 0;
+		SInt64 finishTicks = 0;
+	};
+
+	static SInt64 ReadLongTextQpc()
+	{
+		return vectorfont::BeginFreeTypePerfSample();
+	}
+
+	static SInt64 StopLongTextQpc(SInt64 start)
+	{
+		const SInt64 end = ReadLongTextQpc();
+		return start > 0 && end >= start ? end - start : 0;
+	}
+
+	static double LongTextTicksToMicroseconds(SInt64 ticks)
+	{
+		static const SInt64 frequency = []()
+		{
+			LARGE_INTEGER value = {};
+			return QueryPerformanceFrequency(&value)
+				? value.QuadPart : 0;
+		}();
+		return ticks > 0 && frequency > 0
+			? static_cast<double>(ticks) * 1000000.0
+				/ static_cast<double>(frequency)
+			: 0.0;
+	}
+
+	static const char* LongTextOffsetDomainName(
+		vectorfont::PreparedTextSidecarOffsetDomain domain)
+	{
+		switch (domain)
+		{
+		case vectorfont::PreparedTextSidecarOffsetDomain::LayoutSource:
+			return "layout-source";
+		case vectorfont::PreparedTextSidecarOffsetDomain::PreparedText:
+			return "prepared-text";
+		default:
+			return "none";
+		}
+	}
+
+	static const char* LongTextByteClassName(UInt8 byteLength, UInt8 byteClass)
+	{
+		if (!byteLength)
+			return "none";
+		return byteClass == static_cast<UInt8>(
+			VectorFontByteClass::DoubleByte) ? "doubleByte" : "singleByte";
+	}
+
+	static void LogLongTextPerformance(
+		const vectorfont::FreeTypeLongTextTrace& trace,
+		SInt64 preprocessTicks, SInt64 layoutTicks,
+		const LongTextGeometryTiming& geometryTiming,
+		SInt64 geometryTicks, SInt64 totalTicks)
+	{
+		const SInt64 measuredWorkTicks = preprocessTicks + layoutTicks
+			+ geometryTicks;
+		gLog.FormattedMessage(
+			"tnvse_freetype_long_text_perf: id=%u font=%d sourceBytes=%u preparedBytes=%u chars=%u lines=%u route=%s routeInitial=%s routeReason=%s sidecar=%u sidecarReason=%s sidecarRequested=%u directProfile=%u sidecarPublished=%u sidecarCaptured=%u sidecarRejected=%u sidecarConsumed=%u sidecarUnits=%u failureOffset=%u failureOffsetDomain=%s failureEncoded=0x%04X failureBytes=%u failureRole=%s builderFailureEncoded=0x%04X builderFailureBytes=%u builderFailureRole=%s directGlyphs=%u genericGlyphs=%u atlasOutcome=%s atlasOutcomeCode=%u shapeCreated=%u preprocessUs=%.3f layoutUs=%.3f geometryScanUs=%.3f finishUs=%.3f geometryUs=%.3f workUs=%.3f wallUs=%.3f",
+			trace.traceId,
+			trace.fontId,
+			trace.sourceByteCount,
+			trace.preparedByteCount,
+			trace.preparedCharCount,
+			trace.preparedLineCount,
+			vectorfont::VectorTextBuildRouteName(trace.builderFinalRoute),
+			vectorfont::VectorTextBuildRouteName(trace.builderInitialRoute),
+			vectorfont::VectorTextBuildReasonName(trace.builderReason),
+			trace.sidecarCaptured && !trace.sidecarRejected ? 1u : 0u,
+			vectorfont::PreparedTextSidecarReasonName(trace.sidecarReason),
+			trace.sidecarRequested ? 1u : 0u,
+			trace.sidecarDirectProfileAcquired ? 1u : 0u,
+			trace.sidecarPublished ? 1u : 0u,
+			trace.sidecarCaptured ? 1u : 0u,
+			trace.sidecarRejected ? 1u : 0u,
+			trace.sidecarConsumed ? 1u : 0u,
+			trace.sidecarUnitCount,
+			trace.sidecarFailureByteOffset,
+			LongTextOffsetDomainName(trace.sidecarFailureOffsetDomain),
+			trace.sidecarFailureEncodedCode,
+			static_cast<UInt32>(trace.sidecarFailureByteLength),
+			LongTextByteClassName(trace.sidecarFailureByteLength,
+				trace.sidecarFailureByteClass),
+			trace.builderFailureEncodedCode,
+			static_cast<UInt32>(trace.builderFailureByteLength),
+			LongTextByteClassName(trace.builderFailureByteLength,
+				trace.builderFailureByteClass),
+			trace.builderDirectGlyphCount,
+			trace.builderGenericGlyphCount,
+			vectorfont::VectorTextBuildOutcomeName(
+				trace.builderAtlasOutcome),
+			static_cast<UInt32>(trace.builderAtlasOutcome),
+			trace.builderShapeCreated ? 1u : 0u,
+			LongTextTicksToMicroseconds(preprocessTicks),
+			LongTextTicksToMicroseconds(layoutTicks),
+			LongTextTicksToMicroseconds(geometryTiming.scanTicks),
+			LongTextTicksToMicroseconds(geometryTiming.finishTicks),
+			LongTextTicksToMicroseconds(geometryTicks),
+			LongTextTicksToMicroseconds(measuredWorkTicks),
+			LongTextTicksToMicroseconds(totalTicks));
+	}
 
 	static float GetFreeTypeLineOffset(FontEx* font, const char* text,
 		float requestedWrapWidth, UInt32 flags, UInt32 startCharIndex)
@@ -293,13 +400,18 @@ namespace fonthook
 		const NiColorA* fontColor,
 		NiTriShape** textShape,
 		NiTriShape** iconShape,
-		float rasterScale)
+		float rasterScale,
+		LongTextGeometryTiming* longTextTiming)
 	{
+		const SInt64 geometryScanStart = longTextTiming
+			? ReadLongTextQpc() : 0;
 		*textShape = nullptr;
 		*iconShape = nullptr;
 		VectorTextBuilder builder(font, true, rasterScale, fontColor);
 		if (!builder.IsAvailable())
 		{
+			if (longTextTiming)
+				longTextTiming->scanTicks = StopLongTextQpc(geometryScanStart);
 			*textShape = CreateEmptyFreeTypeTextShape(font, true);
 			font->ButtonIcons.Clear(1);
 			ThisStdCall<void>(0x7593E0, reinterpret_cast<char*>(&textData));
@@ -394,6 +506,13 @@ namespace fonthook
 
 		if (preparedSidecar && preparedSidecar->rejectBatch)
 		{
+			if (vectorfont::FreeTypeLongTextTrace* trace =
+				vectorfont::GetActiveFreeTypeLongTextTrace())
+			{
+				trace->sidecarRejected = true;
+				trace->builderReason = vectorfont::
+					VectorTextBuildReason::PreparedSidecarRejected;
+			}
 			vectorfont::RecordFreeTypePerf(
 				vectorfont::FreeTypePerfCounter::
 					PreparedSidecarRejectedFallback);
@@ -403,6 +522,18 @@ namespace fonthook
 			directSidecar = builder.UsesSealedDirectProfile()
 				? preparedSidecar
 				: std::shared_ptr<const PreparedDirectTextSidecar>();
+		if (vectorfont::FreeTypeLongTextTrace* trace =
+			vectorfont::GetActiveFreeTypeLongTextTrace())
+		{
+			trace->sidecarConsumed = directSidecar != nullptr;
+			if (preparedSidecar && !directSidecar
+				&& trace->builderReason
+					!= vectorfont::VectorTextBuildReason::PreparedSidecarRejected)
+			{
+				trace->builderReason = vectorfont::VectorTextBuildReason::
+					PreparedSidecarIgnoredNoProfile;
+			}
+		}
 		if (directSidecar)
 		{
 			for (const DirectTextUnit& unit :
@@ -491,7 +622,12 @@ namespace fonthook
 			position.x - lineStartX, trailingWhitespaceCount,
 			trailingWhitespaceWidth, preparedText);
 
+		if (longTextTiming)
+			longTextTiming->scanTicks = StopLongTextQpc(geometryScanStart);
+		const SInt64 finishStart = longTextTiming ? ReadLongTextQpc() : 0;
 		NiTriShape* textObject = builder.Finish();
+		if (longTextTiming)
+			longTextTiming->finishTicks = StopLongTextQpc(finishStart);
 		if (!textObject)
 			textObject = CreateEmptyFreeTypeTextShape(font, true);
 		if (textObject)
@@ -537,6 +673,23 @@ namespace fonthook
 			? s_longTextTraceSequence.fetch_add(
 				1, std::memory_order_relaxed) + 1
 			: 0;
+		std::optional<vectorfont::FreeTypeLongTextTrace> longTextTraceStorage;
+		vectorfont::FreeTypeLongTextTrace* longTextTrace = nullptr;
+		if (traceLongText)
+		{
+			longTextTrace = &longTextTraceStorage.emplace();
+			longTextTrace->traceId = traceId;
+			longTextTrace->fontId = this ? this->iFontNum : -1;
+			longTextTrace->sourceByteCount = static_cast<UInt32>(
+				std::min<size_t>(sourceBytes,
+					std::numeric_limits<UInt32>::max()));
+		}
+		vectorfont::ScopedFreeTypeLongTextTrace longTextTraceScope(
+			longTextTrace);
+		SInt64 traceStartQpc = 0;
+		SInt64 preprocessTicks = 0;
+		SInt64 layoutTicks = 0;
+		LongTextGeometryTiming geometryTiming;
 		const DWORD traceStartTick = traceLongText ? GetTickCount() : 0;
 		if (traceLongText)
 		{
@@ -550,14 +703,26 @@ namespace fonthook
 				g_uiEncoding, g_usingWinEncoding,
 				g_bEnableDictionaryTranslation ? 1u : 0u,
 				g_bMultibyteInput ? 1u : 0u);
+			traceStartQpc = ReadLongTextQpc();
 		}
 		const float rasterScale = GetCanonicalFreeTypeRasterScale();
 		const bool freeTypeActive = IsFreeTypeFontActive(this);
 		if (!g_bEnableMultibyteFontHook && !freeTypeActive)
 		{
+			const SInt64 vanillaStart = traceLongText ? ReadLongTextQpc() : 0;
 			CallOriginalFontCreateText(this, axTextString, aiWidth,
 				aiHeight, aiLineStart, aiLineEnd, aiFlags, aiLineBreakChar,
 				axFontColor, apTextShape, apIconShape);
+			if (traceLongText)
+			{
+				longTextTrace->builderInitialRoute =
+					vectorfont::VectorTextBuildRoute::Vanilla;
+				longTextTrace->builderFinalRoute =
+					vectorfont::VectorTextBuildRoute::Vanilla;
+				const SInt64 vanillaTicks = StopLongTextQpc(vanillaStart);
+				LogLongTextPerformance(*longTextTrace, 0, 0, geometryTiming,
+					vanillaTicks, StopLongTextQpc(traceStartQpc));
+			}
 			return;
 		}
 
@@ -582,6 +747,8 @@ namespace fonthook
 					"tnvse_freetype_long_text: id=%u stage=preprocess-begin elapsedMs=%u",
 					traceId, GetTickCount() - traceStartTick);
 			}
+			const SInt64 preprocessStart = traceLongText
+				? ReadLongTextQpc() : 0;
 			const char* pStr = axTextString->pString;
 			std::string sConvertedStr;
 			if (ConvertToMultiByte(pStr, sConvertedStr, extraGlyphs != nullptr))
@@ -589,6 +756,8 @@ namespace fonthook
 			std::string sTranslatedStr;
 			if (TranslateText(axTextString->pString, sTranslatedStr))
 				axTextString->Set(sTranslatedStr.c_str());
+			if (traceLongText)
+				preprocessTicks = StopLongTextQpc(preprocessStart);
 			if (traceLongText)
 			{
 				gLog.FormattedMessage(
@@ -600,6 +769,7 @@ namespace fonthook
 			}
 		}
 
+		SInt64 layoutStart = 0;
 		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar;
 		{
 			if (traceLongText)
@@ -608,6 +778,7 @@ namespace fonthook
 					"tnvse_freetype_long_text: id=%u stage=layout-begin elapsedMs=%u",
 					traceId, GetTickCount() - traceStartTick);
 			}
+			layoutStart = traceLongText ? ReadLongTextQpc() : 0;
 			PreparedTextSidecarCapture capture(&textData, this);
 			if (g_bEnableMultibyteFontHook)
 			{
@@ -621,13 +792,20 @@ namespace fonthook
 			preparedSidecar = capture.Take();
 		}
 		if (traceLongText)
+			layoutTicks = StopLongTextQpc(layoutStart);
+		if (traceLongText)
 		{
+			longTextTrace->preparedByteCount = static_cast<UInt32>(
+				std::min<size_t>(std::strlen(textData.xNewText.pString
+					? textData.xNewText.pString : ""),
+					std::numeric_limits<UInt32>::max()));
+			longTextTrace->preparedCharCount = static_cast<UInt32>(
+				std::max(0, textData.iCharCount));
+			longTextTrace->preparedLineCount = static_cast<UInt32>(
+				std::max(0, textData.iLineEnd));
 			gLog.FormattedMessage(
 				"tnvse_freetype_long_text: id=%u stage=layout-end preparedBytes=%u chars=%d lines=%d width=%d height=%d sidecar=%u elapsedMs=%u",
-				traceId,
-				static_cast<UInt32>(std::strlen(
-					textData.xNewText.pString
-						? textData.xNewText.pString : "")),
+				traceId, longTextTrace->preparedByteCount,
 				textData.iCharCount, textData.iLineEnd,
 				textData.iWidth, textData.iHeight,
 				preparedSidecar ? 1u : 0u,
@@ -660,9 +838,18 @@ namespace fonthook
 					reinterpret_cast<char*>(&textData));
 				if (traceLongText)
 				{
+					const SInt64 totalTicks =
+						StopLongTextQpc(traceStartQpc);
 					gLog.FormattedMessage(
 						"tnvse_freetype_long_text: id=%u stage=measure-only-end elapsedMs=%u",
 						traceId, GetTickCount() - traceStartTick);
+					longTextTrace->builderInitialRoute =
+						vectorfont::VectorTextBuildRoute::MeasureOnly;
+					longTextTrace->builderFinalRoute =
+						vectorfont::VectorTextBuildRoute::MeasureOnly;
+					LogLongTextPerformance(*longTextTrace, preprocessTicks,
+						layoutTicks, geometryTiming, 0,
+						totalTicks);
 				}
 				return;
 			}
@@ -677,10 +864,16 @@ namespace fonthook
 					traceId, textData.iCharCount,
 					GetTickCount() - traceStartTick);
 			}
+			const SInt64 geometryStart = traceLongText
+				? ReadLongTextQpc() : 0;
 			CreateFreeTypePreparedText(this, textData,
 				std::move(preparedSidecar), aiWidth,
 				aiFlags, aiLineBreakChar, axFontColor, apTextShape, apIconShape,
-				rasterScale);
+				rasterScale, traceLongText ? &geometryTiming : nullptr);
+			const SInt64 geometryTicks = traceLongText
+				? StopLongTextQpc(geometryStart) : 0;
+			const SInt64 totalTicks = traceLongText
+				? StopLongTextQpc(traceStartQpc) : 0;
 			if (traceLongText)
 			{
 				gLog.FormattedMessage(
@@ -691,9 +884,14 @@ namespace fonthook
 					reinterpret_cast<UInt32>(
 						apIconShape ? *apIconShape : nullptr),
 					GetTickCount() - traceStartTick);
+				LogLongTextPerformance(*longTextTrace, preprocessTicks,
+					layoutTicks, geometryTiming, geometryTicks,
+					totalTicks);
 			}
 			return;
 		}
+		const SInt64 vanillaGeometryStart = traceLongText
+			? ReadLongTextQpc() : 0;
 		int alignmentOffset = 0;
 		if (aiFlags == 4)
 			alignmentOffset = -textData.xLineWidths.m_item;
@@ -812,6 +1010,17 @@ namespace fonthook
 		}
 		this->ButtonIcons.Clear(1);
 		ThisStdCall<void>(0x7593E0, (char*)&textData);
+		if (traceLongText)
+		{
+			longTextTrace->builderInitialRoute =
+				vectorfont::VectorTextBuildRoute::Vanilla;
+			longTextTrace->builderFinalRoute =
+				vectorfont::VectorTextBuildRoute::Vanilla;
+			LogLongTextPerformance(*longTextTrace, preprocessTicks,
+				layoutTicks, geometryTiming,
+				StopLongTextQpc(vanillaGeometryStart),
+				StopLongTextQpc(traceStartQpc));
+		}
 	}
 
 	// ==================== FontEx::MakeString ====================
