@@ -1,4 +1,5 @@
 #include "dictionary_internal.h"
+#include "dictionary_ui_syntax.h"
 #include "encoding.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -59,6 +60,7 @@ namespace fonthook
 			std::vector<size_t> rawBegin;
 			std::vector<size_t> rawEnd;
 			bool containsDbcs = false;
+			bool containsWindows1252SmartQuote = false;
 		};
 
 		struct MappedChar
@@ -72,6 +74,13 @@ namespace fonthook
 		constexpr char kDbcsLookupUnit = '\x1F';
 		constexpr size_t kWindows1252StructuredMaxBytes = 2048;
 		thread_local UInt64 s_windows1252MatchSerial = 0;
+
+		bool TryTranslateWindows1252QuoteCanonicalSource(
+			const std::string& source,
+			PreparedTranslationMatch& match,
+			int depth,
+			bool allowWildcard,
+			bool sourceKnownToContainSmartQuote = false);
 
 		struct RichTextTag
 		{
@@ -567,7 +576,34 @@ namespace fonthook
 			return ch;
 		}
 
-		MappedPreparedSource PrepareSourceForLookupMapped(const std::string& source)
+		constexpr bool IsWindows1252SmartQuoteByte(char ch)
+		{
+			const UInt8 value = static_cast<UInt8>(ch);
+			return value >= 0x91 && value <= 0x94;
+		}
+
+		constexpr char CanonicalizeWindows1252SmartQuoteByte(char ch)
+		{
+			const UInt8 value = static_cast<UInt8>(ch);
+			return value == 0x91 || value == 0x92 ? '\'' :
+				(value == 0x93 || value == 0x94 ? '"' : ch);
+		}
+
+		static_assert(CanonicalizeWindows1252SmartQuoteByte(
+			static_cast<char>(0x92)) == '\'');
+		static_assert(CanonicalizeWindows1252SmartQuoteByte(
+			static_cast<char>(0x94)) == '"');
+
+		bool ContainsWindows1252SmartQuoteByte(std::string_view source)
+		{
+			return std::any_of(source.begin(), source.end(), [](char ch)
+				{
+					return IsWindows1252SmartQuoteByte(ch);
+				});
+		}
+
+		MappedPreparedSource PrepareSourceForLookupMapped(
+			const std::string& source, bool preferWindows1252SmartQuotes = false)
 		{
 			MappedPreparedSource mapped;
 			mapped.original = source;
@@ -576,6 +612,9 @@ namespace fonthook
 			units.reserve(source.size());
 			for (size_t i = 0; i < source.size();)
 			{
+				if (IsWindows1252SmartQuoteByte(source[i]))
+					mapped.containsWindows1252SmartQuote = true;
+
 				size_t escapedEnd = 0;
 				if (TryMatchEscapedSourceWhitespace(source, i, escapedEnd))
 				{
@@ -593,6 +632,19 @@ namespace fonthook
 						i = end + 1;
 						continue;
 					}
+				}
+
+				// CP936 accepts 0x91-0x94 as lead bytes, so contractions such as
+				// I\x92m otherwise consume the following ASCII letter as DBCS.  This
+				// alternate, dictionary-backed candidate handles only smart quotes;
+				// the normal DBCS-first candidate remains the fallback.
+				if (preferWindows1252SmartQuotes &&
+					IsWindows1252SmartQuoteByte(source[i]))
+				{
+					units.push_back({
+						CanonicalizeWindows1252SmartQuoteByte(source[i]), i, i + 1 });
+					++i;
+					continue;
 				}
 
 				UInt32 dbcsCode = 0;
@@ -1024,217 +1076,163 @@ namespace fonthook
 			return TryTranslateWindows1252WildcardSource(source, match, depth);
 		}
 
-		bool IsInlineCountWhitespace(char ch)
+		struct DeterministicUiTranslation
 		{
-			return ch == ' ' || ch == '\t';
-		}
-
-		bool IsAsciiCountDigit(char ch)
-		{
-			return ch >= '0' && ch <= '9';
-		}
-
-		bool TrySplitCountDecoratedSource(
-			const std::string& source, size_t& coreBegin, size_t& coreEnd)
-		{
-			coreBegin = 0;
-			coreEnd = 0;
-
-			size_t visibleBegin = 0;
-			while (visibleBegin < source.size() &&
-				IsInlineCountWhitespace(source[visibleBegin]))
-			{
-				++visibleBegin;
-			}
-			size_t visibleEnd = source.size();
-			while (visibleEnd > visibleBegin &&
-				IsInlineCountWhitespace(source[visibleEnd - 1]))
-			{
-				--visibleEnd;
-			}
-			if (visibleBegin == visibleEnd)
-				return false;
-
-			// FalloutNV.exe carries both "%s (%d)" and "(%d) %s" display
-			// formats. Accept only those bounded decimal-count decorations.
-			if (source[visibleEnd - 1] == ')')
-			{
-				size_t digitsBegin = visibleEnd - 1;
-				while (digitsBegin > visibleBegin &&
-					IsAsciiCountDigit(source[digitsBegin - 1]))
-				{
-					--digitsBegin;
-				}
-				if (digitsBegin < visibleEnd - 1 &&
-					digitsBegin > visibleBegin &&
-					source[digitsBegin - 1] == '(')
-				{
-					const size_t openParen = digitsBegin - 1;
-					size_t whitespaceBegin = openParen;
-					while (whitespaceBegin > visibleBegin &&
-						IsInlineCountWhitespace(source[whitespaceBegin - 1]))
-					{
-						--whitespaceBegin;
-					}
-					if (whitespaceBegin < openParen && whitespaceBegin > visibleBegin)
-					{
-						coreBegin = visibleBegin;
-						coreEnd = whitespaceBegin;
-						return true;
-					}
-				}
-			}
-
-			if (source[visibleBegin] != '(')
-				return false;
-			size_t pos = visibleBegin + 1;
-			const size_t digitsBegin = pos;
-			while (pos < visibleEnd && IsAsciiCountDigit(source[pos]))
-				++pos;
-			if (pos == digitsBegin || pos >= visibleEnd || source[pos] != ')')
-				return false;
-			++pos;
-			const size_t whitespaceBegin = pos;
-			while (pos < visibleEnd && IsInlineCountWhitespace(source[pos]))
-				++pos;
-			if (pos == whitespaceBegin || pos == visibleEnd)
-				return false;
-
-			coreBegin = pos;
-			coreEnd = visibleEnd;
-			return true;
-		}
-
-		bool TryTranslateWindows1252CountDecoratedSource(
-			const std::string& source, PreparedTranslationMatch& match, int depth)
-		{
-			size_t coreBegin = 0;
-			size_t coreEnd = 0;
-			if (!TrySplitCountDecoratedSource(source, coreBegin, coreEnd) ||
-				!TryTranslateWindows1252Source(
-					source.substr(coreBegin, coreEnd - coreBegin), match, depth))
-			{
-				return false;
-			}
-
 			std::string translated;
-			translated.reserve(
-				coreBegin + match.translated.size() + source.size() - coreEnd);
-			translated.append(source, 0, coreBegin);
-			translated += match.translated;
-			translated.append(source, coreEnd, std::string::npos);
-			match.translated = std::move(translated);
-			return true;
-		}
+			dictionary_ui_syntax::Kind kind = dictionary_ui_syntax::Kind::None;
+			UInt32 translatedSlots = 0;
+		};
 
-		bool TryGetWholeVisibleWrapper(
-			const std::string& source, size_t& coreBegin, size_t& coreEnd)
+		bool TryTranslateDeterministicUiSource(
+			const std::string& source,
+			DeterministicUiTranslation& result,
+			int depth);
+
+		bool TryTranslateDeterministicUiSlot(
+			const std::string& source,
+			PreparedTranslationMatch& match,
+			int depth,
+			bool allowGeneralRecursiveTranslation)
 		{
-			coreBegin = 0;
-			coreEnd = 0;
-			size_t begin = 0;
-			while (begin < source.size() && IsSourceWhitespace(source[begin]))
-				++begin;
-			size_t end = source.size();
-			while (end > begin && IsSourceWhitespace(source[end - 1]))
-				--end;
-			if (end - begin < 3)
+			match = PreparedTranslationMatch{};
+			if (source.empty() || depth >= 4 || !HasAlphabet(source))
 				return false;
 
-			const char open = source[begin];
-			const char close = open == '<' ? '>' : (open == '[' ? ']' : 0);
-			if (!close || source[end - 1] != close)
-				return false;
-
-			size_t nesting = 0;
-			for (size_t i = begin; i < end; ++i)
+			if (TryTranslateWindows1252Source(source, match, depth) ||
+				TryTranslateWindows1252QuoteCanonicalSource(
+					source, match, depth, true))
 			{
-				if (source[i] == open)
-				{
-					++nesting;
-				}
-				else if (source[i] == close)
-				{
-					if (nesting == 0)
-						return false;
-					--nesting;
-					if (nesting == 0 && i + 1 != end)
-						return false;
-				}
+				return true;
 			}
-			if (nesting != 0)
+
+			const MappedPreparedSource mapped = PrepareSourceForLookupMapped(source);
+			if (!mapped.key.empty() && TryTranslateExactKey(mapped.key, match, depth))
+				return true;
+
+			// Deterministic formats can be nested by the game or a menu mod.  Peel
+			// another verified syntax layer before considering the legacy wrapper's
+			// broader recursive compatibility path.
+			DeterministicUiTranslation nestedUi;
+			if (depth + 1 < 4 && TryTranslateDeterministicUiSource(
+				source, nestedUi, depth + 1))
+			{
+				match.translated = std::move(nestedUi.translated);
+				match.found = true;
+				return true;
+			}
+
+			if (!allowGeneralRecursiveTranslation || depth + 1 >= 4)
 				return false;
-
-			coreBegin = begin + 1;
-			coreEnd = end - 1;
-			return coreBegin < coreEnd;
-		}
-
-		bool TryTranslateTrimmedComponent(
-			const std::string& source, std::string& translated, int depth)
-		{
-			size_t begin = 0;
-			while (begin < source.size() && IsSourceWhitespace(source[begin]))
-				++begin;
-			size_t end = source.size();
-			while (end > begin && IsSourceWhitespace(source[end - 1]))
-				--end;
-			if (begin == end || depth >= 4 ||
-				!TranslateInternal(source.substr(begin, end - begin).c_str(),
-					translated, depth + 1))
+			std::string recursiveTranslation;
+			if (!TranslateInternal(
+				source.c_str(), recursiveTranslation, depth + 1))
 			{
 				return false;
 			}
-
-			translated = source.substr(0, begin) + translated + source.substr(end);
+			match.translated = std::move(recursiveTranslation);
+			match.found = true;
 			return true;
 		}
 
-		bool TryTranslateVisibleWrapper(
-			const std::string& source, std::string& translated, int depth)
+		bool TryRebuildDeterministicUiSlots(
+			const std::string& source,
+			const dictionary_ui_syntax::Span* slots,
+			size_t slotCount,
+			bool allowGeneralRecursiveTranslation,
+			int depth,
+			std::string& rebuilt,
+			UInt32& translatedSlots)
 		{
-			if (depth >= 4 || source.size() > kWindows1252StructuredMaxBytes)
-				return false;
-			size_t coreBegin = 0;
-			size_t coreEnd = 0;
-			if (!TryGetWholeVisibleWrapper(source, coreBegin, coreEnd))
+			rebuilt.clear();
+			translatedSlots = 0;
+			if (!slots || slotCount == 0)
 				return false;
 
-			const std::string core = source.substr(coreBegin, coreEnd - coreBegin);
-			std::string translatedCore;
-			if (!TryTranslateTrimmedComponent(core, translatedCore, depth))
+			rebuilt.reserve(source.size());
+			size_t cursor = 0;
+			for (size_t slotIndex = 0; slotIndex < slotCount; ++slotIndex)
 			{
-				std::string rebuilt;
-				bool changed = false;
-				size_t cursor = 0;
-				while (cursor <= core.size())
+				const dictionary_ui_syntax::Span& slot = slots[slotIndex];
+				if (slot.begin < cursor || slot.end <= slot.begin ||
+					slot.end > source.size())
 				{
-					const size_t colon = core.find(':', cursor);
-					const size_t partEnd = colon == std::string::npos ? core.size() : colon;
-					const std::string part = core.substr(cursor, partEnd - cursor);
-					std::string translatedPart;
-					if (TryTranslateTrimmedComponent(part, translatedPart, depth))
-					{
-						rebuilt += translatedPart;
-						changed = true;
-					}
-					else
-					{
-						rebuilt += part;
-					}
-					if (colon == std::string::npos)
-						break;
-					rebuilt.push_back(':');
-					cursor = colon + 1;
-				}
-				if (!changed)
 					return false;
-				translatedCore = std::move(rebuilt);
+				}
+
+				rebuilt.append(source, cursor, slot.begin - cursor);
+				const std::string slotSource =
+					source.substr(slot.begin, slot.end - slot.begin);
+				PreparedTranslationMatch slotMatch;
+				if (TryTranslateDeterministicUiSlot(
+					slotSource, slotMatch, depth,
+					allowGeneralRecursiveTranslation) &&
+					slotMatch.translated != slotSource)
+				{
+					rebuilt += slotMatch.translated;
+					++translatedSlots;
+				}
+				else
+				{
+					rebuilt += slotSource;
+				}
+				cursor = slot.end;
+			}
+			rebuilt.append(source, cursor, std::string::npos);
+			return translatedSlots != 0 && rebuilt != source;
+		}
+
+		bool TryTranslateDeterministicUiSource(
+			const std::string& source,
+			DeterministicUiTranslation& result,
+			int depth)
+		{
+			result = DeterministicUiTranslation{};
+			if (source.empty() || depth >= 4 ||
+				source.size() > kWindows1252StructuredMaxBytes)
+			{
+				return false;
 			}
 
-			translated = source.substr(0, coreBegin) + translatedCore +
-				source.substr(coreEnd);
-			return translated != source;
+			dictionary_ui_syntax::Match syntax;
+			if (!dictionary_ui_syntax::TryParse(source, syntax))
+				return false;
+
+			std::string rebuilt;
+			UInt32 primaryTranslatedSlots = 0;
+			const bool primaryMatched = TryRebuildDeterministicUiSlots(
+				source, syntax.slots.data(), syntax.slotCount,
+				syntax.allowGeneralRecursiveSlotTranslation, depth,
+				rebuilt, primaryTranslatedSlots);
+			if (primaryMatched &&
+				!syntax.preferFallbackWhenItTranslatesMoreSlots)
+			{
+				result.translated = std::move(rebuilt);
+				result.kind = syntax.kind;
+				result.translatedSlots = primaryTranslatedSlots;
+				return true;
+			}
+
+			std::string fallbackRebuilt;
+			UInt32 fallbackTranslatedSlots = 0;
+			const bool fallbackMatched = TryRebuildDeterministicUiSlots(
+				source, syntax.fallbackSlots.data(),
+				syntax.fallbackSlotCount,
+				syntax.allowGeneralRecursiveSlotTranslation, depth,
+				fallbackRebuilt, fallbackTranslatedSlots);
+			if (!primaryMatched && !fallbackMatched)
+				return false;
+
+			const bool useFallback = fallbackMatched &&
+				(!primaryMatched ||
+					fallbackTranslatedSlots > primaryTranslatedSlots);
+			result.translated = useFallback
+				? std::move(fallbackRebuilt)
+				: std::move(rebuilt);
+			result.kind = syntax.kind;
+			result.translatedSlots = useFallback
+				? fallbackTranslatedSlots
+				: primaryTranslatedSlots;
+			return true;
 		}
 
 		struct FormattedLine
@@ -1396,6 +1394,31 @@ namespace fonthook
 			if (TryTranslateExactKey(key, match, depth))
 				return true;
 			return TryTranslateWildcardKey(key, match, depth, mappedSource);
+		}
+
+		bool TryTranslateWindows1252QuoteCanonicalSource(
+			const std::string& source,
+			PreparedTranslationMatch& match,
+			int depth,
+			bool allowWildcard,
+			bool sourceKnownToContainSmartQuote)
+		{
+			match = PreparedTranslationMatch{};
+			if (!sourceKnownToContainSmartQuote &&
+				!ContainsWindows1252SmartQuoteByte(source))
+				return false;
+
+			const MappedPreparedSource mapped =
+				PrepareSourceForLookupMapped(source, true);
+			if (mapped.key.empty())
+				return false;
+
+			const bool matched = TryTranslateExactKey(mapped.key, match, depth) ||
+				(allowWildcard &&
+					TryTranslateWildcardKey(mapped.key, match, depth, &mapped));
+			if (matched)
+				++s_windows1252MatchSerial;
+			return matched;
 		}
 
 		bool TryTranslateBeforeLinebreakText(const std::string& source, std::string& translated, int depth)
@@ -1653,9 +1676,17 @@ namespace fonthook
 
 		PreparedTranslationMatch match;
 		if (!TryTranslateWindows1252Source(source, match, depth) &&
-			!TryTranslateWindows1252CountDecoratedSource(source, match, depth))
+			!TryTranslateWindows1252QuoteCanonicalSource(
+				source, match, depth, true))
 		{
-			return false;
+			DeterministicUiTranslation uiTranslation;
+			if (!TryTranslateDeterministicUiSource(
+				source, uiTranslation, depth))
+			{
+				return false;
+			}
+			translated = std::move(uiTranslation.translated);
+			return true;
 		}
 		translated = std::move(match.translated);
 		return true;
@@ -1675,6 +1706,13 @@ namespace fonthook
 		}
 
 		const MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(source);
+		if (mappedSource.containsWindows1252SmartQuote &&
+			TryTranslateWindows1252QuoteCanonicalSource(
+				source, match, depth, false, true))
+		{
+			translated = std::move(match.translated);
+			return true;
+		}
 		if (mappedSource.key.empty())
 			return false;
 		if (!TryTranslateExactKey(mappedSource.key, match, depth))
@@ -1699,23 +1737,15 @@ namespace fonthook
 		const auto tryWindows1252Direct = [&](const std::string& candidate)
 			{
 				PreparedTranslationMatch match;
-				const bool direct =
-					TryTranslateWindows1252Source(candidate, match, depth);
-				const bool countDecorated = !direct &&
-					TryTranslateWindows1252CountDecoratedSource(
-						candidate, match, depth);
-				if (!direct && !countDecorated)
+				if (!TryTranslateWindows1252Source(candidate, match, depth))
 					return false;
 
 				translated = match.translated;
 				if (g_bEnableDictionaryTranslationLog)
 				{
-					const char* method = countDecorated
-						? "count-decorated"
-						: (match.exact ? "exact" : "wildcard");
 					gLog.FormattedMessage(
 						"tnvse_dictionary: TranslateInternal Windows-1252 raw %s match:",
-						method);
+						match.exact ? "exact" : "wildcard");
 					gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
 					gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
 						s_entries[match.entryIndex].key.c_str(), translated.c_str());
@@ -1757,6 +1787,25 @@ namespace fonthook
 			return true;
 
 		MappedPreparedSource mappedSource = PrepareSourceForLookupMapped(raw);
+		PreparedTranslationMatch quoteCanonicalMatch;
+		if (mappedSource.containsWindows1252SmartQuote &&
+			TryTranslateWindows1252QuoteCanonicalSource(
+				raw, quoteCanonicalMatch, depth, false, true))
+		{
+			translated = quoteCanonicalMatch.translated;
+			if (g_bEnableDictionaryTranslationLog)
+			{
+				gLog.FormattedMessage(
+					"tnvse_dictionary: TranslateInternal Windows-1252 quote-canonical exact match:");
+				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
+				gLog.FormattedMessage("tnvse_dictionary:   entry=\"%s\" ->\"%s\"",
+					s_entries[quoteCanonicalMatch.entryIndex].key.c_str(),
+					translated.c_str());
+			}
+			StorePositiveCache(cacheKey, translated);
+			return true;
+		}
+
 		std::string key = mappedSource.key;
 		const bool sourceContainsDbcs = mappedSource.containsDbcs;
 		const bool sourceIsMixed = sourceContainsDbcs && HasAlphabet(raw);
@@ -1777,12 +1826,16 @@ namespace fonthook
 			return true;
 		}
 
-		if (TryTranslateVisibleWrapper(raw, translated, depth))
+		DeterministicUiTranslation uiTranslation;
+		if (TryTranslateDeterministicUiSource(raw, uiTranslation, depth))
 		{
+			translated = std::move(uiTranslation.translated);
 			if (g_bEnableDictionaryTranslationLog)
 			{
 				gLog.FormattedMessage(
-					"tnvse_dictionary: TranslateInternal visible-wrapper match:");
+					"tnvse_dictionary: TranslateInternal deterministic-ui match syntax=%s translatedSlots=%u:",
+					dictionary_ui_syntax::KindName(uiTranslation.kind),
+					uiTranslation.translatedSlots);
 				gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source);
 				gLog.FormattedMessage("tnvse_dictionary:   result=\"%s\"",
 					translated.c_str());

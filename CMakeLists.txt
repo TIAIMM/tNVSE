@@ -72,6 +72,24 @@ if(TNVSE_BUILD_FONT_QUALITY_PROBE)
     FOLDER "tNVSE/Diagnostics")
 endif()
 
+option(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS
+  "Build the deterministic dictionary UI syntax regression tests" OFF)
+if(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS)
+  enable_testing()
+  add_executable(tnvse_dictionary_ui_syntax_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/dictionary_ui_syntax_tests.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary/dictionary_ui_syntax.cpp")
+  target_compile_features(tnvse_dictionary_ui_syntax_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_dictionary_ui_syntax_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary")
+  target_compile_options(tnvse_dictionary_ui_syntax_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_dictionary_ui_syntax_tests)
+  set_target_properties(tnvse_dictionary_ui_syntax_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME dictionary_ui_syntax
+    COMMAND $<TARGET_FILE:tnvse_dictionary_ui_syntax_tests>)
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
