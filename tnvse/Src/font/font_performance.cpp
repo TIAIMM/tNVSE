@@ -839,6 +839,32 @@ namespace fonthook::vectorfont
 		return s_activeLongTextTrace;
 	}
 
+	const char* DirectProfileAcquireStatusName(
+		DirectProfileAcquireStatus status) noexcept
+	{
+		switch (status)
+		{
+		case DirectProfileAcquireStatus::NotAttempted:
+			return "not-attempted";
+		case DirectProfileAcquireStatus::Acquired:
+			return "acquired";
+		case DirectProfileAcquireStatus::MissingRuntimeSlot:
+			return "missing-runtime-slot";
+		case DirectProfileAcquireStatus::EpochMismatch:
+			return "epoch-mismatch";
+		case DirectProfileAcquireStatus::LayoutIdentityMismatch:
+			return "layout-identity-mismatch";
+		case DirectProfileAcquireStatus::CodePageMismatch:
+			return "codepage-mismatch";
+		case DirectProfileAcquireStatus::ProfileInvalid:
+			return "profile-invalid";
+		case DirectProfileAcquireStatus::RasterScaleMismatch:
+			return "raster-scale-mismatch";
+		default:
+			return "unknown";
+		}
+	}
+
 	const char* PreparedTextSidecarReasonName(
 		PreparedTextSidecarReason reason) noexcept
 	{
@@ -898,6 +924,16 @@ namespace fonthook::vectorfont
 			return "capture-layout-identity-unavailable";
 		case PreparedTextSidecarReason::CaptureLayoutIdentityChanged:
 			return "capture-layout-identity-changed";
+		case PreparedTextSidecarReason::DirectProfileMissingRuntimeSlot:
+			return "direct-profile-missing-runtime-slot";
+		case PreparedTextSidecarReason::DirectProfileEpochMismatch:
+			return "direct-profile-epoch-mismatch";
+		case PreparedTextSidecarReason::DirectProfileLayoutIdentityMismatch:
+			return "direct-profile-layout-identity-mismatch";
+		case PreparedTextSidecarReason::DirectProfileCodePageMismatch:
+			return "direct-profile-codepage-mismatch";
+		case PreparedTextSidecarReason::DirectProfileInvalid:
+			return "direct-profile-invalid";
 		default:
 			return "unknown";
 		}
@@ -958,6 +994,18 @@ namespace fonthook::vectorfont
 			return "sealed-artifact-failed";
 		case VectorTextBuildReason::GenericArtifactFailed:
 			return "generic-artifact-failed";
+		case VectorTextBuildReason::DirectProfileMissingRuntimeSlot:
+			return "direct-profile-missing-runtime-slot";
+		case VectorTextBuildReason::DirectProfileEpochMismatch:
+			return "direct-profile-epoch-mismatch";
+		case VectorTextBuildReason::DirectProfileLayoutIdentityMismatch:
+			return "direct-profile-layout-identity-mismatch";
+		case VectorTextBuildReason::DirectProfileCodePageMismatch:
+			return "direct-profile-codepage-mismatch";
+		case VectorTextBuildReason::DirectProfileInvalid:
+			return "direct-profile-invalid";
+		case VectorTextBuildReason::DirectProfileRasterScaleMismatch:
+			return "direct-profile-raster-scale-mismatch";
 		default:
 			return "unknown";
 		}

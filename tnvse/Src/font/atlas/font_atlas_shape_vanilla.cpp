@@ -22,6 +22,99 @@
 
 namespace fonthook::vectorfont
 {
+		const char* DirectShapeFailureStageName(
+			DirectShapeFailureStage stage) noexcept
+		{
+			switch (stage)
+			{
+			case DirectShapeFailureStage::None:
+				return "none";
+			case DirectShapeFailureStage::CachedUnsupportedMaskType:
+				return "cached-unsupported-mask-type";
+			case DirectShapeFailureStage::CachedAtlasListEmpty:
+				return "cached-atlas-list-empty";
+			case DirectShapeFailureStage::CachedAtlasPageLimitExceeded:
+				return "cached-atlas-page-limit-exceeded";
+			case DirectShapeFailureStage::CachedGlyphBatchSizeMismatch:
+				return "cached-glyph-batch-size-mismatch";
+			case DirectShapeFailureStage::CachedDrawableGlyphCountZero:
+				return "cached-drawable-glyph-count-zero";
+			case DirectShapeFailureStage::CachedDrawableGlyphLimitExceeded:
+				return "cached-drawable-glyph-limit-exceeded";
+			case DirectShapeFailureStage::
+				CachedArgbPagePrefixInitializationFailed:
+				return "cached-argb-page-prefix-init-failed";
+			case DirectShapeFailureStage::CachedArgbGlyphSourceMissing:
+				return "cached-argb-glyph-source-missing";
+			case DirectShapeFailureStage::CachedArgbAtlasPageOutOfRange:
+				return "cached-argb-atlas-page-out-of-range";
+			case DirectShapeFailureStage::CachedArgbPagePrefixOutOfRange:
+				return "cached-argb-page-prefix-out-of-range";
+			case DirectShapeFailureStage::CachedArgbPageShapeCreationFailed:
+				return "cached-argb-page-shape-creation-failed";
+			case DirectShapeFailureStage::CachedArgbPageShapeMissing:
+				return "cached-argb-page-shape-missing";
+			case DirectShapeFailureStage::CachedShaderEffectConfigurationFailed:
+				return "cached-shader-effect-config-failed";
+			case DirectShapeFailureStage::CachedGlyphRoleOutOfRange:
+				return "cached-glyph-role-out-of-range";
+			case DirectShapeFailureStage::CachedRasterProfileResolutionFailed:
+				return "cached-raster-profile-resolution-failed";
+			case DirectShapeFailureStage::
+				CachedQuadCountPrefixInitializationFailed:
+				return "cached-quad-count-prefix-init-failed";
+			case DirectShapeFailureStage::CachedGlyphSourceMissing:
+				return "cached-glyph-source-missing";
+			case DirectShapeFailureStage::CachedGlyphAtlasPageOutOfRange:
+				return "cached-glyph-atlas-page-out-of-range";
+			case DirectShapeFailureStage::CachedGlyphPageLimitExceeded:
+				return "cached-glyph-page-limit-exceeded";
+			case DirectShapeFailureStage::CachedPhysicalQuadLimitExceeded:
+				return "cached-physical-quad-limit-exceeded";
+			case DirectShapeFailureStage::CachedPhysicalQuadCountZero:
+				return "cached-physical-quad-count-zero";
+			case DirectShapeFailureStage::
+				CachedPageProfilePrefixInitializationFailed:
+				return "cached-page-profile-prefix-init-failed";
+			case DirectShapeFailureStage::CachedRasterProfileMissing:
+				return "cached-raster-profile-missing";
+			case DirectShapeFailureStage::CachedPageRasterProfileMixed:
+				return "cached-page-raster-profile-mixed";
+			case DirectShapeFailureStage::CachedShadowQuadWriteFailed:
+				return "cached-shadow-quad-write-failed";
+			case DirectShapeFailureStage::CachedBodyQuadWriteFailed:
+				return "cached-body-quad-write-failed";
+			case DirectShapeFailureStage::CachedQuadRangeCoverageFailed:
+				return "cached-quad-range-coverage-failed";
+			case DirectShapeFailureStage::CachedColorContractMissing:
+				return "cached-color-contract-missing";
+			case DirectShapeFailureStage::CachedDrawRangesEmpty:
+				return "cached-draw-ranges-empty";
+			case DirectShapeFailureStage::NativeQuadCountZero:
+				return "native-quad-count-zero";
+			case DirectShapeFailureStage::NativeVertexCountTooSmall:
+				return "native-vertex-count-too-small";
+			case DirectShapeFailureStage::NativeEffectPagePopulationFailed:
+				return "native-effect-page-population-failed";
+			case DirectShapeFailureStage::NativeVertexBoundFailed:
+				return "native-vertex-bound-failed";
+			case DirectShapeFailureStage::NativePayloadBuildFailed:
+				return "native-payload-build-failed";
+			case DirectShapeFailureStage::NativePayloadVertexCountTooSmall:
+				return "native-payload-vertex-count-too-small";
+			case DirectShapeFailureStage::NativePayloadPacketsEmpty:
+				return "native-payload-packets-empty";
+			case DirectShapeFailureStage::NativeFacadeAtlasPageOutOfRange:
+				return "native-facade-atlas-page-out-of-range";
+			case DirectShapeFailureStage::NativePacketShellCreationFailed:
+				return "native-packet-shell-creation-failed";
+			case DirectShapeFailureStage::NativeShapePreparationFailed:
+				return "native-shape-preparation-failed";
+			default:
+				return "unknown";
+			}
+		}
+
 		bool IsVanillaLayoutPayloadEligible(
 			const NativeFontPayloadTemplate& payload,
 			const NativeFontPacketTemplate*& packet,
@@ -213,26 +306,46 @@ namespace fonthook::vectorfont
 			const NiColorA& facadeColor, const NiColorA& tileColor,
 			const NiPoint3& origin, const NiPoint3& boundMinimum,
 			const NiPoint3& boundMaximum, bool prepareObject,
+			DirectShapeFailureStage& failureStage,
 			std::vector<NativeFontCompositeSpan>&& compositeSpans)
 		{
-			if (!quadCount || vertices.size() < quadCount * 4u
-				|| !PopulateDirectAtlasEffectPages(atlases, effects))
+			failureStage = DirectShapeFailureStage::None;
+			auto fail = [&](DirectShapeFailureStage stage) -> NiTriShape*
 			{
+				failureStage = stage;
 				return nullptr;
+			};
+			if (!quadCount)
+				return fail(DirectShapeFailureStage::NativeQuadCountZero);
+			if (vertices.size() < quadCount * 4u)
+			{
+				return fail(
+					DirectShapeFailureStage::NativeVertexCountTooSmall);
+			}
+			if (!PopulateDirectAtlasEffectPages(atlases, effects))
+			{
+				return fail(DirectShapeFailureStage::
+					NativeEffectPagePopulationFailed);
 			}
 			NiBound bound;
 			if (!BuildDirectVertexBound(
 				vertices.size(), boundMinimum, boundMaximum, bound))
 			{
-				return nullptr;
+				return fail(DirectShapeFailureStage::NativeVertexBoundFailed);
 			}
 			NativeFontPayloadTemplatePtr payload =
 				BuildNativeFontPayloadTemplate(std::move(vertices),
 					quadCount, glyphCount, colorContract, effects, bound,
 					std::move(compositeSpans));
-			if (!payload || payload->gpuVertices.size() < 4
-				|| payload->packets.empty())
-				return nullptr;
+			if (!payload)
+				return fail(DirectShapeFailureStage::NativePayloadBuildFailed);
+			if (payload->gpuVertices.size() < 4)
+			{
+				return fail(DirectShapeFailureStage::
+					NativePayloadVertexCountTooSmall);
+			}
+			if (payload->packets.empty())
+				return fail(DirectShapeFailureStage::NativePayloadPacketsEmpty);
 			if (NiTriShape* vanillaLayout = TryCreateVanillaLayoutShape(
 				font, atlases, payload, glyphCount, effects, colorContract,
 				tileColor, origin, prepareObject))
@@ -250,15 +363,19 @@ namespace fonthook::vectorfont
 				: FreeTypePerfCounter::SingletonFacadeMultiPacketArtifact);
 			const NativeFontPacketTemplate& facadePacket =
 				payload->packets.front();
-			NiTriShape* shape =
-				facadePacket.atlasPage < atlases.size()
-					? CreateDirectNativePacketShell(
-						atlases[facadePacket.atlasPage], *payload,
-						facadePacket,
-						facadeColor, tileColor, origin, false)
-					: nullptr;
+			if (facadePacket.atlasPage >= atlases.size())
+			{
+				return fail(DirectShapeFailureStage::
+					NativeFacadeAtlasPageOutOfRange);
+			}
+			NiTriShape* shape = CreateDirectNativePacketShell(
+				atlases[facadePacket.atlasPage], *payload, facadePacket,
+				facadeColor, tileColor, origin, false);
 			if (!shape)
-				return nullptr;
+			{
+				return fail(DirectShapeFailureStage::
+					NativePacketShellCreationFailed);
+			}
 			if (!PrepareNativeFontSingletonFacadeShape(font, shape,
 				font.iFontNum, glyphCount, quadCount, &effects,
 				&colorContract, payload, origin))
@@ -270,7 +387,8 @@ namespace fonthook::vectorfont
 					payload, origin))
 				{
 					shape->DeleteThis();
-					return nullptr;
+					return fail(DirectShapeFailureStage::
+						NativeShapePreparationFailed);
 				}
 			}
 			RecordFreeTypePerf(

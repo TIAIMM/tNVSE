@@ -360,6 +360,8 @@ namespace fonthook::vectorfont
 	{
 		DirectAtlasShapeOutcome outcome =
 			DirectAtlasShapeOutcome::Unavailable;
+		DirectShapeFailureStage failureStage =
+			DirectShapeFailureStage::None;
 		NiTriShape* shape = nullptr;
 		UInt32 glyphCount = 0;
 		UInt32 geometryQuadCount = 0;
@@ -960,9 +962,11 @@ namespace fonthook::vectorfont
 	bool IsSealedDirectFontProfileUsable(RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
 		float rasterScale);
-	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime);
+	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime,
+		const DirectProfileInvalidationContext& context);
 	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
-		const std::shared_ptr<const SealedDirectFontProfile>& expected);
+		const std::shared_ptr<const SealedDirectFontProfile>& expected,
+		const DirectProfileInvalidationContext& context);
 	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 		Font& font, RuntimeFont& runtime,
 		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,

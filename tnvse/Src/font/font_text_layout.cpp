@@ -460,6 +460,31 @@ namespace fonthook
 			static_cast<UInt8>(glyph.byteClass), offsetDomain);
 	}
 
+	static vectorfont::PreparedTextSidecarReason
+		GetDirectProfileAcquireSidecarReason(
+			vectorfont::DirectProfileAcquireStatus status)
+	{
+		switch (status)
+		{
+		case vectorfont::DirectProfileAcquireStatus::MissingRuntimeSlot:
+			return vectorfont::PreparedTextSidecarReason::
+				DirectProfileMissingRuntimeSlot;
+		case vectorfont::DirectProfileAcquireStatus::EpochMismatch:
+			return vectorfont::PreparedTextSidecarReason::
+				DirectProfileEpochMismatch;
+		case vectorfont::DirectProfileAcquireStatus::LayoutIdentityMismatch:
+			return vectorfont::PreparedTextSidecarReason::
+				DirectProfileLayoutIdentityMismatch;
+		case vectorfont::DirectProfileAcquireStatus::CodePageMismatch:
+			return vectorfont::PreparedTextSidecarReason::
+				DirectProfileCodePageMismatch;
+		case vectorfont::DirectProfileAcquireStatus::ProfileInvalid:
+			return vectorfont::PreparedTextSidecarReason::DirectProfileInvalid;
+		default:
+			return vectorfont::PreparedTextSidecarReason::NoSealedDirectProfile;
+		}
+	}
+
 	static std::shared_ptr<const PreparedDirectTextSidecar>
 		BuildPreparedDirectTextSidecar(
 			FontEx* font, const Font::TextData& data,
@@ -666,18 +691,38 @@ namespace fonthook
 		const int requestedLineEnd = data->iLineEnd;
 		vectorfont::RuntimeFont* directRuntime =
 			vectorfont::FindActiveRuntime(font);
-		std::shared_ptr<const
-			vectorfont::SealedDirectFontProfile> directProfile =
-				directRuntime
-					? vectorfont::AcquireSealedDirectLayoutProfile(
-						*directRuntime)
-					: nullptr;
+		vectorfont::DirectProfileAcquireResult directProfileAcquire;
+		if (directRuntime)
+		{
+			directProfileAcquire =
+				vectorfont::AcquireSealedDirectLayoutProfile(*directRuntime);
+		}
+		std::shared_ptr<const vectorfont::SealedDirectFontProfile>
+			directProfile = directProfileAcquire.profile;
 		if (captureSidecar)
 		{
 			if (longTextTrace)
 			{
 				longTextTrace->sidecarDirectProfileAcquired =
 					directProfile != nullptr;
+				longTextTrace->sidecarAcquireStatus =
+					directProfileAcquire.status;
+				longTextTrace->sidecarAcquireFailureMask =
+					directProfileAcquire.failureMask;
+				longTextTrace->sidecarProfileSlotPresent =
+					directProfileAcquire.slotPresent;
+				longTextTrace->sidecarProfileEpochExpected =
+					directProfileAcquire.epochExpected;
+				longTextTrace->sidecarProfileEpochActual =
+					directProfileAcquire.epochActual;
+				longTextTrace->sidecarProfileLayoutExpected =
+					directProfileAcquire.layoutIdentityExpected;
+				longTextTrace->sidecarProfileLayoutActual =
+					directProfileAcquire.layoutIdentityActual;
+				longTextTrace->sidecarProfileCodePageExpected =
+					directProfileAcquire.codePageExpected;
+				longTextTrace->sidecarProfileCodePageActual =
+					directProfileAcquire.codePageActual;
 			}
 			if (!directRuntime)
 			{
@@ -686,8 +731,9 @@ namespace fonthook
 			}
 			else if (!directProfile)
 			{
-				RecordPreparedSidecarReason(vectorfont::
-					PreparedTextSidecarReason::NoSealedDirectProfile);
+				RecordPreparedSidecarReason(
+					GetDirectProfileAcquireSidecarReason(
+						directProfileAcquire.status));
 			}
 		}
 		bool directRecordInvalid = false;
@@ -779,7 +825,11 @@ namespace fonthook
 						== vectorfont::SealedDirectGlyphLookup::Invalid)
 					{
 						vectorfont::InvalidateSealedDirectFontProfile(
-							*directRuntime);
+							*directRuntime,
+							vectorfont::MakeDirectProfileInvalidation(
+								vectorfont::DirectProfileInvalidationReason::
+									LayoutHyphenInvalid,
+								directHyphen));
 						directRecordInvalid = true;
 					}
 					directProfile.reset();
@@ -1090,7 +1140,11 @@ namespace fonthook
 					else
 					{
 						vectorfont::InvalidateSealedDirectFontProfile(
-							*directRuntime);
+							*directRuntime,
+							vectorfont::MakeDirectProfileInvalidation(
+								vectorfont::DirectProfileInvalidationReason::
+									LayoutGlyphInvalid,
+								glyph));
 						directRecordInvalid = true;
 					}
 				}
@@ -1194,7 +1248,11 @@ namespace fonthook
 				== vectorfont::SealedDirectGlyphLookup::Invalid)
 			{
 				vectorfont::InvalidateSealedDirectFontProfile(
-					*directRuntime);
+					*directRuntime,
+					vectorfont::MakeDirectProfileInvalidation(
+						vectorfont::DirectProfileInvalidationReason::
+							LayoutSpaceInvalid,
+						space));
 				directRecordInvalid = true;
 			}
 			directProfile.reset();

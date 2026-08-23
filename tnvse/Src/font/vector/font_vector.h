@@ -63,6 +63,24 @@ namespace fonthook
 
 	namespace vectorfont
 	{
+		enum class DirectProfileAcquireStatus : UInt8
+		{
+			NotAttempted = 0,
+			Acquired,
+			MissingRuntimeSlot,
+			EpochMismatch,
+			LayoutIdentityMismatch,
+			CodePageMismatch,
+			ProfileInvalid,
+			RasterScaleMismatch,
+		};
+
+		inline constexpr UInt8 kDirectProfileFailureEpoch = 1u << 0;
+		inline constexpr UInt8 kDirectProfileFailureLayoutIdentity = 1u << 1;
+		inline constexpr UInt8 kDirectProfileFailureCodePage = 1u << 2;
+		inline constexpr UInt8 kDirectProfileFailureProfileInvalid = 1u << 3;
+		inline constexpr UInt8 kDirectProfileFailureRasterScale = 1u << 4;
+
 		enum class PreparedTextSidecarReason : UInt8
 		{
 			Pending = 0,
@@ -92,6 +110,11 @@ namespace fonthook
 			CaptureLengthChanged,
 			CaptureLayoutIdentityUnavailable,
 			CaptureLayoutIdentityChanged,
+			DirectProfileMissingRuntimeSlot,
+			DirectProfileEpochMismatch,
+			DirectProfileLayoutIdentityMismatch,
+			DirectProfileCodePageMismatch,
+			DirectProfileInvalid,
 		};
 
 		enum class VectorTextBuildRoute : UInt8
@@ -128,6 +151,12 @@ namespace fonthook
 			DirectReplayDecodeFailed,
 			SealedArtifactFailed,
 			GenericArtifactFailed,
+			DirectProfileMissingRuntimeSlot,
+			DirectProfileEpochMismatch,
+			DirectProfileLayoutIdentityMismatch,
+			DirectProfileCodePageMismatch,
+			DirectProfileInvalid,
+			DirectProfileRasterScaleMismatch,
 		};
 
 		struct FreeTypeLongTextTrace
@@ -154,6 +183,16 @@ namespace fonthook
 			bool sidecarCaptured = false;
 			bool sidecarRejected = false;
 			bool sidecarConsumed = false;
+			DirectProfileAcquireStatus sidecarAcquireStatus =
+				DirectProfileAcquireStatus::NotAttempted;
+			UInt8 sidecarAcquireFailureMask = 0;
+			bool sidecarProfileSlotPresent = false;
+			UInt32 sidecarProfileEpochExpected = 0;
+			UInt32 sidecarProfileEpochActual = 0;
+			UInt64 sidecarProfileLayoutExpected = 0;
+			UInt64 sidecarProfileLayoutActual = 0;
+			UInt32 sidecarProfileCodePageExpected = 0;
+			UInt32 sidecarProfileCodePageActual = 0;
 
 			VectorTextBuildRoute builderInitialRoute =
 				VectorTextBuildRoute::Unknown;
@@ -167,6 +206,7 @@ namespace fonthook
 			UInt8 builderFailureByteLength = 0;
 			UInt8 builderFailureByteClass = 0;
 			UInt8 builderAtlasOutcome = 0;
+			UInt16 builderShapeFailureStage = 0;
 			bool builderShapeCreated = false;
 		};
 
@@ -188,6 +228,8 @@ namespace fonthook
 		};
 
 		FreeTypeLongTextTrace* GetActiveFreeTypeLongTextTrace() noexcept;
+		const char* DirectProfileAcquireStatusName(
+			DirectProfileAcquireStatus aeStatus) noexcept;
 		const char* PreparedTextSidecarReasonName(
 			PreparedTextSidecarReason aeReason) noexcept;
 		const char* VectorTextBuildRouteName(

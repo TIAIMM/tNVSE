@@ -686,10 +686,11 @@ namespace fonthook::vectorfont
 				&& construction.staticLayerMask >= 1u
 				&& construction.staticLayerMask <= 15u
 				&& std::isfinite(construction.uniformSdfSpread)
-				&& construction.uniformSdfSpread > 0.0f
+				&& construction.uniformSdfSpread >= 0.0f
 				&& std::isfinite(
 					construction.uniformDistanceParameterScale)
-				&& construction.uniformDistanceParameterScale >= 1.0f;
+				&& (construction.uniformDistanceParameterScale == 0.0f
+					|| construction.uniformDistanceParameterScale >= 1.0f);
 			if (constructionProfileWitnessValid)
 			{
 				PayloadVertexValidationWitness validationWitness;

@@ -450,6 +450,9 @@ namespace fonthook
 					std::numeric_limits<UInt32>::max())));
 			longTextTrace->builderAtlasOutcome = diagnostics
 				? static_cast<UInt8>(diagnostics->outcome) : 0;
+			longTextTrace->builderShapeFailureStage = diagnostics
+				? static_cast<UInt16>(
+					diagnostics->directShapeFailureStage) : 0;
 			longTextTrace->builderShapeCreated = shapeCreated;
 		}
 
@@ -556,9 +559,10 @@ namespace fonthook
 					WhiteTextureUnavailable);
 				return;
 			}
-			sealedProfile =
+			const vectorfont::DirectProfileAcquireResult profileAcquire =
 				vectorfont::AcquireSealedDirectFontProfile(
 					*runtime, rasterScale);
+			sealedProfile = profileAcquire.profile;
 			available = true;
 			if (longTextTrace)
 			{
@@ -569,8 +573,41 @@ namespace fonthook
 				longTextTrace->builderFinalRoute = route;
 				if (!sealedProfile)
 				{
-					RecordBuildReason(vectorfont::VectorTextBuildReason::
-						NoSealedDirectProfile);
+					vectorfont::VectorTextBuildReason reason =
+						vectorfont::VectorTextBuildReason::NoSealedDirectProfile;
+					switch (profileAcquire.status)
+					{
+					case vectorfont::DirectProfileAcquireStatus::
+						MissingRuntimeSlot:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileMissingRuntimeSlot;
+						break;
+					case vectorfont::DirectProfileAcquireStatus::EpochMismatch:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileEpochMismatch;
+						break;
+					case vectorfont::DirectProfileAcquireStatus::
+						LayoutIdentityMismatch:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileLayoutIdentityMismatch;
+						break;
+					case vectorfont::DirectProfileAcquireStatus::CodePageMismatch:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileCodePageMismatch;
+						break;
+					case vectorfont::DirectProfileAcquireStatus::ProfileInvalid:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileInvalid;
+						break;
+					case vectorfont::DirectProfileAcquireStatus::
+						RasterScaleMismatch:
+						reason = vectorfont::VectorTextBuildReason::
+							DirectProfileRasterScaleMismatch;
+						break;
+					default:
+						break;
+					}
+					RecordBuildReason(reason);
 				}
 			}
 		}
@@ -650,8 +687,9 @@ namespace fonthook
 				m_impl->RecordBuildReason(vectorfont::
 					VectorTextBuildReason::DirectGlyphMetricsUnavailable,
 					&glyph);
-				vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
-					*m_impl->runtime, m_impl->sealedProfile);
+				// The caller supplied a glyph outside this profile's direct
+				// coverage. Convert only this builder and preserve the sealed slot
+				// for subsequent compatible long-text batches.
 				if (!m_impl->ConvertDirectGlyphsToGeneric())
 					return false;
 				m_impl->glyphs.push_back({ glyph, pen, sourceColor });
@@ -700,7 +738,11 @@ namespace fonthook
 				if (lookup == vectorfont::SealedDirectGlyphLookup::Invalid)
 				{
 					vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
-						*m_impl->runtime, m_impl->sealedProfile);
+						*m_impl->runtime, m_impl->sealedProfile,
+						vectorfont::MakeDirectProfileInvalidation(
+							vectorfont::DirectProfileInvalidationReason::
+								VectorBuilderLookupInvalid,
+							glyph));
 				}
 				if (!m_impl->ConvertDirectGlyphsToGeneric())
 					return false;
@@ -762,8 +804,8 @@ namespace fonthook
 			}
 			else
 			{
-				vectorfont::InvalidateSealedDirectFontProfileIfCurrent(
-					*m_impl->runtime, m_impl->sealedProfile);
+				// A malformed synchronous sidecar is an artifact-local failure.
+				// It cannot invalidate the shared immutable font profile.
 				if (diagnostics)
 				{
 					diagnostics->inputGlyphCount =
@@ -831,11 +873,15 @@ namespace fonthook
 				++logCount;
 				gLog.FormattedMessage(
 					actualFailure
-						? "tnvse_freetype_native: submission-suppressed reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u nativeRenderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u"
-						: "tnvse_freetype_native: empty-shape reason=atlas-shape-build phase=shape-build classification=%s outcome=%s expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u nativeRenderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u",
-						actualFailure ? "failure" : "expected-empty",
-						GlyphAtlasBuildOutcomeName(atlasDiagnostics.outcome),
-						atlasDiagnostics.expectedEmpty ? 1 : 0,
+						? "tnvse_freetype_native: submission-suppressed reason=atlas-shape-build phase=shape-build classification=%s outcome=%s failureStage=%s failureStageCode=%u expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u nativeRenderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u"
+						: "tnvse_freetype_native: empty-shape reason=atlas-shape-build phase=shape-build classification=%s outcome=%s failureStage=%s failureStageCode=%u expectedEmpty=%u font=%u fontObject=%p runtime=%p emptyShape=%p glyphs=%u missingMetrics=%u zeroByteLength=%u controls=%u spaces=%u firstCodepoint=U+%04X firstEncoded=0x%04X firstGlyph=%u firstBytes=%u firstRole=%s scale=%.3f prepare=%u suppressEffects=%u wantsShader=%u hasEffects=%u sdfFill=%u nativeRenderer=%u requestedQuality=%u resolvedQuality=%u shaderBuilt=%u shaderQuads=%u shaderShapeAttempts=%u shaderShapeFailed=%u cpuBuilt=%u cpuQuads=%u cpuAttempts=%u cpuMaskFailure=%s degradedLayers=%u cpuShapeAttempts=%u nativeReady=%u nativeGeneration=%u thread=%u",
+					actualFailure ? "failure" : "expected-empty",
+					GlyphAtlasBuildOutcomeName(atlasDiagnostics.outcome),
+					vectorfont::DirectShapeFailureStageName(
+						atlasDiagnostics.directShapeFailureStage),
+					static_cast<UInt32>(
+						atlasDiagnostics.directShapeFailureStage),
+					atlasDiagnostics.expectedEmpty ? 1 : 0,
 						m_impl->font->iFontNum, static_cast<void*>(m_impl->font),
 						static_cast<void*>(m_impl->runtime), static_cast<void*>(emptyShape),
 						atlasDiagnostics.inputGlyphCount,

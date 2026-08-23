@@ -1419,6 +1419,13 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
+	bool HasRuntimePublishedSealedDirectProfile(
+		const RuntimeFont& runtime) noexcept
+	{
+		return runtime.sealedDirectProfilePublicationEpoch.load(
+			std::memory_order_acquire) != 1u;
+	}
+
 	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& runtime)
 	{
 		return runtime.layoutContentHash;
@@ -1539,11 +1546,11 @@ namespace fonthook::vectorfont
 		EndSealedDirectProfilePublication(runtime, previousEpoch, changed);
 	}
 
-	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
+	bool ClearRuntimeSealedDirectProfileIfCurrent(RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& expected)
 	{
 		if (!expected)
-			return;
+			return false;
 		const UInt64 previousEpoch = BeginSealedDirectProfilePublication(runtime);
 		const std::shared_ptr<const SealedDirectFontProfile> current =
 			runtime.sealedDirectProfile.load(std::memory_order_acquire);
@@ -1555,6 +1562,7 @@ namespace fonthook::vectorfont
 				std::move(empty), std::memory_order_release);
 		}
 		EndSealedDirectProfilePublication(runtime, previousEpoch, changed);
+		return changed;
 	}
 
 	void ReleaseSealedRuntimeFreeTypeState(RuntimeFont& runtime)

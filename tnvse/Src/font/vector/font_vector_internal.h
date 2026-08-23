@@ -933,10 +933,59 @@ namespace fonthook::vectorfont
 		Outline,
 	};
 
+	enum class DirectShapeFailureStage : UInt16
+	{
+		None = 0,
+		CachedUnsupportedMaskType,
+		CachedAtlasListEmpty,
+		CachedAtlasPageLimitExceeded,
+		CachedGlyphBatchSizeMismatch,
+		CachedDrawableGlyphCountZero,
+		CachedDrawableGlyphLimitExceeded,
+		CachedArgbPagePrefixInitializationFailed,
+		CachedArgbGlyphSourceMissing,
+		CachedArgbAtlasPageOutOfRange,
+		CachedArgbPagePrefixOutOfRange,
+		CachedArgbPageShapeCreationFailed,
+		CachedArgbPageShapeMissing,
+		CachedShaderEffectConfigurationFailed,
+		CachedGlyphRoleOutOfRange,
+		CachedRasterProfileResolutionFailed,
+		CachedQuadCountPrefixInitializationFailed,
+		CachedGlyphSourceMissing,
+		CachedGlyphAtlasPageOutOfRange,
+		CachedGlyphPageLimitExceeded,
+		CachedPhysicalQuadLimitExceeded,
+		CachedPhysicalQuadCountZero,
+		CachedPageProfilePrefixInitializationFailed,
+		CachedRasterProfileMissing,
+		CachedPageRasterProfileMixed,
+		CachedShadowQuadWriteFailed,
+		CachedBodyQuadWriteFailed,
+		CachedQuadRangeCoverageFailed,
+		CachedColorContractMissing,
+		CachedDrawRangesEmpty,
+		NativeQuadCountZero,
+		NativeVertexCountTooSmall,
+		NativeEffectPagePopulationFailed,
+		NativeVertexBoundFailed,
+		NativePayloadBuildFailed,
+		NativePayloadVertexCountTooSmall,
+		NativePayloadPacketsEmpty,
+		NativeFacadeAtlasPageOutOfRange,
+		NativePacketShellCreationFailed,
+		NativeShapePreparationFailed,
+	};
+
+	const char* DirectShapeFailureStageName(
+		DirectShapeFailureStage stage) noexcept;
+
 	struct GlyphAtlasBuildDiagnostics
 	{
 		GlyphAtlasBuildOutcome outcome = GlyphAtlasBuildOutcome::Unknown;
 		GlyphAtlasMaskFailure cpuMaskFailure = GlyphAtlasMaskFailure::None;
+		DirectShapeFailureStage directShapeFailureStage =
+			DirectShapeFailureStage::None;
 		UInt32 inputGlyphCount = 0;
 		UInt32 missingMetricsCount = 0;
 		UInt32 zeroByteLengthCount = 0;
@@ -968,6 +1017,118 @@ namespace fonthook::vectorfont
 	struct RuntimeFont;
 	struct SealedDirectFontProfile;
 
+	enum class DirectProfileInvalidationReason : UInt16
+	{
+		AcquireEpochMismatch = 0,
+		AcquireLayoutIdentityMismatch,
+		AcquireCodePageMismatch,
+		AcquireProfileInvalid,
+		DecodeProfileValidationFailed,
+		DecodeGlyphInvalid,
+		ProfilePublicationFailed,
+		SealedBatchProfileContractMismatch,
+		SealedBatchCommandInvalid,
+		SealedBatchSlotMismatch,
+		SealedBatchMaskIncompatible,
+		SealedBatchTextureIndexInvalid,
+		SealedBatchGlyphRecordMismatch,
+		SealedBatchLayerInvalid,
+		SealedBatchPageOrdinalInvalid,
+		SealedBatchSnapshotPlacementInvalid,
+		SealedBatchPlacementMaskMismatch,
+		DirectBatchProfileContractMismatch,
+		DirectBatchTableMissing,
+		DirectBatchSlotOutOfRange,
+		DirectBatchMaskIncompatible,
+		DirectBatchTextureIndexInvalid,
+		DirectBatchGlyphRecordMismatch,
+		DirectBatchLayerInvalid,
+		DirectBatchPageOrdinalInvalid,
+		DirectBatchSnapshotPlacementInvalid,
+		DirectBatchPlacementMaskMismatch,
+		VectorBuilderGlyphMetricsUnavailable,
+		VectorBuilderLookupInvalid,
+		VectorBuilderPreparedBatchInvalid,
+		AtlasShapeBatchUnavailable,
+		AtlasShapeBuildFailed,
+		AtlasRenderUnsupportedProfile,
+		AtlasRenderShapeFailed,
+		LayoutHyphenInvalid,
+		LayoutGlyphInvalid,
+		LayoutSpaceInvalid,
+	};
+
+	struct DirectProfileInvalidationContext
+	{
+		DirectProfileInvalidationReason reason;
+		DirectShapeFailureStage shapeFailureStage =
+			DirectShapeFailureStage::None;
+		UInt32 encodedCode = 0;
+		UInt8 byteLength = 0;
+		UInt8 byteClass = 0;
+		UInt8 validationFailureMask = 0;
+		bool hasEncodedGlyph = false;
+	};
+
+	inline DirectProfileInvalidationContext MakeDirectProfileInvalidation(
+		DirectProfileInvalidationReason reason,
+		UInt8 validationFailureMask = 0)
+	{
+		DirectProfileInvalidationContext context{ reason };
+		context.validationFailureMask = validationFailureMask;
+		return context;
+	}
+
+	inline DirectProfileInvalidationContext MakeDirectProfileInvalidation(
+		DirectProfileInvalidationReason reason,
+		DirectShapeFailureStage shapeFailureStage)
+	{
+		DirectProfileInvalidationContext context{ reason };
+		context.shapeFailureStage = shapeFailureStage;
+		return context;
+	}
+
+	inline DirectProfileInvalidationContext MakeDirectProfileInvalidation(
+		DirectProfileInvalidationReason reason,
+		UInt32 encodedCode, UInt8 byteLength, UInt8 byteClass,
+		UInt8 validationFailureMask = 0)
+	{
+		DirectProfileInvalidationContext context{ reason };
+		context.encodedCode = encodedCode;
+		context.byteLength = byteLength;
+		context.byteClass = byteClass;
+		context.validationFailureMask = validationFailureMask;
+		context.hasEncodedGlyph = true;
+		return context;
+	}
+
+	inline DirectProfileInvalidationContext MakeDirectProfileInvalidation(
+		DirectProfileInvalidationReason reason,
+		const VectorEncodedGlyph& glyph,
+		UInt8 validationFailureMask = 0)
+	{
+		return MakeDirectProfileInvalidation(reason, glyph.encodedCode,
+			glyph.byteLength, static_cast<UInt8>(glyph.byteClass),
+			validationFailureMask);
+	}
+
+	struct DirectProfileAcquireResult
+	{
+		std::shared_ptr<const SealedDirectFontProfile> profile;
+		DirectProfileAcquireStatus status =
+			DirectProfileAcquireStatus::NotAttempted;
+		UInt8 failureMask = 0;
+		bool slotPresent = false;
+		UInt32 epochExpected = 0;
+		UInt32 epochActual = 0;
+		UInt64 layoutIdentityExpected = 0;
+		UInt64 layoutIdentityActual = 0;
+		UInt32 codePageExpected = 0;
+		UInt32 codePageActual = 0;
+		UInt32 rasterScaleMilliExpected = 0;
+		UInt32 rasterScaleMilliActual = 0;
+	};
+
 	extern std::unordered_map<UInt32, FontConfig> g_configs;
 
 	const FontConfig* FindConfig(UInt32 auiFontId);
@@ -993,10 +1154,18 @@ namespace fonthook::vectorfont
 	SealedDirectGlyphLookup DecodeSealedDirectGlyph(
 		const SealedDirectFontProfile& arProfile,
 		const char* apText, VectorEncodedGlyph& arGlyph);
-	void InvalidateSealedDirectFontProfile(RuntimeFont& arRuntime);
+	void InvalidateSealedDirectFontProfile(RuntimeFont& arRuntime,
+		const DirectProfileInvalidationContext& arContext);
 	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& arRuntime,
+		const std::shared_ptr<const SealedDirectFontProfile>& apExpected,
+		const DirectProfileInvalidationContext& arContext);
+	bool ClearRuntimeSealedDirectProfileIfCurrent(RuntimeFont& arRuntime,
 		const std::shared_ptr<const SealedDirectFontProfile>& apExpected);
+	const char* DirectProfileInvalidationReasonName(
+		DirectProfileInvalidationReason aeReason) noexcept;
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
+	bool HasRuntimePublishedSealedDirectProfile(
+		const RuntimeFont& arRuntime) noexcept;
 	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeDirectRoleLayoutIdentity(RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass);
@@ -1005,10 +1174,10 @@ namespace fonthook::vectorfont
 		std::vector<float>& arFaceBaselines);
 	std::shared_ptr<const SealedDirectFontProfile>
 		LoadRuntimeSealedDirectProfile(const RuntimeFont& arRuntime);
-	std::shared_ptr<const SealedDirectFontProfile>
+	DirectProfileAcquireResult
 		AcquireSealedDirectFontProfile(RuntimeFont& arRuntime,
 			float afRasterScale);
-	std::shared_ptr<const SealedDirectFontProfile>
+	DirectProfileAcquireResult
 		AcquireSealedDirectLayoutProfile(RuntimeFont& arRuntime);
 	void StoreRuntimeSealedDirectProfile(RuntimeFont& arRuntime,
 		std::shared_ptr<const SealedDirectFontProfile> apProfile);

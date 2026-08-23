@@ -424,6 +424,10 @@ namespace fonthook::vectorfont
 
 	struct NativeFontCompositeConstructionWitness
 	{
+		// As in NativeFontPacketTemplate, zero means the direct compiler proved
+		// valid per-vertex reconstruction parameters but they are not uniform.
+		// A complete mixed witness therefore selects Parametric48 without a
+		// redundant post-construction vertex traversal.
 		float uniformSdfSpread = 0.0f;
 		float uniformDistanceParameterScale = 0.0f;
 		UInt8 staticLayerMask = 0;

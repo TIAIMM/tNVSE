@@ -569,7 +569,8 @@ namespace fonthook::vectorfont
 			sealed->atlases, std::move(vertices),
 			result.glyphCount, quadCount, effects,
 			colorContract, facadeColor, tileColor, origin,
-			boundMinimum, boundMaximum, prepareObject);
+			boundMinimum, boundMaximum, prepareObject,
+			result.failureStage);
 		result.outcome = result.shape
 			? DirectAtlasShapeOutcome::Created
 			: DirectAtlasShapeOutcome::Failed;

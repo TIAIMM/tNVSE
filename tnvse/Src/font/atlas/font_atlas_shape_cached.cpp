@@ -172,12 +172,29 @@ namespace fonthook::vectorfont
 			EffectQuality quality)
 		{
 			DirectAtlasShapeBuildResult result;
+			auto failAt = [&](DirectShapeFailureStage stage)
+				-> DirectAtlasShapeBuildResult
+			{
+				result.failureStage = stage;
+				result.outcome = DirectAtlasShapeOutcome::Failed;
+				return result;
+			};
+			auto unavailableAt = [&](DirectShapeFailureStage stage)
+				-> DirectAtlasShapeBuildResult
+			{
+				result.failureStage = stage;
+				result.outcome = DirectAtlasShapeOutcome::Unavailable;
+				return result;
+			};
 			const bool precomposed =
 				maskType == GlyphMaskType::Composite;
 			const bool distanceField =
 				maskType == GlyphMaskType::DistanceField;
 			if (!precomposed && !distanceField)
-				return result;
+			{
+				return unavailableAt(
+					DirectShapeFailureStage::CachedUnsupportedMaskType);
+			}
 
 			const auto& atlases = batch.Atlases();
 			if (!atlases.empty() && atlases[0])
@@ -196,12 +213,20 @@ namespace fonthook::vectorfont
 				result.outcome = DirectAtlasShapeOutcome::Empty;
 				return result;
 			}
-			if (atlases.empty()
-				|| atlases.size() > kMaximumAtlasSnapshotPages
-				|| batch.glyphs.size() != glyphs.size())
+			if (atlases.empty())
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(
+					DirectShapeFailureStage::CachedAtlasListEmpty);
+			}
+			if (atlases.size() > kMaximumAtlasSnapshotPages)
+			{
+				return failAt(DirectShapeFailureStage::
+					CachedAtlasPageLimitExceeded);
+			}
+			if (batch.glyphs.size() != glyphs.size())
+			{
+				return failAt(DirectShapeFailureStage::
+					CachedGlyphBatchSizeMismatch);
 			}
 			const size_t drawableGlyphCount = static_cast<size_t>(std::count_if(
 				batch.glyphs.begin(), batch.glyphs.end(),
@@ -210,11 +235,15 @@ namespace fonthook::vectorfont
 					return !glyph.knownEmpty
 						&& (glyph.placement || glyph.vanillaLetter);
 				}));
-			if (!drawableGlyphCount
-				|| drawableGlyphCount > kNativeFontMaximumArtifactQuads)
+			if (!drawableGlyphCount)
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedDrawableGlyphCountZero);
+			}
+			if (drawableGlyphCount > kNativeFontMaximumArtifactQuads)
+			{
+				return failAt(DirectShapeFailureStage::
+					CachedDrawableGlyphLimitExceeded);
 			}
 			result.glyphCount = static_cast<UInt32>(drawableGlyphCount);
 
@@ -227,21 +256,28 @@ namespace fonthook::vectorfont
 					atlases.size(), UInt32{ 0 },
 					rangeInitializationBytesAvoided))
 				{
-					result.outcome = DirectAtlasShapeOutcome::Failed;
-					return result;
+					return failAt(DirectShapeFailureStage::
+						CachedArgbPagePrefixInitializationFailed);
 				}
 				UInt32 usedPageCount = 0;
 				for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
 				{
 					if (glyph.knownEmpty)
 						continue;
-					if ((!glyph.placement && !glyph.vanillaLetter)
-						|| glyph.atlasPage >= atlases.size()
-						|| glyph.atlasPage >= pageGlyphCounts.size())
+					if (!glyph.placement && !glyph.vanillaLetter)
 					{
-						result.outcome =
-							DirectAtlasShapeOutcome::Failed;
-						return result;
+						return failAt(DirectShapeFailureStage::
+							CachedArgbGlyphSourceMissing);
+					}
+					if (glyph.atlasPage >= atlases.size())
+					{
+						return failAt(DirectShapeFailureStage::
+							CachedArgbAtlasPageOutOfRange);
+					}
+					if (glyph.atlasPage >= pageGlyphCounts.size())
+					{
+						return failAt(DirectShapeFailureStage::
+							CachedArgbPagePrefixOutOfRange);
 					}
 					if (pageGlyphCounts[glyph.atlasPage]++ == 0)
 						++usedPageCount;
@@ -269,17 +305,15 @@ namespace fonthook::vectorfont
 								pageGlyphCount);
 						if (!pageShape)
 						{
-							result.outcome =
-								DirectAtlasShapeOutcome::Failed;
-							return result;
+							return failAt(DirectShapeFailureStage::
+								CachedArgbPageShapeCreationFailed);
 						}
 						break;
 					}
 					if (!pageShape)
 					{
-						result.outcome =
-							DirectAtlasShapeOutcome::Failed;
-						return result;
+						return failAt(DirectShapeFailureStage::
+							CachedArgbPageShapeMissing);
 					}
 
 					result.shape = pageShape;
@@ -310,7 +344,8 @@ namespace fonthook::vectorfont
 				if (!ConfigureShaderEffectBuild(config, rasterScale,
 					quality, suppressEffects, shaderBuild))
 				{
-					return result;
+					return unavailableAt(DirectShapeFailureStage::
+						CachedShaderEffectConfigurationFailed);
 				}
 				effects = std::move(shaderBuild.config);
 				drawShadow =
@@ -338,9 +373,8 @@ namespace fonthook::vectorfont
 							GetDirectGlyphByteClass(instance));
 					if (roleIndex >= rasterProfiles.size())
 					{
-						result.outcome =
-							DirectAtlasShapeOutcome::Failed;
-						return result;
+						return failAt(DirectShapeFailureStage::
+							CachedGlyphRoleOutOfRange);
 					}
 					if (rasterProfileReady[roleIndex])
 						continue;
@@ -349,7 +383,8 @@ namespace fonthook::vectorfont
 						rasterScale, true,
 						rasterProfiles[roleIndex]))
 					{
-						return result;
+						return unavailableAt(DirectShapeFailureStage::
+							CachedRasterProfileResolutionFailed);
 					}
 					rasterProfileReady[roleIndex] = true;
 				}
@@ -367,19 +402,27 @@ namespace fonthook::vectorfont
 			if (!InitializeDirectQuadCountPrefix(counts, atlases.size(),
 				rangeInitializationBytesAvoided))
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedQuadCountPrefixInitializationFailed);
 			}
 			for (const DirectAtlasBatchGlyph& glyph : batch.glyphs)
 			{
 				if (glyph.knownEmpty)
 					continue;
-				if ((!glyph.placement && !glyph.vanillaLetter)
-					|| glyph.atlasPage >= atlases.size()
-					|| glyph.atlasPage >= kMaximumAtlasSnapshotPages)
+				if (!glyph.placement && !glyph.vanillaLetter)
 				{
-					result.outcome = DirectAtlasShapeOutcome::Failed;
-					return result;
+					return failAt(DirectShapeFailureStage::
+						CachedGlyphSourceMissing);
+				}
+				if (glyph.atlasPage >= atlases.size())
+				{
+					return failAt(DirectShapeFailureStage::
+						CachedGlyphAtlasPageOutOfRange);
+				}
+				if (glyph.atlasPage >= kMaximumAtlasSnapshotPages)
+				{
+					return failAt(DirectShapeFailureStage::
+						CachedGlyphPageLimitExceeded);
 				}
 				if (distanceField && shadowHasOffset)
 					++counts[0][glyph.atlasPage];
@@ -399,8 +442,8 @@ namespace fonthook::vectorfont
 					if (counts[kind][page]
 						> kNativeFontMaximumArtifactQuads - physicalQuads)
 					{
-						result.outcome = DirectAtlasShapeOutcome::Failed;
-						return result;
+						return failAt(DirectShapeFailureStage::
+							CachedPhysicalQuadLimitExceeded);
 					}
 					offsets[kind][page] = physicalQuads;
 					cursors[kind][page] = physicalQuads;
@@ -409,8 +452,8 @@ namespace fonthook::vectorfont
 			}
 			if (!physicalQuads)
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedPhysicalQuadCountZero);
 			}
 			result.geometryQuadCount = physicalQuads;
 			result.pageCount = CountUsedDirectAtlasPages(
@@ -440,23 +483,42 @@ namespace fonthook::vectorfont
 				pageSdfSpreads;
 			std::array<bool, kMaximumAtlasSnapshotPages>
 				pageProfileReady;
+			std::array<bool, kMaximumAtlasSnapshotPages>
+				pageSourceScaleUniform;
+			std::array<bool, kMaximumAtlasSnapshotPages>
+				pageSdfSpreadUniform;
+			std::array<bool, kMaximumAtlasSnapshotPages>
+				pageRasterParametersValid;
 			// Scale/spread are read only after the corresponding ready flag has
-			// been set. Precomposed batches never read any of these arrays.
+			// been set. Uniformity and validity are initialized only for live pages.
+			// Precomposed batches never read any of these arrays.
 			rangeInitializationBytesAvoided +=
 				sizeof(pageSourceScales) + sizeof(pageSdfSpreads);
 			if (distanceField)
 			{
 				if (!InitializeDirectPagePrefix(pageProfileReady,
 					atlases.size(), false,
-					rangeInitializationBytesAvoided))
+					rangeInitializationBytesAvoided)
+					|| !InitializeDirectPagePrefix(pageSourceScaleUniform,
+						atlases.size(), true,
+						rangeInitializationBytesAvoided)
+					|| !InitializeDirectPagePrefix(pageSdfSpreadUniform,
+						atlases.size(), true,
+						rangeInitializationBytesAvoided)
+					|| !InitializeDirectPagePrefix(pageRasterParametersValid,
+						atlases.size(), true,
+						rangeInitializationBytesAvoided))
 				{
-					result.outcome = DirectAtlasShapeOutcome::Failed;
-					return result;
+					return failAt(DirectShapeFailureStage::
+						CachedPageProfilePrefixInitializationFailed);
 				}
 			}
 			else
 			{
-				rangeInitializationBytesAvoided += sizeof(pageProfileReady);
+				rangeInitializationBytesAvoided += sizeof(pageProfileReady)
+					+ sizeof(pageSourceScaleUniform)
+					+ sizeof(pageSdfSpreadUniform)
+					+ sizeof(pageRasterParametersValid);
 			}
 			const bool directFullSpanComposite = distanceField
 				&& atlases.size() == 1u && !shadowHasOffset
@@ -491,26 +553,38 @@ namespace fonthook::vectorfont
 					if (roleIndex >= rasterProfiles.size()
 						|| !rasterProfileReady[roleIndex])
 					{
-						result.outcome =
-							DirectAtlasShapeOutcome::Failed;
-						return result;
+						return failAt(DirectShapeFailureStage::
+							CachedRasterProfileMissing);
 					}
 					sourceToLogicalScale =
 						rasterProfiles[roleIndex].sourceToLogicalScale;
-					if (pageProfileReady[page]
-						&& (pageSourceScales[page]
-								!= sourceToLogicalScale
-							|| pageSdfSpreads[page]
-								!= source.placement->sdfSpread))
+					if (pageProfileReady[page])
 					{
-						// Direct ranges are page-contiguous. A profile that mixes
-						// distance parameters within one page remains on the
-						// existing compatibility compiler.
-						return result;
+						pageSourceScaleUniform[page] =
+							pageSourceScaleUniform[page]
+							&& pageSourceScales[page]
+								== sourceToLogicalScale;
+						pageSdfSpreadUniform[page] =
+							pageSdfSpreadUniform[page]
+							&& pageSdfSpreads[page]
+								== source.placement->sdfSpread;
 					}
-					pageProfileReady[page] = true;
-					pageSourceScales[page] = sourceToLogicalScale;
-					pageSdfSpreads[page] = source.placement->sdfSpread;
+					else
+					{
+						// The packet ABI carries both reconstruction parameters per
+						// vertex. Keep one representative for legacy range validation,
+						// while allowing role-local parameters to share this texture.
+						pageProfileReady[page] = true;
+						pageSourceScales[page] = sourceToLogicalScale;
+						pageSdfSpreads[page] = source.placement->sdfSpread;
+					}
+					const float distanceParameterScale =
+						1.0f / sourceToLogicalScale;
+					pageRasterParametersValid[page] =
+						pageRasterParametersValid[page]
+						&& source.placement->sdfSpread > 0u
+						&& std::isfinite(distanceParameterScale)
+						&& distanceParameterScale >= 1.0f;
 				}
 				const NiColorA baseColor =
 					ResolveBaseColor(
@@ -562,16 +636,16 @@ namespace fonthook::vectorfont
 					&& !writeQuad(0, config.shadow.x, config.shadow.y,
 						1u << static_cast<UInt8>(AtlasLayer::Shadow)))
 				{
-					result.outcome = DirectAtlasShapeOutcome::Failed;
-					return result;
+					return failAt(DirectShapeFailureStage::
+						CachedShadowQuadWriteFailed);
 				}
 				const UInt32 bodyQuadIndex = cursors[1][page];
 				if (!writeQuad(1, 0.0f, 0.0f,
-					distanceField ? bodyLayerMask
-						: 1u << static_cast<UInt8>(AtlasLayer::Fill)))
+						distanceField ? bodyLayerMask
+							: 1u << static_cast<UInt8>(AtlasLayer::Fill)))
 				{
-					result.outcome = DirectAtlasShapeOutcome::Failed;
-					return result;
+					return failAt(DirectShapeFailureStage::
+						CachedBodyQuadWriteFailed);
 				}
 				if (distanceField && !directFullSpanComposite)
 				{
@@ -589,8 +663,8 @@ namespace fonthook::vectorfont
 			{
 				RecordFreeTypePerf(
 					FreeTypePerfCounter::DirectShapeVertexCoverageFailure);
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedQuadRangeCoverageFailed);
 			}
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::
@@ -598,8 +672,8 @@ namespace fonthook::vectorfont
 				rangeInitializationBytesAvoided);
 			if (!facadeColorInitialized || !colorContractInitialized)
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedColorContractMissing);
 			}
 
 			auto appendRanges = [&](size_t kind, UInt32 layer,
@@ -661,8 +735,8 @@ namespace fonthook::vectorfont
 			effects.enabled = !effects.ranges.empty();
 			if (!effects.enabled)
 			{
-				result.outcome = DirectAtlasShapeOutcome::Failed;
-				return result;
+				return failAt(DirectShapeFailureStage::
+					CachedDrawRangesEmpty);
 			}
 			std::vector<NativeFontCompositeSpan> compositeSpans;
 			bool compositeReady = false;
@@ -675,15 +749,21 @@ namespace fonthook::vectorfont
 				span.vertexCount = static_cast<UInt32>(vertices.size());
 				span.atlasPage = 0;
 				span.fused = true;
+				const float uniformSdfSpread = pageSdfSpreadUniform[0]
+					? static_cast<float>(pageSdfSpreads[0]) : 0.0f;
 				const float uniformDistanceParameterScale =
-					1.0f / pageSourceScales[0];
+					pageSourceScaleUniform[0]
+						? 1.0f / pageSourceScales[0] : 0.0f;
 				if (bodyLayerMask >= 1u && bodyLayerMask <= 15u
-					&& pageSdfSpreads[0] > 0u
+					&& pageRasterParametersValid[0]
+					&& std::isfinite(uniformSdfSpread)
+					&& uniformSdfSpread >= 0.0f
 					&& std::isfinite(uniformDistanceParameterScale)
-					&& uniformDistanceParameterScale >= 1.0f)
+					&& (uniformDistanceParameterScale == 0.0f
+						|| uniformDistanceParameterScale >= 1.0f))
 				{
 					span.constructionWitness.uniformSdfSpread =
-						static_cast<float>(pageSdfSpreads[0]);
+						uniformSdfSpread;
 					span.constructionWitness.uniformDistanceParameterScale =
 						uniformDistanceParameterScale;
 					span.constructionWitness.staticLayerMask = bodyLayerMask;
@@ -704,7 +784,10 @@ namespace fonthook::vectorfont
 				CompositeConstructionProfile constructionProfile;
 				const CompositeConstructionProfile* constructionProfilePointer =
 					nullptr;
-				if (directShiftedShadowComposite && pageProfileReady[0])
+				if (directShiftedShadowComposite && pageProfileReady[0]
+					&& pageSourceScaleUniform[0]
+					&& pageSdfSpreadUniform[0]
+					&& pageRasterParametersValid[0])
 				{
 					// The shifted union span is appended after the ordinary shadow/body
 					// ranges. Prove only that span here; payload sealing still validates
@@ -742,6 +825,7 @@ namespace fonthook::vectorfont
 				std::move(vertices), result.glyphCount, physicalQuads,
 				effects, colorContract, facadeColor, tileColor, origin,
 				boundMinimum, boundMaximum, prepareObject,
+				result.failureStage,
 				std::move(compositeSpans));
 			result.outcome = result.shape
 				? DirectAtlasShapeOutcome::Created
@@ -771,6 +855,8 @@ namespace fonthook::vectorfont
 				: AtlasRenderMode::ShaderEffects;
 			const UInt32 padding = precomposed
 				? kArgbAtlasPadding : kDistanceFieldAtlasPadding;
+			const UInt8 requestedMask = static_cast<UInt8>(
+				1u << static_cast<UInt8>(maskType));
 			const std::shared_ptr<const SealedDirectFontProfile>
 				sealedBeforeBuild =
 					LoadRuntimeSealedDirectProfile(runtime);
@@ -780,6 +866,7 @@ namespace fonthook::vectorfont
 				&& sealedBeforeBuild->pixelMode == pixelMode
 				&& sealedBeforeBuild->renderMode == renderMode
 				&& sealedBeforeBuild->padding == padding
+				&& (sealedBeforeBuild->effectLayerMask & requestedMask)
 				&& std::all_of(glyphs.begin(), glyphs.end(),
 					[](const AtlasGlyphInstance& instance)
 					{
@@ -798,36 +885,22 @@ namespace fonthook::vectorfont
 			if (!GetDirectAtlasGlyphBatch(runtime, glyphs, maskType,
 				rasterScale, pixelMode, renderMode, padding, batch))
 			{
-				const bool sealedStillCurrent = sealedBatchExpected
-					&& LoadRuntimeSealedDirectProfile(runtime).get()
-						== sealedBeforeBuild.get();
-				if (sealedStillCurrent)
-				{
-					InvalidateSealedDirectFontProfileIfCurrent(
-						runtime, sealedBeforeBuild);
-					result.outcome =
-						DirectAtlasShapeOutcome::Failed;
-				}
+				// The resolver invalidates the profile at the exact table/slot/page
+				// check when immutable data is corrupt. A cache miss or unsupported
+				// mask is local to this batch and must not revoke layout state.
+				if (sealedBatchExpected)
+					result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
 			result = CreateDirectCachedLetterShapeFromBatch(
 				font, runtime, glyphs, batch, rasterScale,
 				prepareObject, tileColor, suppressEffects,
 				maskType, quality);
-			const bool sealedStillCurrent = sealedBatchExpected
-				&& LoadRuntimeSealedDirectProfile(runtime).get()
-					== sealedBeforeBuild.get();
-			if (sealedStillCurrent
+			if (sealedBatchExpected
 				&& result.outcome
 					== DirectAtlasShapeOutcome::Unavailable)
 			{
 				result.outcome = DirectAtlasShapeOutcome::Failed;
-			}
-			if (sealedStillCurrent
-				&& result.outcome == DirectAtlasShapeOutcome::Failed)
-			{
-				InvalidateSealedDirectFontProfileIfCurrent(
-					runtime, sealedBeforeBuild);
 			}
 			return result;
 		}
@@ -872,7 +945,8 @@ namespace fonthook::vectorfont
 				glyphs, maskType, rasterScale, pixelMode,
 				renderMode, padding, batch))
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				// Exact immutable-profile failures are handled by the resolver.
+				// Do not turn a batch-local capability miss into global revocation.
 				result.outcome = DirectAtlasShapeOutcome::Failed;
 				return result;
 			}
@@ -882,8 +956,6 @@ namespace fonthook::vectorfont
 				maskType, quality);
 			if (result.outcome == DirectAtlasShapeOutcome::Unavailable)
 				result.outcome = DirectAtlasShapeOutcome::Failed;
-			if (result.outcome == DirectAtlasShapeOutcome::Failed)
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
 			return result;
 		}
 }

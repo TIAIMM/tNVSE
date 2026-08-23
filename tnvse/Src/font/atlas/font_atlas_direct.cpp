@@ -20,9 +20,230 @@ namespace fonthook::vectorfont
 	namespace implementation::font_atlas_direct {}
 	using namespace implementation::font_atlas_direct;
 
-	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime)
+	const char* DirectProfileInvalidationReasonName(
+		DirectProfileInvalidationReason reason) noexcept
 	{
+		switch (reason)
+		{
+		case DirectProfileInvalidationReason::AcquireEpochMismatch:
+			return "acquire-epoch-mismatch";
+		case DirectProfileInvalidationReason::AcquireLayoutIdentityMismatch:
+			return "acquire-layout-identity-mismatch";
+		case DirectProfileInvalidationReason::AcquireCodePageMismatch:
+			return "acquire-codepage-mismatch";
+		case DirectProfileInvalidationReason::AcquireProfileInvalid:
+			return "acquire-profile-invalid";
+		case DirectProfileInvalidationReason::DecodeProfileValidationFailed:
+			return "decode-profile-validation-failed";
+		case DirectProfileInvalidationReason::DecodeGlyphInvalid:
+			return "decode-glyph-invalid";
+		case DirectProfileInvalidationReason::ProfilePublicationFailed:
+			return "profile-publication-failed";
+		case DirectProfileInvalidationReason::SealedBatchProfileContractMismatch:
+			return "sealed-batch-profile-contract-mismatch";
+		case DirectProfileInvalidationReason::SealedBatchCommandInvalid:
+			return "sealed-batch-command-invalid";
+		case DirectProfileInvalidationReason::SealedBatchSlotMismatch:
+			return "sealed-batch-slot-mismatch";
+		case DirectProfileInvalidationReason::SealedBatchMaskIncompatible:
+			return "sealed-batch-mask-incompatible";
+		case DirectProfileInvalidationReason::SealedBatchTextureIndexInvalid:
+			return "sealed-batch-texture-index-invalid";
+		case DirectProfileInvalidationReason::SealedBatchGlyphRecordMismatch:
+			return "sealed-batch-glyph-record-mismatch";
+		case DirectProfileInvalidationReason::SealedBatchLayerInvalid:
+			return "sealed-batch-layer-invalid";
+		case DirectProfileInvalidationReason::SealedBatchPageOrdinalInvalid:
+			return "sealed-batch-page-ordinal-invalid";
+		case DirectProfileInvalidationReason::SealedBatchSnapshotPlacementInvalid:
+			return "sealed-batch-snapshot-placement-invalid";
+		case DirectProfileInvalidationReason::SealedBatchPlacementMaskMismatch:
+			return "sealed-batch-placement-mask-mismatch";
+		case DirectProfileInvalidationReason::DirectBatchProfileContractMismatch:
+			return "direct-batch-profile-contract-mismatch";
+		case DirectProfileInvalidationReason::DirectBatchTableMissing:
+			return "direct-batch-table-missing";
+		case DirectProfileInvalidationReason::DirectBatchSlotOutOfRange:
+			return "direct-batch-slot-out-of-range";
+		case DirectProfileInvalidationReason::DirectBatchMaskIncompatible:
+			return "direct-batch-mask-incompatible";
+		case DirectProfileInvalidationReason::DirectBatchTextureIndexInvalid:
+			return "direct-batch-texture-index-invalid";
+		case DirectProfileInvalidationReason::DirectBatchGlyphRecordMismatch:
+			return "direct-batch-glyph-record-mismatch";
+		case DirectProfileInvalidationReason::DirectBatchLayerInvalid:
+			return "direct-batch-layer-invalid";
+		case DirectProfileInvalidationReason::DirectBatchPageOrdinalInvalid:
+			return "direct-batch-page-ordinal-invalid";
+		case DirectProfileInvalidationReason::DirectBatchSnapshotPlacementInvalid:
+			return "direct-batch-snapshot-placement-invalid";
+		case DirectProfileInvalidationReason::DirectBatchPlacementMaskMismatch:
+			return "direct-batch-placement-mask-mismatch";
+		case DirectProfileInvalidationReason::VectorBuilderGlyphMetricsUnavailable:
+			return "vector-builder-glyph-metrics-unavailable";
+		case DirectProfileInvalidationReason::VectorBuilderLookupInvalid:
+			return "vector-builder-lookup-invalid";
+		case DirectProfileInvalidationReason::VectorBuilderPreparedBatchInvalid:
+			return "vector-builder-prepared-batch-invalid";
+		case DirectProfileInvalidationReason::AtlasShapeBatchUnavailable:
+			return "atlas-shape-batch-unavailable";
+		case DirectProfileInvalidationReason::AtlasShapeBuildFailed:
+			return "atlas-shape-build-failed";
+		case DirectProfileInvalidationReason::AtlasRenderUnsupportedProfile:
+			return "atlas-render-unsupported-profile";
+		case DirectProfileInvalidationReason::AtlasRenderShapeFailed:
+			return "atlas-render-shape-failed";
+		case DirectProfileInvalidationReason::LayoutHyphenInvalid:
+			return "layout-hyphen-invalid";
+		case DirectProfileInvalidationReason::LayoutGlyphInvalid:
+			return "layout-glyph-invalid";
+		case DirectProfileInvalidationReason::LayoutSpaceInvalid:
+			return "layout-space-invalid";
+		default:
+			return "unknown";
+		}
+	}
+
+	static UInt8 GetDirectProfileValidationFailureMask(
+		const std::shared_ptr<const SealedDirectFontProfile>& profile,
+		UInt32 epochExpected, UInt64 layoutExpected,
+		UInt32 codePageExpected)
+	{
+		if (!profile)
+			return 0;
+		UInt8 mask = 0;
+		if (profile->validityEpoch != epochExpected)
+			mask |= kDirectProfileFailureEpoch;
+		if (profile->layoutIdentity != layoutExpected)
+			mask |= kDirectProfileFailureLayoutIdentity;
+		if (profile->codePage != codePageExpected)
+			mask |= kDirectProfileFailureCodePage;
+		if (!IsSealedDirectProfileValid(*profile))
+			mask |= kDirectProfileFailureProfileInvalid;
+		return mask;
+	}
+
+	static void PopulateDirectProfileAcquireSnapshot(
+		RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& profile,
+		DirectProfileAcquireResult& result)
+	{
+		AtlasState& state = State();
+		result.slotPresent = profile != nullptr;
+		result.epochExpected = state.directProfileEpoch.load(
+			std::memory_order_acquire);
+		result.layoutIdentityExpected =
+			GetRuntimeDirectLayoutIdentity(runtime);
+		result.codePageExpected = GetFreeTypeTextCodePage();
+		if (!profile)
+			return;
+		result.epochActual = profile->validityEpoch;
+		result.layoutIdentityActual = profile->layoutIdentity;
+		result.codePageActual = profile->codePage;
+		result.rasterScaleMilliActual = profile->scaleMilli;
+	}
+
+	static void LogDirectProfileAcquireFailure(RuntimeFont& runtime,
+		const DirectProfileAcquireResult& result)
+	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return;
+		const FreeTypeLongTextTrace* trace = GetActiveFreeTypeLongTextTrace();
+		// An empty slot is the normal state before this runtime publishes its first
+		// sealed profile. It used to emit once per layout probe during startup,
+		// even though there was no trace to diagnose. Keep it observable for an
+		// active long-text trace and after a previously published slot disappears,
+		// while retaining unconditional diagnostics for real mismatches.
+		if (result.status == DirectProfileAcquireStatus::MissingRuntimeSlot
+			&& !trace
+			&& !HasRuntimePublishedSealedDirectProfile(runtime))
+		{
+			return;
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: sealed direct profile acquire failed font=%u traceId=%u status=%s mismatchMask=0x%02X slotPresent=%u epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u scaleMilliExpected=%u scaleMilliActual=%u thread=%u",
+			GetRuntimeConfig(runtime).fontId, trace ? trace->traceId : 0,
+			DirectProfileAcquireStatusName(result.status),
+			static_cast<UInt32>(result.failureMask),
+			result.slotPresent ? 1u : 0u,
+			result.epochExpected, result.epochActual,
+			static_cast<unsigned long long>(result.layoutIdentityExpected),
+			static_cast<unsigned long long>(result.layoutIdentityActual),
+			result.codePageExpected, result.codePageActual,
+			result.rasterScaleMilliExpected,
+			result.rasterScaleMilliActual, GetCurrentThreadId());
+	}
+
+	static void LogDirectProfileInvalidation(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& candidate,
+		const std::shared_ptr<const SealedDirectFontProfile>& slotBefore,
+		const DirectProfileInvalidationContext& context,
+		bool conditional, bool cleared)
+	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return;
+		AtlasState& state = State();
+		const UInt32 epochExpected = state.directProfileEpoch.load(
+			std::memory_order_acquire);
+		const UInt64 layoutExpected =
+			GetRuntimeDirectLayoutIdentity(runtime);
+		const UInt32 codePageExpected = GetFreeTypeTextCodePage();
+		const UInt8 mismatchMask = context.validationFailureMask
+			| GetDirectProfileValidationFailureMask(candidate,
+				epochExpected, layoutExpected, codePageExpected);
+		const FreeTypeLongTextTrace* trace = GetActiveFreeTypeLongTextTrace();
+		const bool candidateCurrent = candidate
+			&& slotBefore.get() == candidate.get();
+		const char* encodedRole = !context.hasEncodedGlyph ? "none"
+			: context.byteClass
+				== static_cast<UInt8>(VectorFontByteClass::DoubleByte)
+					? "doubleByte" : "singleByte";
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: sealed direct profile invalidated font=%u traceId=%u api=%s reason=%s failureStage=%s failureStageCode=%u encodedPresent=%u encoded=0x%04X encodedBytes=%u encodedRole=%s mismatchMask=0x%02X slotPresent=%u candidateCurrent=%u cleared=%u slotIdentity=%016llX profileIdentity=%016llX epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u profilesAvailable=%u profileValid=%u thread=%u",
+			GetRuntimeConfig(runtime).fontId, trace ? trace->traceId : 0,
+			conditional ? "if-current" : "force",
+			DirectProfileInvalidationReasonName(context.reason),
+			DirectShapeFailureStageName(context.shapeFailureStage),
+			static_cast<UInt32>(context.shapeFailureStage),
+			context.hasEncodedGlyph ? 1u : 0u, context.encodedCode,
+			static_cast<UInt32>(context.byteLength), encodedRole,
+			static_cast<UInt32>(mismatchMask), slotBefore ? 1u : 0u,
+			candidateCurrent ? 1u : 0u, cleared ? 1u : 0u,
+			static_cast<unsigned long long>(
+				slotBefore ? slotBefore->identity : 0),
+			static_cast<unsigned long long>(
+				candidate ? candidate->identity : 0),
+			epochExpected, candidate ? candidate->validityEpoch : 0,
+			static_cast<unsigned long long>(layoutExpected),
+			static_cast<unsigned long long>(
+				candidate ? candidate->layoutIdentity : 0),
+			codePageExpected, candidate ? candidate->codePage : 0,
+			state.directProfilesAvailable.load(
+				std::memory_order_acquire) ? 1u : 0u,
+			candidate && IsSealedDirectProfileValid(*candidate) ? 1u : 0u,
+			GetCurrentThreadId());
+	}
+
+	void InvalidateSealedDirectFontProfile(RuntimeFont& runtime,
+		const DirectProfileInvalidationContext& context)
+	{
+		const std::shared_ptr<const SealedDirectFontProfile> current =
+			LoadRuntimeSealedDirectProfile(runtime);
 		StoreRuntimeSealedDirectProfile(runtime, {});
+		LogDirectProfileInvalidation(runtime, current, current,
+			context, false, current != nullptr);
+	}
+
+	void InvalidateSealedDirectFontProfileIfCurrent(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& expected,
+		const DirectProfileInvalidationContext& context)
+	{
+		const std::shared_ptr<const SealedDirectFontProfile> slotBefore =
+			LoadRuntimeSealedDirectProfile(runtime);
+		const bool cleared = ClearRuntimeSealedDirectProfileIfCurrent(
+			runtime, expected);
+		LogDirectProfileInvalidation(runtime, expected, slotBefore,
+			context, true, cleared);
 	}
 
 	bool IsSealedDirectFontProfileUsable(RuntimeFont& runtime,
@@ -44,43 +265,80 @@ namespace fonthook::vectorfont
 			&& IsSealedDirectProfileValid(*sealed);
 	}
 
-	std::shared_ptr<const SealedDirectFontProfile>
+	DirectProfileAcquireResult
 		AcquireSealedDirectLayoutProfile(RuntimeFont& runtime)
 	{
-		std::shared_ptr<const SealedDirectFontProfile> sealed =
+		DirectProfileAcquireResult result;
+		const std::shared_ptr<const SealedDirectFontProfile> sealed =
 			LoadRuntimeSealedDirectProfile(runtime);
+		PopulateDirectProfileAcquireSnapshot(runtime, sealed, result);
 		if (!sealed)
-			return {};
-		AtlasState& state = State();
-		if (sealed->validityEpoch
-				!= state.directProfileEpoch.load(
-					std::memory_order_acquire)
-			|| sealed->layoutIdentity
-				!= GetRuntimeDirectLayoutIdentity(runtime)
-			|| sealed->codePage != GetFreeTypeTextCodePage()
-			|| !IsSealedDirectProfileValid(*sealed))
 		{
-			InvalidateSealedDirectFontProfile(runtime);
-			return {};
+			result.status = DirectProfileAcquireStatus::MissingRuntimeSlot;
+			LogDirectProfileAcquireFailure(runtime, result);
+			return result;
 		}
-		return sealed;
+		result.failureMask = GetDirectProfileValidationFailureMask(
+			sealed, result.epochExpected,
+			result.layoutIdentityExpected, result.codePageExpected);
+		if (result.failureMask)
+		{
+			DirectProfileInvalidationReason reason =
+				DirectProfileInvalidationReason::AcquireProfileInvalid;
+			if (result.failureMask & kDirectProfileFailureEpoch)
+			{
+				result.status = DirectProfileAcquireStatus::EpochMismatch;
+				reason = DirectProfileInvalidationReason::AcquireEpochMismatch;
+			}
+			else if (result.failureMask
+				& kDirectProfileFailureLayoutIdentity)
+			{
+				result.status =
+					DirectProfileAcquireStatus::LayoutIdentityMismatch;
+				reason = DirectProfileInvalidationReason::
+					AcquireLayoutIdentityMismatch;
+			}
+			else if (result.failureMask & kDirectProfileFailureCodePage)
+			{
+				result.status = DirectProfileAcquireStatus::CodePageMismatch;
+				reason = DirectProfileInvalidationReason::AcquireCodePageMismatch;
+			}
+			else
+			{
+				result.status = DirectProfileAcquireStatus::ProfileInvalid;
+			}
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+				MakeDirectProfileInvalidation(reason, result.failureMask));
+			LogDirectProfileAcquireFailure(runtime, result);
+			return result;
+		}
+		result.status = DirectProfileAcquireStatus::Acquired;
+		result.profile = sealed;
+		return result;
 	}
 
-	std::shared_ptr<const SealedDirectFontProfile>
+	DirectProfileAcquireResult
 		AcquireSealedDirectFontProfile(RuntimeFont& runtime,
 			float rasterScale)
 	{
-		std::shared_ptr<const SealedDirectFontProfile> sealed =
+		DirectProfileAcquireResult result =
 			AcquireSealedDirectLayoutProfile(runtime);
-		if (!sealed)
-			return {};
+		if (!result.profile)
+			return result;
 		const UInt32 scaleMilli =
 			std::isfinite(rasterScale) && rasterScale > 0.0f
 				? static_cast<UInt32>(std::lround(
 					rasterScale * 1000.0f))
 				: 0;
-		return scaleMilli && sealed->scaleMilli == scaleMilli
-			? sealed : std::shared_ptr<const SealedDirectFontProfile>();
+		result.rasterScaleMilliExpected = scaleMilli;
+		if (!scaleMilli || result.profile->scaleMilli != scaleMilli)
+		{
+			result.status = DirectProfileAcquireStatus::RasterScaleMismatch;
+			result.failureMask |= kDirectProfileFailureRasterScale;
+			result.profile.reset();
+			LogDirectProfileAcquireFailure(runtime, result);
+		}
+		return result;
 	}
 
 	SealedDirectGlyphLookup DecodeSealedDirectGlyph(
@@ -110,20 +368,34 @@ namespace fonthook::vectorfont
 		glyph.encodedCode = encodedCode;
 		const size_t roleIndex =
 			static_cast<size_t>(glyph.byteClass);
-		if (roleIndex >= sealed.tables.size()
-			|| !sealed.tables[roleIndex])
+		if (roleIndex >= sealed.tables.size())
 		{
 			return SealedDirectGlyphLookup::Invalid;
+		}
+		if (!sealed.tables[roleIndex])
+		{
+			// A sealed profile may legitimately omit an encoded role that the
+			// current layout never prewarmed. This glyph cannot use the profile,
+			// but the profile remains valid for its published roles.
+			return SealedDirectGlyphLookup::Unavailable;
 		}
 		const DirectAtlasGlyphTable& table =
 			*sealed.tables[roleIndex];
 		size_t slot = 0;
 		if (!ResolveDirectGlyphSlot(glyph.byteClass,
-				encodedCode, slot)
-			|| slot >= table.SlotCount()
-			|| slot > std::numeric_limits<UInt16>::max())
+				encodedCode, slot))
+		{
+			return SealedDirectGlyphLookup::Unavailable;
+		}
+		if (slot > std::numeric_limits<UInt16>::max())
 		{
 			return SealedDirectGlyphLookup::Invalid;
+		}
+		if (slot >= table.SlotCount())
+		{
+			// Slot-domain coverage is a capability boundary. The immutable table
+			// is still usable by every encoded glyph that it does cover.
+			return SealedDirectGlyphLookup::Unavailable;
 		}
 		glyph.directSlot = static_cast<UInt16>(slot);
 		if (slot >= table.faceIndices.size())
@@ -198,14 +470,50 @@ namespace fonthook::vectorfont
 			|| sealed->codePage != GetFreeTypeTextCodePage()
 			|| !IsSealedDirectProfileValid(*sealed))
 		{
-			InvalidateSealedDirectFontProfile(runtime);
+			const UInt32 epochExpected = state.directProfileEpoch.load(
+				std::memory_order_acquire);
+			const UInt64 layoutExpected =
+				GetRuntimeDirectLayoutIdentity(runtime);
+			const UInt32 codePageExpected = GetFreeTypeTextCodePage();
+			const UInt8 failureMask = GetDirectProfileValidationFailureMask(
+				sealed, epochExpected, layoutExpected,
+				codePageExpected);
+			VectorEncodedGlyph diagnosticGlyph;
+			if (text && *text)
+			{
+				UInt32 encodedCode = 0;
+				if (text[1]
+					&& TryDecodeFreeTypeDoubleByte(text, encodedCode))
+				{
+					diagnosticGlyph.encodedCode = encodedCode;
+					diagnosticGlyph.byteLength = 2;
+					diagnosticGlyph.byteClass =
+						VectorFontByteClass::DoubleByte;
+				}
+				else
+				{
+					diagnosticGlyph.encodedCode =
+						static_cast<UInt8>(text[0]);
+					diagnosticGlyph.byteLength = 1;
+					diagnosticGlyph.byteClass =
+						VectorFontByteClass::SingleByte;
+				}
+			}
+			InvalidateSealedDirectFontProfile(runtime,
+				MakeDirectProfileInvalidation(
+					DirectProfileInvalidationReason::
+						DecodeProfileValidationFailed,
+					diagnosticGlyph, failureMask));
 			return SealedDirectGlyphLookup::Unavailable;
 		}
 		const SealedDirectGlyphLookup result =
 			DecodeSealedDirectGlyph(*sealed, text, glyph);
 		if (result == SealedDirectGlyphLookup::Invalid)
 		{
-			InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfile(runtime,
+				MakeDirectProfileInvalidation(
+					DirectProfileInvalidationReason::DecodeGlyphInvalid,
+					glyph));
 		}
 		return result;
 	}
@@ -238,7 +546,9 @@ namespace fonthook::vectorfont
 			|| sealed->renderMode != renderMode
 			|| sealed->padding != padding)
 		{
-			InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+			// This builder/profile pairing is stale or incompatible. Acquisition
+			// performs the authoritative epoch/layout/codepage validity checks;
+			// raster/configuration mismatches are local to this draw.
 			return false;
 		}
 		const UInt8 requestedMask = static_cast<UInt8>(
@@ -260,7 +570,8 @@ namespace fonthook::vectorfont
 				|| glyph.directSlot
 					== std::numeric_limits<UInt16>::max())
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				// A malformed prepared command invalidates this synchronous batch,
+				// not the immutable profile from which other sidecars were built.
 				result.Clear();
 				return false;
 			}
@@ -274,7 +585,8 @@ namespace fonthook::vectorfont
 				|| expectedSlot != glyph.directSlot
 				|| expectedSlot >= table.SlotCount())
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				// The encoded-slot witness belongs to the prepared command. Reject a
+				// stale command without revoking the still-valid shared profile.
 				result.Clear();
 				return false;
 			}
@@ -288,7 +600,8 @@ namespace fonthook::vectorfont
 			{
 				if (maskType != GlyphMaskType::Composite)
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					// Vanilla-letter tables have no distance-field layer. This is a
+					// caller capability mismatch, not profile corruption.
 					result.Clear();
 					return false;
 				}
@@ -303,7 +616,12 @@ namespace fonthook::vectorfont
 					|| letter.iTextureIndex
 						>= kMaximumAtlasSnapshotPages)
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								SealedBatchTextureIndexInvalid,
+							glyph.encodedCode, glyph.byteLength,
+							glyph.byteClass));
 					result.Clear();
 					return false;
 				}
@@ -319,7 +637,12 @@ namespace fonthook::vectorfont
 					|| letter.encodedCode != glyph.encodedCode
 					|| letter.byteClass != glyph.byteClass)
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								SealedBatchGlyphRecordMismatch,
+							glyph.encodedCode, glyph.byteLength,
+							glyph.byteClass));
 					result.Clear();
 					return false;
 				}
@@ -333,7 +656,12 @@ namespace fonthook::vectorfont
 				if (!layer || layer->pageSlot
 						>= kMaximumAtlasSnapshotPages)
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								SealedBatchLayerInvalid,
+							glyph.encodedCode, glyph.byteLength,
+							glyph.byteClass));
 					result.Clear();
 					return false;
 				}
@@ -345,7 +673,12 @@ namespace fonthook::vectorfont
 				sealed->pageOrdinals[roleIndex][localPage];
 			if (ordinal >= sealed->atlases.size())
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+					MakeDirectProfileInvalidation(
+						DirectProfileInvalidationReason::
+							SealedBatchPageOrdinalInvalid,
+						glyph.encodedCode, glyph.byteLength,
+						glyph.byteClass));
 				result.Clear();
 				return false;
 			}
@@ -357,7 +690,12 @@ namespace fonthook::vectorfont
 				|| output.snapshotPlacementIndex
 					>= page->compactSnapshot->placements.size())
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+					MakeDirectProfileInvalidation(
+						DirectProfileInvalidationReason::
+							SealedBatchSnapshotPlacementInvalid,
+						glyph.encodedCode, glyph.byteLength,
+						glyph.byteClass));
 				result.Clear();
 				return false;
 			}
@@ -367,7 +705,12 @@ namespace fonthook::vectorfont
 			if (placement.maskType
 				!= static_cast<UInt8>(maskType))
 			{
-				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+				InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed,
+					MakeDirectProfileInvalidation(
+						DirectProfileInvalidationReason::
+							SealedBatchPlacementMaskMismatch,
+						glyph.encodedCode, glyph.byteLength,
+						glyph.byteClass));
 				result.Clear();
 				return false;
 			}
@@ -422,7 +765,8 @@ namespace fonthook::vectorfont
 				if (roleIndex >= sealed->tables.size()
 					|| !sealed->tables[roleIndex])
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					// A generic glyph may target a role that was not part of this
+					// profile. Let the dynamic atlas handle the batch locally.
 					result.Clear();
 					return false;
 				}
@@ -441,7 +785,16 @@ namespace fonthook::vectorfont
 				const size_t glyphSlot = glyph.directSlot;
 				if (glyphSlot >= table.SlotCount())
 				{
-					InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+					// directSlot is carried by this decoded glyph. An out-of-range
+					// witness is a local cache miss, not evidence against the table.
+					result.Clear();
+					return false;
+				}
+				size_t expectedSlot = 0;
+				if (!ResolveDirectGlyphSlot(glyph.byteClass,
+						glyph.encodedCode, expectedSlot)
+					|| expectedSlot != glyphSlot)
+				{
 					result.Clear();
 					return false;
 				}
@@ -455,8 +808,8 @@ namespace fonthook::vectorfont
 				{
 					if (maskType != GlyphMaskType::Composite)
 					{
-						InvalidateSealedDirectFontProfileIfCurrent(
-							runtime, sealed);
+						// The requested representation is absent from a vanilla
+						// table; retain the table for compatible draws.
 						result.Clear();
 						return false;
 					}
@@ -472,7 +825,11 @@ namespace fonthook::vectorfont
 							>= kMaximumAtlasSnapshotPages)
 					{
 						InvalidateSealedDirectFontProfileIfCurrent(
-							runtime, sealed);
+							runtime, sealed,
+							MakeDirectProfileInvalidation(
+								DirectProfileInvalidationReason::
+									DirectBatchTextureIndexInvalid,
+								glyph));
 						result.Clear();
 						return false;
 					}
@@ -490,7 +847,11 @@ namespace fonthook::vectorfont
 							!= static_cast<UInt8>(glyph.byteClass))
 					{
 						InvalidateSealedDirectFontProfileIfCurrent(
-							runtime, sealed);
+							runtime, sealed,
+							MakeDirectProfileInvalidation(
+								DirectProfileInvalidationReason::
+									DirectBatchGlyphRecordMismatch,
+								glyph));
 						result.Clear();
 						return false;
 					}
@@ -505,7 +866,11 @@ namespace fonthook::vectorfont
 							>= kMaximumAtlasSnapshotPages)
 					{
 						InvalidateSealedDirectFontProfileIfCurrent(
-							runtime, sealed);
+							runtime, sealed,
+							MakeDirectProfileInvalidation(
+								DirectProfileInvalidationReason::
+									DirectBatchLayerInvalid,
+								glyph));
 						result.Clear();
 						return false;
 					}
@@ -518,7 +883,11 @@ namespace fonthook::vectorfont
 				if (ordinal >= sealed->atlases.size())
 				{
 					InvalidateSealedDirectFontProfileIfCurrent(
-						runtime, sealed);
+						runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								DirectBatchPageOrdinalInvalid,
+							glyph));
 					result.Clear();
 					return false;
 				}
@@ -531,7 +900,11 @@ namespace fonthook::vectorfont
 						>= page->compactSnapshot->placements.size())
 				{
 					InvalidateSealedDirectFontProfileIfCurrent(
-						runtime, sealed);
+						runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								DirectBatchSnapshotPlacementInvalid,
+							glyph));
 					result.Clear();
 					return false;
 				}
@@ -542,7 +915,11 @@ namespace fonthook::vectorfont
 					!= static_cast<UInt8>(maskType))
 				{
 					InvalidateSealedDirectFontProfileIfCurrent(
-						runtime, sealed);
+						runtime, sealed,
+						MakeDirectProfileInvalidation(
+							DirectProfileInvalidationReason::
+								DirectBatchPlacementMaskMismatch,
+							glyph));
 					result.Clear();
 					return false;
 				}
@@ -555,7 +932,9 @@ namespace fonthook::vectorfont
 		}
 		if (sealed)
 		{
-			InvalidateSealedDirectFontProfileIfCurrent(runtime, sealed);
+			// Most commonly this is a raster-scale/configuration mismatch. Keep
+			// the sealed slot for draws matching its immutable contract and use
+			// the dynamic atlas for this batch.
 			return false;
 		}
 

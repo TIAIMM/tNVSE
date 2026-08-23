@@ -933,7 +933,10 @@ namespace implementation::font_atlas_direct
 				runtime, rasterScale, pinnedProfile))
 		{
 			pinnedProfile.reset();
-			InvalidateSealedDirectFontProfile(runtime);
+			InvalidateSealedDirectFontProfile(runtime,
+				MakeDirectProfileInvalidation(
+					DirectProfileInvalidationReason::
+						ProfilePublicationFailed));
 			return false;
 		}
 		ReleaseSealedRuntimeFreeTypeState(runtime);

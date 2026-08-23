@@ -152,7 +152,10 @@ namespace fonthook::vectorfont
 			&& profile->pixelMode == AtlasPixelMode::A8;
 		if (!precomposed && !distanceField && !cpuEffects)
 		{
-			InvalidateSealedDirectFontProfileIfCurrent(runtime, profile);
+			InvalidateSealedDirectFontProfileIfCurrent(runtime, profile,
+				MakeDirectProfileInvalidation(
+					DirectProfileInvalidationReason::
+						AtlasRenderUnsupportedProfile));
 			if (diagnostics)
 				diagnostics->outcome =
 					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
@@ -228,11 +231,15 @@ namespace fonthook::vectorfont
 			}
 			return nullptr;
 		default:
-			InvalidateSealedDirectFontProfileIfCurrent(runtime, profile);
+			// Shape compilation and renderer capability are artifact-local. The
+			// batch resolver already revokes the profile at precise immutable-data
+			// failures, so a generic failure here must not disable future sidecars.
 			if (diagnostics)
 			{
 				diagnostics->outcome =
 					GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
+				diagnostics->directShapeFailureStage =
+					direct.failureStage;
 				diagnostics->shaderAtlasOrShapeFailed =
 					distanceField;
 			}
@@ -345,6 +352,8 @@ namespace fonthook::vectorfont
 			{
 				if (diagnostics)
 				{
+					diagnostics->directShapeFailureStage =
+						directShape.failureStage;
 					diagnostics->shaderAtlasOrShapeFailed = true;
 					diagnostics->outcome =
 						GlyphAtlasBuildOutcome::AtlasOrShapeFailure;
@@ -472,6 +481,8 @@ namespace fonthook::vectorfont
 				}
 				if (diagnostics)
 				{
+					diagnostics->directShapeFailureStage =
+						directShape.failureStage;
 					diagnostics->cpuQuadsBuilt =
 						directShape.geometryQuadCount != 0;
 					diagnostics->cpuQuadCount =

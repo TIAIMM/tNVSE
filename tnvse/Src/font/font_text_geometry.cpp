@@ -83,7 +83,7 @@ namespace fonthook
 		const SInt64 measuredWorkTicks = preprocessTicks + layoutTicks
 			+ geometryTicks;
 		gLog.FormattedMessage(
-			"tnvse_freetype_long_text_perf: id=%u font=%d sourceBytes=%u preparedBytes=%u chars=%u lines=%u route=%s routeInitial=%s routeReason=%s sidecar=%u sidecarReason=%s sidecarRequested=%u directProfile=%u sidecarPublished=%u sidecarCaptured=%u sidecarRejected=%u sidecarConsumed=%u sidecarUnits=%u failureOffset=%u failureOffsetDomain=%s failureEncoded=0x%04X failureBytes=%u failureRole=%s builderFailureEncoded=0x%04X builderFailureBytes=%u builderFailureRole=%s directGlyphs=%u genericGlyphs=%u atlasOutcome=%s atlasOutcomeCode=%u shapeCreated=%u preprocessUs=%.3f layoutUs=%.3f geometryScanUs=%.3f finishUs=%.3f geometryUs=%.3f workUs=%.3f wallUs=%.3f",
+			"tnvse_freetype_long_text_perf: id=%u font=%d sourceBytes=%u preparedBytes=%u chars=%u lines=%u route=%s routeInitial=%s routeReason=%s sidecar=%u sidecarReason=%s sidecarRequested=%u directProfile=%u profileAcquire=%s profileAcquireMask=0x%02X profileSlotPresent=%u profileEpochExpected=%u profileEpochActual=%u profileLayoutExpected=%016llX profileLayoutActual=%016llX profileCodePageExpected=%u profileCodePageActual=%u sidecarPublished=%u sidecarCaptured=%u sidecarRejected=%u sidecarConsumed=%u sidecarUnits=%u failureOffset=%u failureOffsetDomain=%s failureEncoded=0x%04X failureBytes=%u failureRole=%s builderFailureEncoded=0x%04X builderFailureBytes=%u builderFailureRole=%s directGlyphs=%u genericGlyphs=%u atlasOutcome=%s atlasOutcomeCode=%u failureStage=%s failureStageCode=%u shapeCreated=%u preprocessUs=%.3f layoutUs=%.3f geometryScanUs=%.3f finishUs=%.3f geometryUs=%.3f workUs=%.3f wallUs=%.3f",
 			trace.traceId,
 			trace.fontId,
 			trace.sourceByteCount,
@@ -97,6 +97,18 @@ namespace fonthook
 			vectorfont::PreparedTextSidecarReasonName(trace.sidecarReason),
 			trace.sidecarRequested ? 1u : 0u,
 			trace.sidecarDirectProfileAcquired ? 1u : 0u,
+			vectorfont::DirectProfileAcquireStatusName(
+				trace.sidecarAcquireStatus),
+			static_cast<UInt32>(trace.sidecarAcquireFailureMask),
+			trace.sidecarProfileSlotPresent ? 1u : 0u,
+			trace.sidecarProfileEpochExpected,
+			trace.sidecarProfileEpochActual,
+			static_cast<unsigned long long>(
+				trace.sidecarProfileLayoutExpected),
+			static_cast<unsigned long long>(
+				trace.sidecarProfileLayoutActual),
+			trace.sidecarProfileCodePageExpected,
+			trace.sidecarProfileCodePageActual,
 			trace.sidecarPublished ? 1u : 0u,
 			trace.sidecarCaptured ? 1u : 0u,
 			trace.sidecarRejected ? 1u : 0u,
@@ -117,6 +129,10 @@ namespace fonthook
 			vectorfont::VectorTextBuildOutcomeName(
 				trace.builderAtlasOutcome),
 			static_cast<UInt32>(trace.builderAtlasOutcome),
+			vectorfont::DirectShapeFailureStageName(
+				static_cast<vectorfont::DirectShapeFailureStage>(
+					trace.builderShapeFailureStage)),
+			static_cast<UInt32>(trace.builderShapeFailureStage),
 			trace.builderShapeCreated ? 1u : 0u,
 			LongTextTicksToMicroseconds(preprocessTicks),
 			LongTextTicksToMicroseconds(layoutTicks),

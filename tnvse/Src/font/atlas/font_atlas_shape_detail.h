@@ -206,6 +206,7 @@ namespace fonthook::vectorfont
 		const NiColorA& facadeColor, const NiColorA& tileColor,
 		const NiPoint3& origin, const NiPoint3& boundMinimum,
 		const NiPoint3& boundMaximum, bool prepareObject,
+		DirectShapeFailureStage& failureStage,
 		std::vector<NativeFontCompositeSpan>&& compositeSpans = {});
 	NiColorA UnpackNativeBaseColor(UInt32 color);
 	const NiPoint3& GetDirectGlyphPen(const AtlasGlyphInstance& glyph);
