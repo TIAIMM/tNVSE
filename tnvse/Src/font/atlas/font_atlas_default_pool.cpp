@@ -187,9 +187,12 @@ namespace fonthook::vectorfont
 					return true;
 				state.defaultPoolMaintenancePending.store(
 					true, std::memory_order_release);
+				const bool nativeRecoveryDeferred =
+					DeferInterruptedNativeFontRendererResetRecovery(
+						"default-pool-publication-timeout");
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: cancelled renderer reset after DEFAULT atlas publication barrier timed out waitedPublications=%u timeoutMs=2000",
-					waitedPublications);
+					"tnvse_freetype_font: cancelled renderer reset after DEFAULT atlas publication barrier timed out waitedPublications=%u timeoutMs=2000 nativeRecoveryDeferred=%u",
+					waitedPublications, nativeRecoveryDeferred ? 1u : 0u);
 				// NiDX9Renderer::Reset invokes before callbacks as callback(1, data)
 				// and aborts the reset when one returns false. No DEFAULT resources
 				// have been released yet, so cancellation is the only safe timeout.
@@ -404,6 +407,22 @@ namespace fonthook::vectorfont
 			|| State().defaultPoolShutdown)
 			return;
 		InitializeDefaultPoolAtlasLifecycle();
+		bool orphanedBefore = false;
+		{
+			std::lock_guard<std::mutex> lock(
+				State().defaultPoolPublicationMutex);
+			orphanedBefore = State().defaultPoolResetInProgress;
+		}
+		if (orphanedBefore)
+		{
+			// The retail reset path is synchronous.  If MainGameLoop can run while
+			// the before marker is still set, either Reset itself failed or another
+			// plugin stopped the callback list.  Execute the missing rebuild half so
+			// publications cannot remain closed for the lifetime of the process.
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: recovered orphaned DEFAULT atlas reset before phase source=main-loop");
+			DefaultPoolResetCallback(false, nullptr);
+		}
 		if (!State().defaultPoolMaintenancePending.load(std::memory_order_acquire))
 			return;
 		static UInt32 retryFrame = 0;

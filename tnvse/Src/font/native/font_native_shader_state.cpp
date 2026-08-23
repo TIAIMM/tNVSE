@@ -101,7 +101,7 @@ namespace fonthook::vectorfont
 			const NativeShaderGeneration* generation)
 		{
 			NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
-			if (ShaderState().resetInProgress.load(std::memory_order_acquire))
+			if (ShaderState().resetLifecycle.InProgress())
 				return false;
 			IDirect3DDevice9* device = renderer ? renderer->GetD3DDevice() : nullptr;
 			return GenerationResourcesReady(generation)

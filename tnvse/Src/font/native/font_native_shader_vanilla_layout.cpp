@@ -228,7 +228,7 @@ namespace fonthook::vectorfont
 				|| generation->deviceEpoch != token.deviceEpoch
 				|| ShaderState().deviceEpoch.load(std::memory_order_acquire)
 					!= token.deviceEpoch
-				|| ShaderState().resetInProgress.load(std::memory_order_acquire)
+				|| ShaderState().resetLifecycle.InProgress()
 				|| generation->runtimeFault.load(std::memory_order_acquire)
 				|| generation->renderer != renderer || generation->device != device
 				|| !IsVanillaLayoutGenerationReady(generation, layoutKind)

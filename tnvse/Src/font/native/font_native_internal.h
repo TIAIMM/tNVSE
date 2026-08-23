@@ -1362,6 +1362,7 @@ namespace fonthook::vectorfont
 	void NotifyNativeFontAtlasTextureMutation();
 
 	bool InitializeNativeFontRenderer(bool forceAttempt, bool reportFailures);
+	bool DeferInterruptedNativeFontRendererResetRecovery(const char* reason);
 	void HandleNativeFontShaderRendererMainLoop();
 	void HandleNativeFontShaderLoaderMessage(UInt32 messageType);
 	bool IsNativeFontShaderRendererAvailable();

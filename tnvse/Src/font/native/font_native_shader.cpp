@@ -51,9 +51,28 @@ namespace fonthook::vectorfont
 	}
 	}
 
+	bool DeferInterruptedNativeFontRendererResetRecovery(const char* reason)
+	{
+		// Retail NiDX9Renderer::Reset (0xE736B0) returns immediately when any
+		// before callback reports false.  It does not invoke the matching after
+		// callback for callbacks that already released their resources.  Reopen
+		// native publication now and force a rebuild at the next main-loop pump.
+		if (!ShaderState().resetLifecycle.DeferInterruptedRecovery())
+		{
+			return false;
+		}
+		NativeShaderGeneration* current = ShaderState().publishedGeneration.load(
+			std::memory_order_acquire);
+		gLog.FormattedMessage(
+			"tnvse_freetype_native: interrupted renderer reset recovery deferred reason=%s generation=%u deviceEpoch=%u",
+			reason ? reason : "unknown", current ? current->id : 0,
+			ShaderState().deviceEpoch.load(std::memory_order_acquire));
+		return true;
+	}
+
 	bool InitializeNativeFontRenderer(bool forceAttempt, bool reportFailures)
 	{
-		if (ShaderState().resetInProgress.load(std::memory_order_acquire)
+		if (ShaderState().resetLifecycle.InProgress()
 			|| !g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeNativeAtlas)
 			return false;
 		if (!forceAttempt)
@@ -65,7 +84,7 @@ namespace fonthook::vectorfont
 		}
 
 		std::lock_guard<std::mutex> lock(ShaderState().initializationMutex);
-		if (ShaderState().resetInProgress.load(std::memory_order_acquire))
+		if (ShaderState().resetLifecycle.InProgress())
 			return false;
 		NativeShaderGeneration* current = ShaderState().publishedGeneration.load(
 			std::memory_order_acquire);
@@ -159,6 +178,21 @@ namespace fonthook::vectorfont
 	{
 		if (!g_bEnableFreeTypeFontRendering || !g_bEnableFreeTypeNativeAtlas)
 			return;
+		// The engine executes reset callbacks synchronously on the renderer/main
+		// thread.  A pending before phase observed by a later MainGameLoop message
+		// therefore cannot still be live: the reset attempt either failed or a
+		// foreign callback aborted the chain before our after phase was reached.
+		const auto recovery =
+			ShaderState().resetLifecycle.ClaimForMainLoop();
+		if (recovery.orphanedBefore)
+		{
+			NativeShaderGeneration* interrupted =
+				ShaderState().publishedGeneration.load(std::memory_order_acquire);
+			gLog.FormattedMessage(
+				"tnvse_freetype_native: recovered orphaned renderer reset before phase source=main-loop generation=%u deviceEpoch=%u",
+				interrupted ? interrupted->id : 0,
+				ShaderState().deviceEpoch.load(std::memory_order_acquire));
+		}
 		NativeShaderGeneration* current = ShaderState().publishedGeneration.load(
 			std::memory_order_acquire);
 		NiDX9Renderer* renderer = NiDX9Renderer::GetSingleton();
@@ -166,7 +200,9 @@ namespace fonthook::vectorfont
 		const bool deviceChanged = current && device
 			&& (current->renderer != renderer || current->device != device);
 		if (!GenerationMatchesCurrentDevice(current))
-			InitializeNativeFontRenderer(deviceChanged, false);
+			InitializeNativeFontRenderer(
+				recovery.recoveryPending || deviceChanged,
+				recovery.recoveryPending);
 	}
 
 	void HandleNativeFontShaderLoaderMessage(UInt32 messageType)
@@ -206,7 +242,7 @@ namespace fonthook::vectorfont
 		NativeShaderGeneration* generation = ShaderState().publishedGeneration.load(
 			std::memory_order_acquire);
 		if (!generation
-			|| ShaderState().resetInProgress.load(std::memory_order_acquire)
+			|| ShaderState().resetLifecycle.InProgress()
 			|| generation->runtimeFault.load(std::memory_order_acquire)
 			|| !generation->renderer || !generation->device
 			|| !generation->declaration || !generation->d3dDeclaration
@@ -247,7 +283,7 @@ namespace fonthook::vectorfont
 		NativeShaderGeneration* current = ShaderState().publishedGeneration.load(
 			std::memory_order_acquire);
 		return current && current->id == generation
-			&& !ShaderState().resetInProgress.load(std::memory_order_acquire)
+			&& !ShaderState().resetLifecycle.InProgress()
 			&& !current->runtimeFault.load(std::memory_order_acquire);
 	}
 

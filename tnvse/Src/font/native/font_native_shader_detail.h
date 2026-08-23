@@ -1,6 +1,7 @@
 #pragma once
 
 #include "font_native_internal.h"
+#include "font_reset_recovery_latch.h"
 
 #include "load_config.h"
 #include "plugin_dependencies.h"
@@ -433,7 +434,7 @@ namespace fonthook::vectorfont::implementation::font_native_shader
 		std::atomic<UInt32> deviceEpoch{ 1 };
 		DWORD lastInitializationAttempt = 0;
 		std::atomic<bool> invalidVtableLogged{ false };
-		std::atomic<bool> resetInProgress{ false };
+		RendererResetRecoveryLatch resetLifecycle;
 		std::atomic<UInt32> standardV2ProofLogGeneration{ 0 };
 		NiDX9Renderer* resetRenderer = nullptr;
 	};

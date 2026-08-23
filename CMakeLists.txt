@@ -90,6 +90,23 @@ if(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS)
     COMMAND $<TARGET_FILE:tnvse_dictionary_ui_syntax_tests>)
 endif()
 
+option(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS
+  "Build the deterministic renderer reset recovery state tests" OFF)
+if(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS)
+  enable_testing()
+  add_executable(tnvse_renderer_reset_recovery_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/renderer_reset_recovery_tests.cpp")
+  target_compile_features(tnvse_renderer_reset_recovery_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_renderer_reset_recovery_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/native")
+  target_compile_options(tnvse_renderer_reset_recovery_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_renderer_reset_recovery_tests)
+  set_target_properties(tnvse_renderer_reset_recovery_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME renderer_reset_recovery
+    COMMAND $<TARGET_FILE:tnvse_renderer_reset_recovery_tests>)
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

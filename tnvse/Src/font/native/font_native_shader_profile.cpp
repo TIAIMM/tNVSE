@@ -941,9 +941,9 @@ namespace fonthook::vectorfont
 		{
 			if (beforeReset)
 			{
+				ShaderState().resetLifecycle.Begin();
 				const UInt32 deviceEpoch = ShaderState().deviceEpoch.fetch_add(
 					1u, std::memory_order_acq_rel) + 1u;
-				ShaderState().resetInProgress.store(true, std::memory_order_release);
 				ResetFreeTypeGpuTiming();
 				InvalidateNativeFontRingResources(
 					NativeFontFallbackReason::DeviceReset);
@@ -961,7 +961,7 @@ namespace fonthook::vectorfont
 				return true;
 			}
 
-			ShaderState().resetInProgress.store(false, std::memory_order_release);
+			ShaderState().resetLifecycle.Complete();
 			if (!InitializeNativeFontRenderer(true, true))
 			{
 				gLog.FormattedMessage(
