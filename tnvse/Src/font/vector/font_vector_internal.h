@@ -1311,6 +1311,7 @@ namespace fonthook::vectorfont
 		RuntimeFont& arRuntime, float afRasterScale, bool& arResult);
 	FontPrewarmPumpStatus RunFontPrewarmLoadingBarrier();
 	bool IsFontPrewarmStopRequested();
+	void RequestFontPrewarmStop();
 	void ShutdownFontPrewarmWorker();
 	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,

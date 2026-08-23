@@ -124,6 +124,23 @@ if(TNVSE_BUILD_OWNER_THREAD_SHUTDOWN_TESTS)
     COMMAND $<TARGET_FILE:tnvse_owner_thread_shutdown_tests>)
 endif()
 
+option(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS
+  "Build the deterministic font-prewarm cancellation/watchdog tests" OFF)
+if(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS)
+  enable_testing()
+  add_executable(tnvse_font_prewarm_run_control_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_prewarm_run_control_tests.cpp")
+  target_compile_features(tnvse_font_prewarm_run_control_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_font_prewarm_run_control_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font")
+  target_compile_options(tnvse_font_prewarm_run_control_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_font_prewarm_run_control_tests)
+  set_target_properties(tnvse_font_prewarm_run_control_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME font_prewarm_run_control
+    COMMAND $<TARGET_FILE:tnvse_font_prewarm_run_control_tests>)
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

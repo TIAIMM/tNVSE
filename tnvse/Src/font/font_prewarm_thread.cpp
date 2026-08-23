@@ -1,4 +1,5 @@
 #include "font_prewarm_detail.h"
+#include "font_prewarm_run_control.h"
 
 #include <chrono>
 #include <cstring>
@@ -7,6 +8,12 @@ namespace fonthook::vectorfont
 {
 	namespace implementation::font_prewarm
 	{
+		constexpr ULONGLONG kMainThreadAtlasQueueTimeoutMs = 5000;
+		constexpr ULONGLONG kMainThreadAtlasExecutionTimeoutMs = 120000;
+		constexpr ULONGLONG kPrewarmNoProgressTimeoutMs = 180000;
+		constexpr ULONGLONG kPrewarmOverallTimeoutMs = 15ull * 60ull * 1000ull;
+		constexpr DWORD kPrewarmWorkerExitGraceMs = 2000;
+
 		enum class MainThreadRequestState : UInt8
 		{
 			Idle,
@@ -14,6 +21,7 @@ namespace fonthook::vectorfont
 			Executing,
 			Completed,
 			Cancelled,
+			Abandoned,
 		};
 
 		struct MainThreadAtlasRequest
@@ -24,6 +32,7 @@ namespace fonthook::vectorfont
 			PrewarmAtlasRequestKind kind = PrewarmAtlasRequestKind::LoadSnapshot;
 			UInt64 nextToken = 1;
 			UInt64 token = 0;
+			UInt64 runToken = 0;
 			UInt32 fontId = 0;
 			float rasterScale = 1.0f;
 			DWORD mainThreadId = 0;
@@ -38,11 +47,15 @@ namespace fonthook::vectorfont
 		struct PrewarmCoordinatorState
 		{
 			std::mutex mutex;
+			std::timed_mutex workerReapMutex;
 			std::condition_variable condition;
 			std::thread* worker = nullptr;
 			std::deque<UInt32> pendingFontIds;
 			std::unordered_set<UInt32> pendingFontSet;
 			std::atomic_bool stopRequested{ false };
+			PrewarmRunControl runControl;
+			UInt64 nextRunToken = 1;
+			UInt64 runToken = 0;
 			DWORD mainThreadId = 0;
 			FontPrewarmPumpStatus lastStatus = FontPrewarmPumpStatus::Idle;
 			bool started = false;
@@ -50,6 +63,8 @@ namespace fonthook::vectorfont
 			bool settled = false;
 			bool barrierClosed = false;
 			bool exitRequested = false;
+			bool workerExited = false;
+			bool workerQuarantined = false;
 		};
 
 		MainThreadAtlasRequest& MainThreadRequest()
@@ -65,6 +80,8 @@ namespace fonthook::vectorfont
 			static PrewarmCoordinatorState* state = new PrewarmCoordinatorState;
 			return *state;
 		}
+
+		void RequestFontPrewarmStop();
 
 		const char* PrewarmAtlasRequestKindName(PrewarmAtlasRequestKind kind)
 		{
@@ -148,7 +165,10 @@ namespace fonthook::vectorfont
 			PrewarmAtlasRequestResult& result)
 		{
 			result = {};
-			if (IsFontPrewarmStopRequested())
+			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
+			const UInt64 runToken = coordinator.runControl.ActiveToken();
+			if (IsFontPrewarmStopRequested()
+				|| !coordinator.runControl.CanCommit(runToken))
 				return false;
 
 			MainThreadAtlasRequest& request = MainThreadRequest();
@@ -168,6 +188,7 @@ namespace fonthook::vectorfont
 				if (!request.nextToken)
 					request.nextToken = 1;
 				request.token = token;
+				request.runToken = runToken;
 				request.kind = kind;
 				request.fontId = fontId;
 				request.rasterScale = rasterScale;
@@ -183,23 +204,75 @@ namespace fonthook::vectorfont
 
 			std::array<char, 160> error{};
 			DWORD mainThreadId = 0;
+			const char* cancellationReason = nullptr;
 			for (;;)
 			{
 				std::unique_lock<std::mutex> lock(request.mutex);
 				request.condition.wait_for(lock, std::chrono::milliseconds(250),
-					[&request, token]
+					[&request, &coordinator, token, runToken]
 					{
 						return request.token != token
-							|| request.state == MainThreadRequestState::Completed
-							|| request.state == MainThreadRequestState::Cancelled;
+							|| (request.state != MainThreadRequestState::Queued
+								&& request.state != MainThreadRequestState::Executing)
+							|| coordinator.runControl.StopRequested(runToken);
 					});
-				if (request.token != token
-					|| request.state == MainThreadRequestState::Cancelled)
+				if (request.token != token)
+					return false;
+
+				const ULONGLONG now = GetTickCount64();
+				if (request.state == MainThreadRequestState::Queued
+					&& now - request.queuedAt >= kMainThreadAtlasQueueTimeoutMs)
 				{
-					if (request.token == token)
+					request.state = MainThreadRequestState::Cancelled;
+					cancellationReason = "queue-timeout";
+				}
+				else if (request.state == MainThreadRequestState::Executing
+					&& request.executingAt
+					&& now - request.executingAt
+						>= kMainThreadAtlasExecutionTimeoutMs)
+				{
+					request.state = MainThreadRequestState::Abandoned;
+					cancellationReason = "execution-timeout";
+				}
+				else if (coordinator.runControl.StopRequested(runToken))
+				{
+					if (request.state == MainThreadRequestState::Queued)
+						request.state = MainThreadRequestState::Cancelled;
+					else if (request.state == MainThreadRequestState::Executing)
+						request.state = MainThreadRequestState::Abandoned;
+					cancellationReason = "run-cancelled";
+				}
+
+				if (request.state == MainThreadRequestState::Cancelled
+					|| request.state == MainThreadRequestState::Abandoned)
+				{
+					const bool queuedCancellation =
+						request.state == MainThreadRequestState::Cancelled;
+					if (queuedCancellation)
 						request.state = MainThreadRequestState::Idle;
+					const ULONGLONG queueMs = request.executingAt >= request.queuedAt
+						? request.executingAt - request.queuedAt
+						: now - request.queuedAt;
+					const ULONGLONG executionMs = request.executingAt
+						? now - request.executingAt : 0;
+					lock.unlock();
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: main-thread atlas service cancelled operation=%s font=%u token=%llu run=%llu reason=%s queueMs=%llu executeMs=%llu lateCompletionCommit=closed",
+						PrewarmAtlasRequestKindName(kind), fontId,
+						static_cast<unsigned long long>(token),
+						static_cast<unsigned long long>(runToken),
+						cancellationReason ? cancellationReason : "cancelled",
+						static_cast<unsigned long long>(queueMs),
+						static_cast<unsigned long long>(executionMs));
+					if (cancellationReason
+						&& strcmp(cancellationReason, "run-cancelled") != 0)
+					{
+						RequestFontPrewarmStop();
+					}
 					return false;
 				}
+				if (request.state == MainThreadRequestState::Idle)
+					return false;
 				if (request.state != MainThreadRequestState::Completed)
 					continue;
 
@@ -269,28 +342,35 @@ namespace fonthook::vectorfont
 				std::memory_order_acquire);
 		}
 
-		void FontPrewarmWorkerMain()
+		void FontPrewarmWorkerMain(UInt64 runToken)
 		{
 			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
 			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+			coordinator.runControl.Beat(runToken);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: pre-entry prewarm coordinator started workerThread=%lu priority=below-normal presentation=LoadingMenuThread mainThreadSubmit=barrier-service",
-				static_cast<unsigned long>(GetCurrentThreadId()));
+				"tnvse_freetype_font: pre-entry prewarm coordinator started workerThread=%lu run=%llu priority=below-normal presentation=LoadingMenuThread mainThreadSubmit=barrier-service",
+				static_cast<unsigned long>(GetCurrentThreadId()),
+				static_cast<unsigned long long>(runToken));
 
 			for (;;)
 			{
 				bool failed = false;
 				{
 					std::unique_lock<std::mutex> lock(coordinator.mutex);
-					coordinator.condition.wait(lock, [&coordinator]
+					const bool ready = coordinator.condition.wait_for(lock,
+						std::chrono::milliseconds(250), [&coordinator, runToken]
 					{
 						return coordinator.stopRequested.load(
 								std::memory_order_acquire)
+							|| coordinator.runControl.StopRequested(runToken)
 							|| coordinator.exitRequested
 							|| coordinator.workRequested
 							|| !coordinator.pendingFontIds.empty();
 					});
+					if (!ready)
+						continue;
 					if (coordinator.stopRequested.load(std::memory_order_acquire)
+						|| coordinator.runControl.StopRequested(runToken)
 						|| coordinator.exitRequested)
 					{
 						break;
@@ -301,9 +381,11 @@ namespace fonthook::vectorfont
 
 				for (;;)
 				{
-					if (IsFontPrewarmStopRequested())
+					if (IsFontPrewarmStopRequested()
+						|| coordinator.runControl.StopRequested(runToken))
 						break;
 					const FontPrewarmPumpStatus status = PumpFontPrewarm();
+					coordinator.runControl.Beat(runToken);
 					bool pending = false;
 					{
 						std::lock_guard<std::mutex> lock(coordinator.mutex);
@@ -337,23 +419,28 @@ namespace fonthook::vectorfont
 					}
 					break;
 				}
-				if (IsFontPrewarmStopRequested() || failed)
+				if (IsFontPrewarmStopRequested()
+					|| coordinator.runControl.StopRequested(runToken) || failed)
 					break;
 			}
 
 			{
 				std::lock_guard<std::mutex> lock(coordinator.mutex);
-				if (IsFontPrewarmStopRequested())
+				if (IsFontPrewarmStopRequested()
+					|| coordinator.runControl.StopRequested(runToken))
 				{
 					coordinator.lastStatus = FontPrewarmPumpStatus::Failed;
 					coordinator.settled = true;
 				}
+				coordinator.workerExited = true;
 			}
-			coordinator.condition.notify_all();
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: pre-entry prewarm coordinator stopped workerThread=%lu stopRequested=%u",
+				"tnvse_freetype_font: pre-entry prewarm coordinator stopped workerThread=%lu run=%llu stopRequested=%u",
 				static_cast<unsigned long>(GetCurrentThreadId()),
+				static_cast<unsigned long long>(runToken),
 				IsFontPrewarmStopRequested() ? 1u : 0u);
+			coordinator.runControl.MarkExited(runToken);
+			coordinator.condition.notify_all();
 		}
 
 		void StartFontPrewarmWorker()
@@ -376,22 +463,33 @@ namespace fonthook::vectorfont
 				if (coordinator.started)
 					return;
 				coordinator.started = true;
+				coordinator.stopRequested.store(false, std::memory_order_release);
 				coordinator.workRequested = true;
 				coordinator.settled = false;
 				coordinator.barrierClosed = false;
 				coordinator.exitRequested = false;
+				coordinator.workerExited = false;
+				coordinator.workerQuarantined = false;
 				coordinator.lastStatus = FontPrewarmPumpStatus::Active;
+				coordinator.runToken = coordinator.nextRunToken++;
+				if (!coordinator.nextRunToken)
+					coordinator.nextRunToken = 1;
+				coordinator.runControl.Begin(coordinator.runToken);
 				try
 				{
-					coordinator.worker = new std::thread(&FontPrewarmWorkerMain);
+					coordinator.worker = new std::thread(
+						&FontPrewarmWorkerMain, coordinator.runToken);
 				}
 				catch (...)
 				{
 					delete coordinator.worker;
 					coordinator.worker = nullptr;
 					coordinator.started = false;
+					coordinator.workerExited = true;
 					coordinator.settled = true;
 					coordinator.lastStatus = FontPrewarmPumpStatus::Failed;
+					coordinator.runControl.RequestStop(coordinator.runToken);
+					coordinator.runControl.MarkExited(coordinator.runToken);
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: pre-entry prewarm coordinator creation failed; runtime demand fallback remains available");
 				}
@@ -415,6 +513,7 @@ namespace fonthook::vectorfont
 			MainThreadAtlasRequest& request = MainThreadRequest();
 			PrewarmAtlasRequestKind kind = PrewarmAtlasRequestKind::LoadSnapshot;
 			UInt64 token = 0;
+			UInt64 runToken = 0;
 			UInt32 fontId = 0;
 			float rasterScale = 1.0f;
 			ULONGLONG queuedAt = 0;
@@ -424,6 +523,7 @@ namespace fonthook::vectorfont
 					return;
 				kind = request.kind;
 				token = request.token;
+				runToken = request.runToken;
 				fontId = request.fontId;
 				rasterScale = request.rasterScale;
 				queuedAt = request.queuedAt;
@@ -432,8 +532,15 @@ namespace fonthook::vectorfont
 			{
 				std::lock_guard<std::mutex> lock(request.mutex);
 				if (request.state != MainThreadRequestState::Queued
-					|| request.token != token)
+					|| request.token != token
+					|| !coordinator.runControl.CanCommit(runToken))
 				{
+					if (request.state == MainThreadRequestState::Queued
+						&& request.token == token)
+					{
+						request.state = MainThreadRequestState::Cancelled;
+						request.condition.notify_all();
+					}
 					return;
 				}
 				request.state = MainThreadRequestState::Executing;
@@ -441,8 +548,10 @@ namespace fonthook::vectorfont
 				request.executingAt = GetTickCount64();
 			}
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: main-thread atlas service started operation=%s font=%u mainThread=%lu queueMs=%llu policy=pre-entry-barrier-service",
+				"tnvse_freetype_font: main-thread atlas service started operation=%s font=%u token=%llu run=%llu mainThread=%lu queueMs=%llu policy=pre-entry-barrier-service",
 				PrewarmAtlasRequestKindName(kind), fontId,
+				static_cast<unsigned long long>(token),
+				static_cast<unsigned long long>(runToken),
 				static_cast<unsigned long>(currentThreadId),
 				static_cast<unsigned long long>(GetTickCount64() - queuedAt));
 
@@ -450,20 +559,45 @@ namespace fonthook::vectorfont
 			std::array<char, 160> error{};
 			const bool succeeded = ExecuteMainThreadAtlasOperation(
 				kind, fontId, rasterScale, memoryPressure, error);
+			bool discarded = false;
+			ULONGLONG executionMs = 0;
 			{
 				std::lock_guard<std::mutex> lock(request.mutex);
-				if (request.state != MainThreadRequestState::Executing
-					|| request.token != token)
+				if (request.token != token)
 				{
 					return;
 				}
-				request.succeeded = succeeded;
-				request.memoryPressure = memoryPressure;
-				request.error = error;
-				request.completedAt = GetTickCount64();
-				request.state = MainThreadRequestState::Completed;
+				if (request.state == MainThreadRequestState::Abandoned
+					|| !coordinator.runControl.CanCommit(runToken))
+				{
+					request.completedAt = GetTickCount64();
+					executionMs = request.completedAt - request.executingAt;
+					request.state = MainThreadRequestState::Idle;
+					discarded = true;
+				}
+				else if (request.state != MainThreadRequestState::Executing)
+				{
+					return;
+				}
+				else
+				{
+					request.succeeded = succeeded;
+					request.memoryPressure = memoryPressure;
+					request.error = error;
+					request.completedAt = GetTickCount64();
+					request.state = MainThreadRequestState::Completed;
+				}
 			}
 			request.condition.notify_all();
+			if (discarded)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: main-thread atlas late completion discarded operation=%s font=%u token=%llu run=%llu executeMs=%llu commitGate=closed",
+					PrewarmAtlasRequestKindName(kind), fontId,
+					static_cast<unsigned long long>(token),
+					static_cast<unsigned long long>(runToken),
+					static_cast<unsigned long long>(executionMs));
+			}
 		}
 
 		const char* FontPrewarmPumpStatusName(FontPrewarmPumpStatus status)
@@ -506,14 +640,108 @@ namespace fonthook::vectorfont
 		{
 			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
 			coordinator.stopRequested.store(true, std::memory_order_release);
+			coordinator.runControl.RequestStop(
+				coordinator.runControl.ActiveToken());
 			MainThreadAtlasRequest& request = MainThreadRequest();
 			{
 				std::lock_guard<std::mutex> lock(request.mutex);
 				if (request.state == MainThreadRequestState::Queued)
 					request.state = MainThreadRequestState::Cancelled;
+				else if (request.state == MainThreadRequestState::Executing)
+					request.state = MainThreadRequestState::Abandoned;
 			}
 			request.condition.notify_all();
 			coordinator.condition.notify_all();
+		}
+
+		const char* PrewarmWatchdogReasonName(PrewarmWatchdogReason reason)
+		{
+			switch (reason)
+			{
+			case PrewarmWatchdogReason::NoProgress:
+				return "no-progress";
+			case PrewarmWatchdogReason::OverallDeadline:
+				return "overall-deadline";
+			default:
+				return "none";
+			}
+		}
+
+		bool ReapFontPrewarmWorker(DWORD timeoutMs, bool pumpWindowMessages,
+			bool& quitRequested, int& quitCode)
+		{
+			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
+			std::unique_lock<std::timed_mutex> reapLock(
+				coordinator.workerReapMutex, std::defer_lock);
+			if (!reapLock.try_lock_for(std::chrono::milliseconds(timeoutMs)))
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm worker reap arbitration timed out timeoutMs=%u policy=leave-process-lifetime-thread-owned",
+					timeoutMs);
+				return false;
+			}
+
+			std::thread* worker = nullptr;
+			UInt64 runToken = 0;
+			{
+				std::lock_guard<std::mutex> lock(coordinator.mutex);
+				worker = coordinator.worker;
+				runToken = coordinator.runToken;
+			}
+			if (!worker)
+				return true;
+
+			const ULONGLONG startedAt = GetTickCount64();
+			bool signalled = false;
+			for (;;)
+			{
+				const ULONGLONG elapsed = GetTickCount64() - startedAt;
+				if (elapsed >= timeoutMs)
+					break;
+				const DWORD slice = static_cast<DWORD>(std::min<ULONGLONG>(
+					8, timeoutMs - elapsed));
+				const DWORD waitResult = WaitForSingleObject(
+					worker->native_handle(), slice);
+				if (waitResult == WAIT_OBJECT_0)
+				{
+					signalled = true;
+					break;
+				}
+				if (waitResult == WAIT_FAILED)
+					break;
+				if (pumpWindowMessages && !quitRequested
+					&& PumpPrewarmBarrierWindowMessages(quitCode))
+				{
+					quitRequested = true;
+					RequestFontPrewarmStop();
+				}
+			}
+
+			if (!signalled)
+			{
+				std::lock_guard<std::mutex> lock(coordinator.mutex);
+				coordinator.workerQuarantined = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm worker exit acknowledgement timed out run=%llu timeoutMs=%u heartbeat=%llu policy=no-join-process-lifetime-quarantine",
+					static_cast<unsigned long long>(runToken), timeoutMs,
+					static_cast<unsigned long long>(
+						coordinator.runControl.Heartbeat()));
+				return false;
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(coordinator.mutex);
+				if (coordinator.worker != worker)
+					return false;
+				coordinator.worker = nullptr;
+				coordinator.started = false;
+				coordinator.workerExited = true;
+				coordinator.workerQuarantined = false;
+			}
+			if (worker->joinable())
+				worker->join();
+			delete worker;
+			return true;
 		}
 
 		FontPrewarmPumpStatus RunFontPrewarmLoadingBarrier()
@@ -526,6 +754,7 @@ namespace fonthook::vectorfont
 			const DWORD currentThreadId = GetCurrentThreadId();
 			const ULONGLONG startedAt = GetTickCount64();
 			FontPrewarmPumpStatus status = FontPrewarmPumpStatus::Failed;
+			UInt64 runToken = 0;
 			bool quitRequested = false;
 			int quitCode = 0;
 			{
@@ -544,12 +773,20 @@ namespace fonthook::vectorfont
 					coordinator.barrierClosed = true;
 					return FontPrewarmPumpStatus::Failed;
 				}
+				runToken = coordinator.runToken;
 			}
 
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: DeferredInit pre-entry prewarm barrier begin mainThread=%lu policy=worker-cpu-main-thread-d3d-loading-thread-ui",
-				static_cast<unsigned long>(currentThreadId));
+				"tnvse_freetype_font: DeferredInit pre-entry prewarm barrier begin mainThread=%lu run=%llu noProgressTimeoutMs=%llu overallTimeoutMs=%llu policy=worker-cpu-main-thread-d3d-loading-thread-ui",
+				static_cast<unsigned long>(currentThreadId),
+				static_cast<unsigned long long>(runToken),
+				static_cast<unsigned long long>(kPrewarmNoProgressTimeoutMs),
+				static_cast<unsigned long long>(kPrewarmOverallTimeoutMs));
+			PrewarmProgressWatchdog watchdog(startedAt,
+				coordinator.runControl.Heartbeat(), kPrewarmNoProgressTimeoutMs,
+				kPrewarmOverallTimeoutMs);
 			UInt32 iterations = 0;
+			PrewarmWatchdogReason watchdogReason = PrewarmWatchdogReason::None;
 			for (;;)
 			{
 				if (!quitRequested)
@@ -569,6 +806,25 @@ namespace fonthook::vectorfont
 				if (settled)
 					break;
 
+				watchdogReason = watchdog.Observe(GetTickCount64(),
+					coordinator.runControl.Heartbeat());
+				if (watchdogReason != PrewarmWatchdogReason::None)
+				{
+					status = FontPrewarmPumpStatus::Failed;
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: DeferredInit pre-entry prewarm watchdog fired run=%llu reason=%s elapsedMs=%llu stalledMs=%llu heartbeat=%llu policy=cancel-rollback-runtime-demand",
+						static_cast<unsigned long long>(runToken),
+						PrewarmWatchdogReasonName(watchdogReason),
+						static_cast<unsigned long long>(
+							GetTickCount64() - startedAt),
+						static_cast<unsigned long long>(
+							GetTickCount64() - watchdog.LastProgressAt()),
+						static_cast<unsigned long long>(
+							coordinator.runControl.Heartbeat()));
+					RequestFontPrewarmStop();
+					break;
+				}
+
 				++iterations;
 				if ((iterations & 0x3Fu) == 0)
 					FlushFreeTypeFontDebugLog();
@@ -576,30 +832,39 @@ namespace fonthook::vectorfont
 					MWMO_INPUTAVAILABLE | MWMO_ALERTABLE);
 			}
 
-			std::thread* worker = nullptr;
 			{
 				std::lock_guard<std::mutex> lock(coordinator.mutex);
 				coordinator.barrierClosed = true;
 				coordinator.exitRequested = true;
-				worker = coordinator.worker;
-				coordinator.worker = nullptr;
-				coordinator.started = false;
 			}
+			coordinator.runControl.CloseCommit(runToken);
 			coordinator.condition.notify_all();
-			if (worker)
+			const bool workerReaped = ReapFontPrewarmWorker(
+				kPrewarmWorkerExitGraceMs, true, quitRequested, quitCode);
+			if (!workerReaped)
 			{
-				if (worker->joinable())
-					worker->join();
-				delete worker;
+				RequestFontPrewarmStop();
+				status = FontPrewarmPumpStatus::Failed;
+			}
+			else if (watchdogReason != PrewarmWatchdogReason::None
+				|| quitRequested || IsFontPrewarmStopRequested())
+			{
+				// The worker owns PrewarmRuntime while active.  Roll back only after
+				// the native thread handle is signalled and join therefore cannot wait.
+				ShutdownFontPrewarm();
 			}
 
 			if (quitRequested)
 				PostQuitMessage(quitCode);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: DeferredInit pre-entry prewarm barrier end status=%s iterations=%u elapsedMs=%llu quitRequested=%u",
-				FontPrewarmPumpStatusName(status), iterations,
+				"tnvse_freetype_font: DeferredInit pre-entry prewarm barrier end status=%s run=%llu iterations=%u elapsedMs=%llu quitRequested=%u watchdog=%s workerReaped=%u runtimeFallback=%u",
+				FontPrewarmPumpStatusName(status),
+				static_cast<unsigned long long>(runToken), iterations,
 				static_cast<unsigned long long>(GetTickCount64() - startedAt),
-				quitRequested ? 1u : 0u);
+				quitRequested ? 1u : 0u,
+				PrewarmWatchdogReasonName(watchdogReason),
+				workerReaped ? 1u : 0u,
+				status == FontPrewarmPumpStatus::Failed ? 1u : 0u);
 			return status;
 		}
 
@@ -607,20 +872,23 @@ namespace fonthook::vectorfont
 		{
 			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
 			RequestFontPrewarmStop();
-
-			std::thread* worker = nullptr;
 			{
 				std::lock_guard<std::mutex> lock(coordinator.mutex);
-				worker = coordinator.worker;
-				coordinator.worker = nullptr;
+				coordinator.exitRequested = true;
 			}
-			if (worker)
+			coordinator.condition.notify_all();
+			bool quitRequested = false;
+			int quitCode = 0;
+			if (ReapFontPrewarmWorker(kPrewarmWorkerExitGraceMs, false,
+				quitRequested, quitCode))
 			{
-				if (worker->joinable())
-					worker->join();
-				delete worker;
+				ShutdownFontPrewarm();
 			}
-			ShutdownFontPrewarm();
+			else
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm shutdown left an unresponsive process-lifetime worker quarantined; shared prewarm state is intentionally retained");
+			}
 		}
 	}
 
@@ -634,6 +902,11 @@ namespace fonthook::vectorfont
 	bool IsFontPrewarmStopRequested()
 	{
 		return implementation::font_prewarm::IsFontPrewarmStopRequested();
+	}
+
+	void RequestFontPrewarmStop()
+	{
+		implementation::font_prewarm::RequestFontPrewarmStop();
 	}
 
 	void ShutdownFontPrewarmWorker()

@@ -54,11 +54,29 @@ namespace fonthook::vectorfont
 		void PublishRuntimeReadiness(bool accumulatorReady,
 			bool immediateReady, bool shaderReady)
 		{
-			while (s_runtimeReadiness.writer.test_and_set(
-				std::memory_order_acquire))
+			bool writerAcquired = false;
+			for (UInt32 attempt = 0; attempt < 1024; ++attempt)
 			{
+				if (!s_runtimeReadiness.writer.test_and_set(
+					std::memory_order_acquire))
+				{
+					writerAcquired = true;
+					break;
+				}
 				YieldProcessor();
 			}
+			if (!writerAcquired)
+			{
+				// A lost writer must make rendering fail closed, never pin another
+				// engine thread in an unbounded publication spin.
+				s_runtimeReadiness.ready.store(false, std::memory_order_release);
+				return;
+			}
+			struct ReleaseWriter
+			{
+				std::atomic_flag& writer;
+				~ReleaseWriter() { writer.clear(std::memory_order_release); }
+			} releaseWriter{ s_runtimeReadiness.writer };
 			RecordFreeTypePerf(
 				FreeTypePerfCounter::StructuralReadinessFullAudit);
 			NativeFontRendererReadinessView rendererView;
@@ -98,7 +116,6 @@ namespace fonthook::vectorfont
 			s_runtimeReadiness.sequence.fetch_add(
 				1, std::memory_order_release);
 			s_runtimeReadiness.ready.store(ready, std::memory_order_release);
-			s_runtimeReadiness.writer.clear(std::memory_order_release);
 		}
 
 		bool LoadRuntimeReadiness(

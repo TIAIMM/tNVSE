@@ -1179,7 +1179,6 @@ namespace fonthook::vectorfont
 	{
 		FreeTypeState state;
 		std::vector<PrewarmWorkerFace> faces;
-		const RuntimeFont* runtimeToken = nullptr;
 
 		PrewarmRasterWorkerContext() = default;
 		PrewarmRasterWorkerContext(const PrewarmRasterWorkerContext&) = delete;
@@ -1195,13 +1194,8 @@ namespace fonthook::vectorfont
 			state.library = nullptr;
 		}
 
-		bool Prepare(const RuntimeFont* runtime)
+		bool Prepare()
 		{
-			if (runtimeToken != runtime)
-			{
-				faces.clear();
-				runtimeToken = runtime;
-			}
 			if (!state.library && FT_Init_FreeType(&state.library))
 				return false;
 			if (faces.capacity() < 8u)
@@ -1210,13 +1204,19 @@ namespace fonthook::vectorfont
 		}
 	};
 
-	// GetPrewarmGlyphBitmaps is synchronously driven by the single prewarm host
-	// thread. Contexts are never shared by two batch workers at once. Both the
-	// contexts and auxiliary threads survive only across raster batches for the
-	// current font and are stopped before atlas finalization or memory recovery.
-	static std::vector<std::unique_ptr<PrewarmRasterWorkerContext>>
-		s_prewarmRasterWorkerContexts;
-	using PrewarmRasterWorkerTask = void(*)(void*, UInt32) noexcept;
+	constexpr DWORD kPrewarmRasterBatchTimeoutMs = 120000;
+	constexpr DWORD kPrewarmRasterPoolStopTimeoutMs = 2000;
+
+	// Every dispatched batch is heap-owned. A worker that outlives a timeout keeps
+	// only this immutable task snapshot and its worker-local FreeType state alive;
+	// it never retains the coordinator's stack or the live RuntimeFont graph.
+	class PrewarmRasterBatchTask
+	{
+	public:
+		virtual ~PrewarmRasterBatchTask() = default;
+		virtual void Run(UInt32 workerIndex) noexcept = 0;
+		virtual void Cancel() noexcept = 0;
+	};
 
 	class PrewarmRasterWorkerPool
 	{
@@ -1225,16 +1225,16 @@ namespace fonthook::vectorfont
 		{
 			requestedWorkers = std::clamp<UInt32>(
 				requestedWorkers, 1, kMaximumPrewarmRasterWorkers);
-			const UInt32 requestedAuxiliary = requestedWorkers - 1u;
 			std::lock_guard<std::mutex> lock(m_mutex);
-			if (m_stopping || m_batchActive)
-				return 1;
-			while (m_workers.size() < requestedAuxiliary)
+			if (m_stopping || m_poisoned || m_batchActive)
+				return 0;
+			while (m_workers.size() < requestedWorkers)
 			{
 				const UInt32 workerIndex =
-					static_cast<UInt32>(m_workers.size() + 1u);
+					static_cast<UInt32>(m_workers.size());
 				try
 				{
+					++m_liveWorkers;
 					m_workers.emplace_back(
 						[this, workerIndex]
 						{
@@ -1243,91 +1243,149 @@ namespace fonthook::vectorfont
 				}
 				catch (...)
 				{
+					--m_liveWorkers;
 					break;
 				}
 			}
 			return static_cast<UInt32>(std::min<size_t>(
-				requestedAuxiliary, m_workers.size()) + 1u);
+				requestedWorkers, m_workers.size()));
 		}
 
-		void Execute(UInt32 workerCount, PrewarmRasterWorkerTask task,
-			void* context) noexcept
+		bool Execute(UInt32 workerCount,
+			const std::shared_ptr<PrewarmRasterBatchTask>& task) noexcept
 		{
-			if (!task)
-				return;
-			std::lock_guard<std::mutex> dispatchLock(m_dispatchMutex);
+			if (!task || !workerCount)
+				return false;
+			std::unique_lock<std::timed_mutex> dispatchLock(
+				m_dispatchMutex, std::defer_lock);
+			if (!dispatchLock.try_lock_for(
+				std::chrono::milliseconds(kPrewarmRasterPoolStopTimeoutMs)))
+			{
+				task->Cancel();
+				return false;
+			}
 			workerCount = std::clamp<UInt32>(
 				workerCount, 1, kMaximumPrewarmRasterWorkers);
-			UInt32 auxiliaryWorkers = 0;
 			{
 				std::lock_guard<std::mutex> lock(m_mutex);
-				if (!m_stopping && !m_batchActive)
+				if (m_stopping || m_poisoned || m_batchActive
+					|| m_workers.empty())
 				{
-					auxiliaryWorkers = static_cast<UInt32>(
-						std::min<size_t>(workerCount - 1u, m_workers.size()));
-					if (auxiliaryWorkers)
-					{
-						m_task = task;
-						m_taskContext = context;
-						m_activeAuxiliaryWorkers = auxiliaryWorkers;
-						m_completedAuxiliaryWorkers = 0;
-						m_batchActive = true;
-						if (++m_generation == 0)
-							++m_generation;
-					}
+					task->Cancel();
+					return false;
 				}
-			}
-			if (!auxiliaryWorkers)
-			{
-				task(context, 0);
-				return;
+				m_activeWorkers = static_cast<UInt32>(std::min<size_t>(
+					workerCount, m_workers.size()));
+				m_completedWorkers = 0;
+				m_task = task;
+				m_batchActive = true;
+				if (++m_generation == 0)
+					++m_generation;
 			}
 
 			m_workAvailable.notify_all();
-			task(context, 0);
+			bool completed = false;
 			{
 				std::unique_lock<std::mutex> lock(m_mutex);
-				m_batchCompleted.wait(lock, [this]
+				completed = m_batchCompleted.wait_for(lock,
+					std::chrono::milliseconds(kPrewarmRasterBatchTimeoutMs), [this]
 				{
-					return m_completedAuxiliaryWorkers
-						>= m_activeAuxiliaryWorkers;
+					return m_stopping || m_completedWorkers >= m_activeWorkers;
 				});
+				completed = completed && !m_stopping
+					&& m_completedWorkers >= m_activeWorkers;
+				if (!completed)
+				{
+					task->Cancel();
+					m_poisoned = true;
+					m_stopping = true;
+				}
 				m_task = nullptr;
-				m_taskContext = nullptr;
-				m_activeAuxiliaryWorkers = 0;
-				m_completedAuxiliaryWorkers = 0;
+				m_activeWorkers = 0;
+				m_completedWorkers = 0;
 				m_batchActive = false;
 			}
+			if (!completed)
+				m_workAvailable.notify_all();
+			return completed;
 		}
 
 		void Stop() noexcept
 		{
-			// Serialize teardown with a possible in-flight batch. Normal prewarm
-			// ownership already calls Stop between batches; this also makes shutdown
-			// safe if a future caller requests it concurrently.
-			std::lock_guard<std::mutex> dispatchLock(m_dispatchMutex);
-			std::vector<std::thread> workers;
+			std::unique_lock<std::timed_mutex> dispatchLock(
+				m_dispatchMutex, std::defer_lock);
+			if (!dispatchLock.try_lock_for(
+				std::chrono::milliseconds(kPrewarmRasterPoolStopTimeoutMs)))
 			{
-				std::lock_guard<std::mutex> lock(m_mutex);
+				{
+					std::lock_guard<std::mutex> lock(m_mutex);
+					m_poisoned = true;
+					m_stopping = true;
+					if (m_task)
+						m_task->Cancel();
+					m_workAvailable.notify_all();
+					m_batchCompleted.notify_all();
+				}
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm raster pool stop arbitration timed out timeoutMs=%u policy=no-join-process-lifetime-quarantine",
+					kPrewarmRasterPoolStopTimeoutMs);
+				return;
+			}
+			std::vector<std::thread> workers;
+			bool exited = false;
+			UInt32 remainingWorkers = 0;
+			{
+				std::unique_lock<std::mutex> lock(m_mutex);
 				if (m_workers.empty())
 					return;
 				m_stopping = true;
-				workers.swap(m_workers);
+				if (m_task)
+					m_task->Cancel();
+				m_workAvailable.notify_all();
+				m_batchCompleted.notify_all();
+				exited = m_workersExited.wait_for(lock,
+					std::chrono::milliseconds(kPrewarmRasterPoolStopTimeoutMs),
+					[this]
+					{
+						return m_liveWorkers == 0;
+					});
+				if (exited)
+				{
+					std::array<HANDLE, kMaximumPrewarmRasterWorkers> handles{};
+					const DWORD handleCount = static_cast<DWORD>(m_workers.size());
+					for (DWORD index = 0; index < handleCount; ++index)
+						handles[index] = m_workers[index].native_handle();
+					exited = WaitForMultipleObjects(handleCount, handles.data(), TRUE,
+						kPrewarmRasterPoolStopTimeoutMs) == WAIT_OBJECT_0;
+				}
+				if (exited)
+					workers.swap(m_workers);
+				else
+				{
+					m_poisoned = true;
+					remainingWorkers = m_liveWorkers;
+				}
 			}
-			m_workAvailable.notify_all();
+			if (!exited)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm raster pool exit acknowledgement timed out timeoutMs=%u liveWorkers=%u policy=no-join-process-lifetime-quarantine",
+					kPrewarmRasterPoolStopTimeoutMs, remainingWorkers);
+			}
 			for (std::thread& worker : workers)
 			{
 				if (worker.joinable())
 					worker.join();
 			}
+			if (exited)
 			{
 				std::lock_guard<std::mutex> lock(m_mutex);
 				m_task = nullptr;
-				m_taskContext = nullptr;
-				m_activeAuxiliaryWorkers = 0;
-				m_completedAuxiliaryWorkers = 0;
+				m_activeWorkers = 0;
+				m_completedWorkers = 0;
 				m_batchActive = false;
-				m_stopping = false;
+				if (!m_poisoned)
+					m_stopping = false;
 			}
 		}
 
@@ -1338,8 +1396,7 @@ namespace fonthook::vectorfont
 			UInt64 observedGeneration = 0;
 			for (;;)
 			{
-				PrewarmRasterWorkerTask task = nullptr;
-				void* context = nullptr;
+				std::shared_ptr<PrewarmRasterBatchTask> task;
 				UInt64 generation = 0;
 				{
 					std::unique_lock<std::mutex> lock(m_mutex);
@@ -1349,45 +1406,51 @@ namespace fonthook::vectorfont
 							return m_stopping
 								|| (m_batchActive
 									&& m_generation != observedGeneration
-									&& workerIndex <= m_activeAuxiliaryWorkers);
-						});
+									&& workerIndex < m_activeWorkers);
+					});
 					if (m_stopping)
-						return;
+						break;
 					task = m_task;
-					context = m_taskContext;
 					generation = m_generation;
 					observedGeneration = generation;
 				}
 
 				if (task)
-					task(context, workerIndex);
+					task->Run(workerIndex);
 				{
 					std::lock_guard<std::mutex> lock(m_mutex);
 					if (m_batchActive && m_generation == generation)
 					{
-						++m_completedAuxiliaryWorkers;
-						if (m_completedAuxiliaryWorkers
-							>= m_activeAuxiliaryWorkers)
+						++m_completedWorkers;
+						if (m_completedWorkers >= m_activeWorkers)
 						{
 							m_batchCompleted.notify_one();
 						}
 					}
 				}
 			}
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				if (m_liveWorkers)
+					--m_liveWorkers;
+			}
+			m_workersExited.notify_all();
 		}
 
-		std::mutex m_dispatchMutex;
+		std::timed_mutex m_dispatchMutex;
 		std::mutex m_mutex;
 		std::condition_variable m_workAvailable;
 		std::condition_variable m_batchCompleted;
+		std::condition_variable m_workersExited;
 		std::vector<std::thread> m_workers;
-		PrewarmRasterWorkerTask m_task = nullptr;
-		void* m_taskContext = nullptr;
+		std::shared_ptr<PrewarmRasterBatchTask> m_task;
 		UInt64 m_generation = 0;
-		UInt32 m_activeAuxiliaryWorkers = 0;
-		UInt32 m_completedAuxiliaryWorkers = 0;
+		UInt32 m_activeWorkers = 0;
+		UInt32 m_completedWorkers = 0;
+		UInt32 m_liveWorkers = 0;
 		bool m_batchActive = false;
 		bool m_stopping = false;
+		bool m_poisoned = false;
 	};
 
 	static PrewarmRasterWorkerPool* TryGetRasterWorkerPool() noexcept
@@ -1409,25 +1472,13 @@ namespace fonthook::vectorfont
 		return pool;
 	}
 
-	static void EnsurePrewarmRasterWorkerContexts(UInt32 count)
-	{
-		if (s_prewarmRasterWorkerContexts.capacity() < count)
-			s_prewarmRasterWorkerContexts.reserve(count);
-		while (s_prewarmRasterWorkerContexts.size() < count)
-		{
-			s_prewarmRasterWorkerContexts.push_back(
-				std::make_unique<PrewarmRasterWorkerContext>());
-		}
-	}
-
 	void ReleasePrewarmRasterWorkers() noexcept
 	{
-		// Stop auxiliary threads before releasing their indexed FreeType contexts
-		// and before the caller enters large atlas/D3D allocation phases.
+		// A healthy pool exits and joins inside the bounded grace period. A poisoned
+		// pool remains process-lifetime-owned so an unresponsive external raster call
+		// can never turn shutdown into another permanent wait.
 		if (PrewarmRasterWorkerPool* pool = TryGetRasterWorkerPool())
 			pool->Stop();
-		std::vector<std::unique_ptr<PrewarmRasterWorkerContext>> empty;
-		empty.swap(s_prewarmRasterWorkerContexts);
 	}
 
 	static RuntimeFace* GetPrewarmWorkerFace(FT_Library library,
@@ -1453,6 +1504,194 @@ namespace fonthook::vectorfont
 		faces.push_back(std::move(workerFace));
 		return &faces.back().runtimeFace;
 	}
+
+	struct PrewarmRasterRuntimeSnapshot
+	{
+		const RuntimeFont* runtimeIdentity = nullptr;
+		const ByteStyle* styleIdentity = nullptr;
+		FontConfig config;
+		ByteStyle style;
+		RuntimeFont runtime;
+		RuntimeRole role;
+
+		explicit PrewarmRasterRuntimeSnapshot(
+			const PrewarmBitmapWorkItem& source)
+			: runtimeIdentity(source.rasterRuntime),
+			styleIdentity(source.resolved.role
+				? source.resolved.role->style : nullptr)
+		{
+			if (!runtimeIdentity || !runtimeIdentity->config || !styleIdentity)
+				throw std::runtime_error("invalid prewarm runtime snapshot");
+			config = *runtimeIdentity->config;
+			style = *styleIdentity;
+			runtime.config = &config;
+			role.owner = &runtime;
+			role.style = &style;
+		}
+	};
+
+	struct PrewarmRasterWorkSnapshot
+	{
+		PrewarmRasterRuntimeSnapshot* runtime = nullptr;
+		ResolvedGlyph resolved;
+		std::shared_ptr<MappedFontFile> file;
+		SInt32 faceIndex = 0;
+		BitmapCacheKey key;
+		GlyphMaskType maskType = GlyphMaskType::Fill;
+		std::shared_ptr<GlyphBitmap> bitmap;
+
+		PrewarmRasterWorkSnapshot(const PrewarmBitmapWorkItem& source,
+			PrewarmRasterRuntimeSnapshot& runtimeSnapshot)
+			: runtime(&runtimeSnapshot)
+		{
+			if (!source.rasterRuntime || !source.rasterRuntime->config
+				|| !source.resolved.role || !source.resolved.role->style
+				|| !source.resolved.runtimeFace
+				|| !source.resolved.runtimeFace->file)
+			{
+				throw std::runtime_error("invalid prewarm raster snapshot");
+			}
+			resolved = source.resolved;
+			resolved.role = &runtimeSnapshot.role;
+			resolved.runtimeFace = nullptr;
+			file = source.resolved.runtimeFace->file;
+			faceIndex = source.key.fontFaceIndex;
+			key = source.key;
+			maskType = source.maskType;
+		}
+	};
+
+	class PrewarmRasterBatch final : public PrewarmRasterBatchTask
+	{
+	public:
+		PrewarmRasterBatch(const std::vector<PrewarmBitmapWorkItem>& workItems,
+			UInt32 workerCount, float safeScale, size_t workChunk)
+			: m_safeScale(safeScale), m_workChunk(std::max<size_t>(1, workChunk))
+		{
+			m_contexts.reserve(workerCount);
+			for (UInt32 index = 0; index < workerCount; ++index)
+				m_contexts.push_back(
+					std::make_unique<PrewarmRasterWorkerContext>());
+			m_items.reserve(workItems.size());
+			for (const PrewarmBitmapWorkItem& item : workItems)
+			{
+				PrewarmRasterRuntimeSnapshot* runtimeSnapshot = nullptr;
+				for (const std::unique_ptr<PrewarmRasterRuntimeSnapshot>& existing
+					: m_runtimeSnapshots)
+				{
+					if (existing->runtimeIdentity == item.rasterRuntime
+						&& existing->styleIdentity
+							== (item.resolved.role
+								? item.resolved.role->style : nullptr))
+					{
+						runtimeSnapshot = existing.get();
+						break;
+					}
+				}
+				if (!runtimeSnapshot)
+				{
+					m_runtimeSnapshots.push_back(
+						std::make_unique<PrewarmRasterRuntimeSnapshot>(item));
+					runtimeSnapshot = m_runtimeSnapshots.back().get();
+				}
+				m_items.push_back(
+					std::make_unique<PrewarmRasterWorkSnapshot>(
+						item, *runtimeSnapshot));
+			}
+		}
+
+		void Run(UInt32 workerIndex) noexcept override
+		{
+			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+			try
+			{
+				if (workerIndex >= m_contexts.size())
+					throw std::runtime_error("prewarm worker index out of range");
+				PrewarmRasterWorkerContext& context = *m_contexts[workerIndex];
+				if (!context.Prepare())
+					throw std::runtime_error("prewarm FreeType worker unavailable");
+				while (!m_cancelled.load(std::memory_order_acquire)
+					&& !IsFontPrewarmStopRequested())
+				{
+					const size_t first = m_nextWork.fetch_add(
+						m_workChunk, std::memory_order_relaxed);
+					if (first >= m_items.size())
+						break;
+					const size_t end = std::min(
+						m_items.size(), first + m_workChunk);
+					for (size_t index = first; index < end; ++index)
+					{
+						if (m_cancelled.load(std::memory_order_acquire)
+							|| IsFontPrewarmStopRequested())
+						{
+							break;
+						}
+						PrewarmRasterWorkSnapshot& item = *m_items[index];
+						RuntimeFace* face = GetPrewarmWorkerFace(
+							context.state.library, context.faces,
+							item.file, item.faceIndex);
+						if (!face)
+							throw std::runtime_error(
+								"prewarm cloned face unavailable");
+						ResolvedGlyph workerResolved = item.resolved;
+						workerResolved.runtimeFace = face;
+						item.bitmap = BuildGlyphBitmap(context.state,
+							item.runtime->runtime, workerResolved, item.maskType,
+							m_safeScale, item.key);
+						if (!item.bitmap)
+							throw std::runtime_error(
+								"prewarm glyph raster failed");
+					}
+				}
+			}
+			catch (const std::bad_alloc&)
+			{
+				m_allocationFailed.store(true, std::memory_order_release);
+				Cancel();
+			}
+			catch (...)
+			{
+				m_unexpectedFailure.store(true, std::memory_order_release);
+				Cancel();
+			}
+		}
+
+		void Cancel() noexcept override
+		{
+			m_cancelled.store(true, std::memory_order_release);
+		}
+
+		[[nodiscard]] bool AllocationFailed() const noexcept
+		{
+			return m_allocationFailed.load(std::memory_order_acquire);
+		}
+
+		[[nodiscard]] bool UnexpectedFailure() const noexcept
+		{
+			return m_unexpectedFailure.load(std::memory_order_acquire);
+		}
+
+		void CopyResultsTo(
+			std::vector<PrewarmBitmapWorkItem>& workItems) const
+		{
+			if (workItems.size() != m_items.size())
+				throw std::runtime_error("prewarm raster result size mismatch");
+			for (size_t index = 0; index < workItems.size(); ++index)
+				workItems[index].bitmap = m_items[index]->bitmap;
+		}
+
+	private:
+		std::vector<std::unique_ptr<PrewarmRasterWorkerContext>> m_contexts;
+		std::vector<std::unique_ptr<PrewarmRasterRuntimeSnapshot>>
+			m_runtimeSnapshots;
+		std::vector<std::unique_ptr<PrewarmRasterWorkSnapshot>> m_items;
+		std::atomic<size_t> m_nextWork{ 0 };
+		std::atomic_bool m_cancelled{ false };
+		std::atomic_bool m_allocationFailed{ false };
+		std::atomic_bool m_unexpectedFailure{ false };
+		float m_safeScale = 1.0f;
+		size_t m_workChunk = 1;
+	};
 
 	static bool IsExpensivePrewarmWork(
 		const std::vector<PrewarmBitmapWorkItem>& workItems)
@@ -1502,21 +1741,6 @@ namespace fonthook::vectorfont
 		std::vector<std::shared_ptr<const GlyphBitmap>>& results,
 		UInt32 maximumWorkers)
 	{
-		const bool expensiveRequests = std::any_of(
-			requests.begin(), requests.end(),
-			[](const GlyphBitmapRequest& request)
-			{
-				return request.maskType != GlyphMaskType::Fill;
-			});
-		const size_t parallelThreshold =
-			expensiveRequests
-				? kExpensivePrewarmParallelThreshold
-				: kFillPrewarmParallelThreshold;
-		if (requests.size() < parallelThreshold)
-		{
-			GetGlyphBitmaps(runtime, requests, rasterScale, results);
-			return;
-		}
 		results.assign(requests.size(), nullptr);
 		const float safeScale = SanitizeBitmapRasterScale(rasterScale);
 		FreeTypeState& state = State();
@@ -1593,7 +1817,15 @@ namespace fonthook::vectorfont
 				workItems, expensiveWork, maximumWorkers);
 			PrewarmRasterWorkerPool* workerPool = TryGetRasterWorkerPool();
 			const UInt32 workerCount = workerPool
-				? workerPool->Prepare(requestedWorkerCount) : 1u;
+				? workerPool->Prepare(requestedWorkerCount) : 0u;
+			if (!workerPool || !workerCount)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm raster worker unavailable requested=%u policy=abort-prewarm-runtime-demand",
+					requestedWorkerCount);
+				RequestFontPrewarmStop();
+				throw std::runtime_error("prewarm raster worker unavailable");
+			}
 			if (workerCount < requestedWorkerCount)
 			{
 				// A constrained x86 process may refuse another thread stack. Keep
@@ -1603,7 +1835,6 @@ namespace fonthook::vectorfont
 					"tnvse_freetype_font: prewarm worker creation limited requested=%u active=%u; continuing with reduced parallelism",
 					requestedWorkerCount, workerCount);
 			}
-			EnsurePrewarmRasterWorkerContexts(workerCount);
 			static UInt32 loggedMaximumWorkers = 0;
 			if (workerCount > loggedMaximumWorkers)
 			{
@@ -1616,94 +1847,32 @@ namespace fonthook::vectorfont
 						? kExpensivePrewarmParallelThreshold
 						: kFillPrewarmParallelThreshold);
 			}
-			std::atomic<size_t> nextWork{ 0 };
-			std::atomic<bool> abortWorkers{ false };
-			std::atomic<bool> workerAllocationFailed{ false };
-			std::atomic<bool> workerUnexpectedFailure{ false };
 			const size_t workChunk = expensiveWork
 				? 1u : kFillPrewarmWorkChunk;
-			auto worker = [&](UInt32 contextIndex)
+			const std::shared_ptr<PrewarmRasterBatch> batch =
+				std::make_shared<PrewarmRasterBatch>(
+					workItems, workerCount, safeScale, workChunk);
+			const bool batchCompleted = workerPool->Execute(workerCount, batch);
+			if (!batchCompleted)
 			{
-				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-				try
-				{
-					PrewarmRasterWorkerContext& context =
-						*s_prewarmRasterWorkerContexts[contextIndex];
-					if (!context.Prepare(&runtime))
-						return;
-					while (!abortWorkers.load(std::memory_order_relaxed)
-						&& !IsFontPrewarmStopRequested())
-					{
-						const size_t first = nextWork.fetch_add(workChunk,
-							std::memory_order_relaxed);
-						if (first >= workItems.size())
-							break;
-						const size_t end = std::min(
-							workItems.size(), first + workChunk);
-						for (size_t index = first; index < end; ++index)
-						{
-							if (abortWorkers.load(
-								std::memory_order_relaxed))
-								break;
-							PrewarmBitmapWorkItem& item =
-								workItems[index];
-							RuntimeFace* face = GetPrewarmWorkerFace(
-								context.state.library, context.faces,
-								item.resolved.runtimeFace->file,
-								item.key.fontFaceIndex);
-							if (!face)
-								continue;
-							ResolvedGlyph workerResolved = item.resolved;
-							workerResolved.runtimeFace = face;
-							item.bitmap = BuildGlyphBitmap(context.state,
-								*item.rasterRuntime,
-								workerResolved, item.maskType,
-								safeScale, item.key);
-						}
-					}
-				}
-				catch (const std::bad_alloc&)
-				{
-					workerAllocationFailed.store(true, std::memory_order_relaxed);
-					abortWorkers.store(true, std::memory_order_relaxed);
-				}
-				catch (...)
-				{
-					workerUnexpectedFailure.store(true, std::memory_order_relaxed);
-					abortWorkers.store(true, std::memory_order_relaxed);
-				}
-			};
-			using Worker = decltype(worker);
-			const PrewarmRasterWorkerTask task =
-				[](void* context, UInt32 workerIndex) noexcept
-				{
-					(*static_cast<Worker*>(context))(workerIndex);
-				};
-			if (workerPool)
-				workerPool->Execute(workerCount, task, &worker);
-			else
-				task(&worker, 0);
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: prewarm raster batch timed out or cancelled workers=%u glyphs=%u timeoutMs=%u policy=close-run-commit-rollback-runtime-demand",
+					workerCount, static_cast<UInt32>(workItems.size()),
+					kPrewarmRasterBatchTimeoutMs);
+				RequestFontPrewarmStop();
+				throw std::runtime_error("prewarm raster batch timeout");
+			}
 			if (IsFontPrewarmStopRequested())
 				return;
-			if (workerAllocationFailed.load(std::memory_order_relaxed))
+			if (batch->AllocationFailed())
 				throw std::bad_alloc();
-			if (workerUnexpectedFailure.load(std::memory_order_relaxed))
+			if (batch->UnexpectedFailure())
 				throw std::runtime_error("parallel prewarm raster worker failed");
+			batch->CopyResultsTo(workItems);
 
 			std::lock_guard<std::recursive_mutex> lock(state.mutex);
 			RecordFreeTypePerf(FreeTypePerfCounter::BitmapRasterized,
 				static_cast<UInt64>(workItems.size()));
-			// Worker initialization or a cloned face can fail independently. Preserve
-			// the runtime path's behavior by retrying only those entries on the main face.
-			for (PrewarmBitmapWorkItem& item : workItems)
-			{
-				if (!item.bitmap)
-				{
-					item.bitmap = BuildGlyphBitmap(state, *item.rasterRuntime,
-						item.resolved,
-						item.maskType, safeScale, item.key);
-				}
-			}
 
 			std::unordered_map<PersistentBitmapProfile*,
 				std::vector<PersistentBitmapStoreRequest>> stores;
