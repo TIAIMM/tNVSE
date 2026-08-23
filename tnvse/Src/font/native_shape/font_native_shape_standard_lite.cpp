@@ -84,7 +84,7 @@ namespace fonthook::vectorfont
 			NiTriShape* geometry, const NativeFontDrawCommand& command,
 			bool packetStatePrevalidated)
 		{
-			if (!g_bEnableFreeTypeFontCommandBuffer
+			if (!IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				|| !pass || !geometry || !command.program
 				|| !command.program->active
 				|| pass->pGeometry != geometry
@@ -169,7 +169,7 @@ namespace fonthook::vectorfont
 			// The retained dispatch has already proved the Tile-owned vtable,
 			// null skin, model data, renderer/device, shader vtable, and complete
 			// slot table. Only RenderPass fields are live per traversal.
-			return g_bEnableFreeTypeFontCommandBuffer
+			return IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& pass && geometry
 				&& pass->pGeometry == geometry
 				&& pass->usPassEnum == currentPass
@@ -1027,7 +1027,7 @@ namespace fonthook::vectorfont
 			}
 			if (!command || !guardedEligible)
 			{
-				if (g_bEnableFreeTypeFontCommandBuffer)
+				if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute())
 					RecordNativeFontCommandFallback(
 					NativeFontCommandFallback::State);
 				return false;
@@ -1063,7 +1063,7 @@ namespace fonthook::vectorfont
 					RecordStandardPassLiteFallback(
 						StandardPassLiteFallback::Prelude);
 				}
-				if (g_bEnableFreeTypeFontCommandBuffer)
+				if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute())
 					RecordNativeFontCommandFallback(
 						NativeFontCommandFallback::State);
 				return false;

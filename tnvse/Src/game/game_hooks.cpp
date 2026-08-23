@@ -13,6 +13,7 @@
 #include "tnvse.h"
 
 #include "InterfaceManager.hpp"
+#include "TileMenu.hpp"
 #include "TileText.hpp"
 
 #include <algorithm>
@@ -794,6 +795,7 @@ namespace fonthook
 		constexpr SIZE_T kTileTextMakeNodeVTableEntry = 0x1094880;
 		constexpr SIZE_T kVanillaTileTextMakeNode = 0xA21AF0;
 		constexpr SIZE_T kRetailHackingMenuInstance = 0x011D95B8;
+		constexpr SIZE_T kRetailLoadingMenuInstance = 0x011DA0C0;
 		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
 		thread_local UInt32 s_effectSuppressionDepth = 0;
@@ -828,22 +830,31 @@ namespace fonthook
 				|| _stricmp(name, "VUI+Outline") == 0;
 		}
 
-		bool IsPrewarmOverlayText(const TileText* tile)
+		bool IsLoadingMenuText(const TileText* tile)
 		{
-			// LoadingMenu applies Tile changes during its locked traversal, but
-			// TileText::MakeNode is deferred until ShowChanges. Identify only the
-			// tNVSE prewarm subtree at that real geometry boundary. FreeType remains
-			// active, while native shape creation skips renderer precache until the
-			// normal sorted submission path. The bounded walk also fails closed on a
-			// corrupt or cyclic parent chain.
+			if (!tile)
+				return false;
+
+			// LoadingMenu applies Tile changes during its locked traversal, and every
+			// dirty TileText::MakeNode is deferred until ShowChanges. Match ownership
+			// against the live LoadingMenu root rather than a tNVSE-specific name so
+			// third-party and vanilla loading text use the same deadlock-safe route.
+			Menu* loadingMenu =
+				*reinterpret_cast<Menu**>(kRetailLoadingMenuInstance);
+			Tile* loadingRoot = loadingMenu ? loadingMenu->pRootTile : nullptr;
+			if (!loadingRoot)
+				return false;
+
+			// Avoid Tile::GetMenu here: a bounded parent walk fails closed on corrupt
+			// or cyclic third-party trees instead of introducing another unbounded
+			// engine traversal at the lock-sensitive geometry boundary.
 			constexpr UInt32 kMaximumParentDepth = 32;
 			const Tile* current = tile;
 			for (UInt32 depth = 0;
 				current && depth < kMaximumParentDepth;
 				++depth, current = current->pParent)
 			{
-				const char* name = current->strName.c_str();
-				if (name && _stricmp(name, "tNVSE_Prewarm") == 0)
+				if (current == loadingRoot)
 					return true;
 			}
 			return false;
@@ -949,8 +960,8 @@ namespace fonthook
 			const bool suppress = freeTypeInstalled && IsVuiEffectProxy(tile);
 			Font* font = suppress ? ResolveVuiEffectProxyFont(tile) : nullptr;
 			const bool replaceProxy = suppress && HasEnabledFreeTypeFontEffects(font);
-			const bool useNoPrecachePrewarmRoute = freeTypeInstalled
-				&& IsPrewarmOverlayText(tile);
+			const bool useNoPrecacheLoadingMenuRoute = freeTypeInstalled
+				&& IsLoadingMenuText(tile);
 			const bool suppressDictionaryTranslation =
 				dictionaryTranslationInstalled && IsHackingMenuText(tile);
 
@@ -959,7 +970,7 @@ namespace fonthook
 			ScopedDictionaryTranslationTileContext dictionaryContext(
 				suppressDictionaryTranslation);
 			NiNode* node = nullptr;
-			if (useNoPrecachePrewarmRoute)
+			if (useNoPrecacheLoadingMenuRoute)
 			{
 				// This scope must cover the actual deferred MakeNode call. A scope
 				// around SetText/RebuildTextGeometry ends before LoadingMenu reaches

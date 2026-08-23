@@ -770,7 +770,7 @@ namespace fonthook::vectorfont
 				FreeTypePerfCounter::SinglePacketDirectCandidate);
 
 			const bool commandRequested =
-				g_bEnableFreeTypeFontCommandBuffer
+				IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& (singlePacketCommandIndex
 						!= kInvalidNativeFontCommandIndex
 					|| commandSpanIndex

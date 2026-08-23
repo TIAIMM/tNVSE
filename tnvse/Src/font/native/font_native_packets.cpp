@@ -996,7 +996,7 @@ namespace fonthook::vectorfont
 		payload.packetPrograms.assign(payload.payloadTemplate->packets.size(),
 			nullptr);
 		payload.preflightAtlasTextures.assign(payload.payloadTemplate->pageCount, nullptr);
-		if (g_bEnableFreeTypeFontCommandBuffer)
+		if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute())
 		{
 			const size_t retainedCapacity = std::max(
 				payload.payloadTemplate->packets.size(),

@@ -17,30 +17,122 @@ namespace fonthook
 		}
 		void ConsumeNativePrewarmOverlayCommand();
 
+		bool IsLoadingMenuThreadPauseOrShutdownRequested() noexcept
+		{
+			const UInt8* loadingThread =
+				*reinterpret_cast<UInt8**>(kLoadingMenuThread_pMe);
+			if (!loadingThread)
+				return false;
+			return *reinterpret_cast<const volatile UInt8*>(loadingThread
+					+ kLoadingMenuThreadPauseRequestedOffset) != 0
+				|| *reinterpret_cast<const volatile UInt8*>(loadingThread
+					+ kLoadingMenuThreadShutdownOffset) != 0;
+		}
+
+		bool IsLoadingMenuVanillaUpdateBlockedAtStartup() noexcept
+		{
+			return *reinterpret_cast<volatile UInt8*>(
+				kLoadingMenuStartupFlag) != 0
+				&& *reinterpret_cast<void* volatile*>(
+					kInterfaceManager_pMe) == nullptr;
+		}
+
+		class ScopedRendererTryLock final
+		{
+		public:
+			explicit ScopedRendererTryLock(NiRenderer* renderer) noexcept
+				: m_renderer(renderer)
+			{
+				if (m_renderer)
+				{
+					m_locked = TryEnterCriticalSection(
+						&m_renderer->m_kRendererLock.m_kCriticalSection) != FALSE;
+				}
+			}
+
+			~ScopedRendererTryLock() noexcept
+			{
+				if (m_locked)
+				{
+					LeaveCriticalSection(
+						&m_renderer->m_kRendererLock.m_kCriticalSection);
+				}
+			}
+
+			explicit operator bool() const noexcept { return m_locked; }
+
+		private:
+			NiRenderer* m_renderer = nullptr;
+			bool m_locked = false;
+		};
+
 		void __fastcall LoadingMenuUpdateHook(void* loadingMenu, void*)
 		{
+			// ThreadProc cannot acknowledge a pause request until this hook returns.
+			// Never enter a known unbounded vanilla wait or optional overlay work once
+			// the main thread has requested that acknowledgement.
+			if (IsLoadingMenuThreadPauseOrShutdownRequested()
+				|| IsLoadingMenuVanillaUpdateBlockedAtStartup())
+			{
+				return;
+			}
 			if (OverlayRuntime().predecessorLoadingMenuUpdate)
 				OverlayRuntime().predecessorLoadingMenuUpdate(loadingMenu);
+			if (IsLoadingMenuThreadPauseOrShutdownRequested())
+				return;
 			ConsumeNativePrewarmOverlayCommand();
+		}
+
+		void __cdecl LoadingMenuShowChangesHook()
+		{
+			if (IsLoadingMenuThreadPauseOrShutdownRequested())
+				return;
+			LoadingMenuShowChangesFn predecessor =
+				OverlayRuntime().predecessorLoadingMenuShowChanges;
+			if (!predecessor)
+				return;
+
+			NiRenderer* renderer = NiRenderer::GetSingleton();
+			ScopedRendererTryLock rendererLock(renderer);
+			if (!rendererLock || IsLoadingMenuThreadPauseOrShutdownRequested())
+				return;
+
+			// ShowChanges creates every dirty LoadingMenu TileText node while holding
+			// renderer/UI locks. Keep all tNVSE geometry on the synchronous,
+			// non-retained route for this complete traversal. The renderer lock is a
+			// recursive CRITICAL_SECTION, so vanilla and NVTF's StopProcessing hook
+			// retain their original nested lock/unlock and pause-event pairing.
+			ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
+			predecessor();
+		}
+
+		bool IsVerifiedLoadingMenuCallHook(SIZE_T callSite,
+			SIZE_T adapterTarget, SIZE_T predecessorTarget)
+		{
+			SIZE_T currentTarget = 0;
+			return hook_identity::ReadRel32Target(
+					callSite, hook_identity::Rel32Opcode::Call, currentTarget)
+				&& currentTarget == adapterTarget
+				&& predecessorTarget != adapterTarget
+				&& hook_identity::IsExecutableTarget(predecessorTarget);
 		}
 
 		bool HasVerifiedLoadingMenuUpdateHook()
 		{
-			if (!OverlayRuntime().loadingMenuUpdateHookInstalled)
+			if (!OverlayRuntime().loadingMenuUpdateHookInstalled
+				|| !OverlayRuntime().loadingMenuShowChangesHookInstalled)
 				return false;
 
-			SIZE_T currentTarget = 0;
-			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
-				&LoadingMenuUpdateHook);
-			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
-				OverlayRuntime().predecessorLoadingMenuUpdate);
-			return hook_identity::ReadRel32Target(
+			return IsVerifiedLoadingMenuCallHook(
 					kLoadingMenuThreadUpdateCallSite,
-					hook_identity::Rel32Opcode::Call,
-					currentTarget)
-				&& currentTarget == adapterTarget
-				&& predecessorTarget != adapterTarget
-				&& hook_identity::IsExecutableTarget(predecessorTarget);
+					reinterpret_cast<SIZE_T>(&LoadingMenuUpdateHook),
+					reinterpret_cast<SIZE_T>(
+						OverlayRuntime().predecessorLoadingMenuUpdate))
+				&& IsVerifiedLoadingMenuCallHook(
+					kLoadingMenuThreadShowChangesCallSite,
+					reinterpret_cast<SIZE_T>(&LoadingMenuShowChangesHook),
+					reinterpret_cast<SIZE_T>(
+						OverlayRuntime().predecessorLoadingMenuShowChanges));
 		}
 
 		UInt32 __fastcall ImeMenuGetId(Menu*, void*)
@@ -448,48 +540,66 @@ namespace fonthook
 
 	bool InstallNativePrewarmOverlayLoadingThreadHook()
 	{
-		if (OverlayRuntime().loadingMenuUpdateHookInstalled)
+		NativeTileOverlayRuntimeState& runtime = OverlayRuntime();
+		if (runtime.loadingMenuUpdateHookInstalled
+			|| runtime.loadingMenuShowChangesHookInstalled)
 		{
-			SIZE_T currentTarget = 0;
-			const bool targetReadable = hook_identity::ReadRel32Target(
+			if (HasVerifiedLoadingMenuUpdateHook())
+				return true;
+
+			SIZE_T currentUpdateTarget = 0;
+			SIZE_T currentShowChangesTarget = 0;
+			const bool updateReadable = hook_identity::ReadRel32Target(
 				kLoadingMenuThreadUpdateCallSite,
 				hook_identity::Rel32Opcode::Call,
-				currentTarget);
-			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
+				currentUpdateTarget);
+			const bool showChangesReadable = hook_identity::ReadRel32Target(
+				kLoadingMenuThreadShowChangesCallSite,
+				hook_identity::Rel32Opcode::Call,
+				currentShowChangesTarget);
+			const SIZE_T updateAdapterTarget = reinterpret_cast<SIZE_T>(
 				&LoadingMenuUpdateHook);
-			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
-				OverlayRuntime().predecessorLoadingMenuUpdate);
-			if (targetReadable
-				&& currentTarget == adapterTarget
-				&& predecessorTarget != adapterTarget
-				&& hook_identity::IsExecutableTarget(predecessorTarget))
+			const SIZE_T showChangesAdapterTarget = reinterpret_cast<SIZE_T>(
+				&LoadingMenuShowChangesHook);
+			const SIZE_T updatePredecessorTarget = reinterpret_cast<SIZE_T>(
+				runtime.predecessorLoadingMenuUpdate);
+			const SIZE_T showChangesPredecessorTarget = reinterpret_cast<SIZE_T>(
+				runtime.predecessorLoadingMenuShowChanges);
+			const bool cleanlyRestored = updateReadable
+				&& showChangesReadable
+				&& currentUpdateTarget == updatePredecessorTarget
+				&& currentShowChangesTarget == showChangesPredecessorTarget
+				&& hook_identity::IsExecutableTarget(currentUpdateTarget)
+				&& hook_identity::IsExecutableTarget(currentShowChangesTarget);
+			if (cleanlyRestored)
 			{
-				return true;
-			}
-			if (targetReadable
-				&& currentTarget == predecessorTarget
-				&& hook_identity::IsExecutableTarget(currentTarget))
-			{
-				OverlayRuntime().loadingMenuUpdateHookInstalled = false;
-				OverlayRuntime().predecessorLoadingMenuUpdate = nullptr;
+				runtime.loadingMenuUpdateHookInstalled = false;
+				runtime.loadingMenuShowChangesHookInstalled = false;
+				runtime.predecessorLoadingMenuUpdate = nullptr;
+				runtime.predecessorLoadingMenuShowChanges = nullptr;
 			}
 			else
 			{
-				OverlayRuntime().loadingMenuUpdateHookInstalled = false;
-				OverlayRuntime().loadingMenuUpdateHookInstallFailed = true;
-				OverlayRuntime().prewarmConsumerDisabled.store(true, std::memory_order_release);
-				OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
-				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+				runtime.loadingMenuUpdateHookInstalled = false;
+				runtime.loadingMenuShowChangesHookInstalled = false;
+				runtime.loadingMenuUpdateHookInstallFailed = true;
+				runtime.prewarmConsumerDisabled.store(true, std::memory_order_release);
+				runtime.prewarmReady.store(false, std::memory_order_release);
+				runtime.prewarmActive.store(false, std::memory_order_release);
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: LoadingMenuThread prewarm capability revoked; observed target=0x%08X adapter=0x%08X predecessor=0x%08X readable=%u",
-					static_cast<UInt32>(currentTarget),
-					static_cast<UInt32>(adapterTarget),
-					static_cast<UInt32>(predecessorTarget),
-					targetReadable ? 1u : 0u);
+					"tnvse_native_overlay: LoadingMenuThread safety capability revoked; updateObserved=0x%08X updateAdapter=0x%08X updatePredecessor=0x%08X updateReadable=%u showObserved=0x%08X showAdapter=0x%08X showPredecessor=0x%08X showReadable=%u",
+					static_cast<UInt32>(currentUpdateTarget),
+					static_cast<UInt32>(updateAdapterTarget),
+					static_cast<UInt32>(updatePredecessorTarget),
+					updateReadable ? 1u : 0u,
+					static_cast<UInt32>(currentShowChangesTarget),
+					static_cast<UInt32>(showChangesAdapterTarget),
+					static_cast<UInt32>(showChangesPredecessorTarget),
+					showChangesReadable ? 1u : 0u);
 				return false;
 			}
 		}
-		if (OverlayRuntime().loadingMenuUpdateHookInstallFailed)
+		if (runtime.loadingMenuUpdateHookInstallFailed)
 			return false;
 
 		SIZE_T currentUpdateTarget = 0;
@@ -517,82 +627,100 @@ namespace fonthook
 			|| !hook_identity::IsExecutableTarget(currentUpdateTarget)
 			|| !hook_identity::IsExecutableTarget(currentShowChangesTarget))
 		{
-			OverlayRuntime().loadingMenuUpdateHookInstallFailed = true;
+			runtime.loadingMenuUpdateHookInstallFailed = true;
 			gLog.FormattedMessage(
-				"tnvse_native_overlay: cannot install LoadingMenuThread prewarm consumer; executable identity mismatch updateCall=0x%08X showChangesCall=0x%08X",
+				"tnvse_native_overlay: cannot install LoadingMenuThread safety hooks; executable identity mismatch updateCall=0x%08X showChangesCall=0x%08X",
 				static_cast<UInt32>(kLoadingMenuThreadUpdateCallSite),
 				static_cast<UInt32>(kLoadingMenuThreadShowChangesCallSite));
 			return false;
 		}
 
-		if (currentUpdateTarget == reinterpret_cast<SIZE_T>(
-				&LoadingMenuUpdateHook))
+		const SIZE_T updateAdapterTarget = reinterpret_cast<SIZE_T>(
+			&LoadingMenuUpdateHook);
+		const SIZE_T showChangesAdapterTarget = reinterpret_cast<SIZE_T>(
+			&LoadingMenuShowChangesHook);
+		if (currentUpdateTarget == updateAdapterTarget
+			|| currentShowChangesTarget == showChangesAdapterTarget)
 		{
-			const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
-				OverlayRuntime().predecessorLoadingMenuUpdate);
-			OverlayRuntime().loadingMenuUpdateHookInstalled =
-				predecessorTarget != currentUpdateTarget
-				&& hook_identity::IsExecutableTarget(predecessorTarget);
-			if (!OverlayRuntime().loadingMenuUpdateHookInstalled)
-			{
-				OverlayRuntime().loadingMenuUpdateHookInstallFailed = true;
-				OverlayRuntime().prewarmConsumerDisabled.store(true, std::memory_order_release);
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: LoadingMenuThread prewarm hook is present but its predecessor is unavailable predecessor=0x%08X",
-					static_cast<UInt32>(predecessorTarget));
-			}
-			return OverlayRuntime().loadingMenuUpdateHookInstalled;
+			runtime.loadingMenuUpdateHookInstallFailed = true;
+			runtime.prewarmConsumerDisabled.store(true, std::memory_order_release);
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: LoadingMenuThread safety adapter is already present without recoverable predecessor updateTarget=0x%08X showChangesTarget=0x%08X",
+				static_cast<UInt32>(currentUpdateTarget),
+				static_cast<UInt32>(currentShowChangesTarget));
+			return false;
 		}
 
-		OverlayRuntime().predecessorLoadingMenuUpdate =
+		// Install ShowChanges first. The prewarm consumer is not reachable until
+		// every LoadingMenu geometry rebuild is already inside the safe route.
+		runtime.predecessorLoadingMenuShowChanges =
+			reinterpret_cast<LoadingMenuShowChangesFn>(currentShowChangesTarget);
+		WriteRelCall(kLoadingMenuThreadShowChangesCallSite,
+			&LoadingMenuShowChangesHook);
+		SIZE_T observedShowChangesTarget = 0;
+		const bool observedShowChangesReadable = hook_identity::ReadRel32Target(
+			kLoadingMenuThreadShowChangesCallSite,
+			hook_identity::Rel32Opcode::Call,
+			observedShowChangesTarget);
+		if (!observedShowChangesReadable
+			|| observedShowChangesTarget != showChangesAdapterTarget)
+		{
+			if (observedShowChangesReadable
+				&& observedShowChangesTarget == currentShowChangesTarget)
+			{
+				runtime.predecessorLoadingMenuShowChanges = nullptr;
+			}
+			runtime.loadingMenuUpdateHookInstallFailed = true;
+			runtime.prewarmConsumerDisabled.store(true, std::memory_order_release);
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: LoadingMenuThread ShowChanges safety hook publication failed observed=0x%08X predecessor=0x%08X readable=%u",
+				static_cast<UInt32>(observedShowChangesTarget),
+				static_cast<UInt32>(currentShowChangesTarget),
+				observedShowChangesReadable ? 1u : 0u);
+			return false;
+		}
+		runtime.loadingMenuShowChangesHookInstalled = true;
+
+		runtime.predecessorLoadingMenuUpdate =
 			reinterpret_cast<LoadingMenuUpdateFn>(currentUpdateTarget);
 		// LoadingMenuThread -> LoadingMenu::Update
 		// (__thiscall target via __fastcall shim).
 		WriteRelCall(kLoadingMenuThreadUpdateCallSite, &LoadingMenuUpdateHook);
-		const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
-			&LoadingMenuUpdateHook);
-		SIZE_T observedTarget = 0;
-		const bool observedReadable = hook_identity::ReadRel32Target(
+		SIZE_T observedUpdateTarget = 0;
+		const bool observedUpdateReadable = hook_identity::ReadRel32Target(
 			kLoadingMenuThreadUpdateCallSite,
 			hook_identity::Rel32Opcode::Call,
-			observedTarget);
-		if (observedReadable && observedTarget == adapterTarget)
+			observedUpdateTarget);
+		if (observedUpdateReadable
+			&& observedUpdateTarget == updateAdapterTarget)
 		{
-			OverlayRuntime().loadingMenuUpdateHookInstalled = true;
+			runtime.loadingMenuUpdateHookInstalled = true;
 			gLog.FormattedMessage(
-				"tnvse_native_overlay: installed LoadingMenuThread prewarm consumer call=0x%08X chainedTarget=0x%08X vanillaUpdate=%u showChangesTarget=0x%08X vanillaShowChanges=%u policy=queued-snapshot fontRoute=freetype-native-no-precache",
+				"tnvse_native_overlay: installed LoadingMenuThread safety hooks updateCall=0x%08X updateTarget=0x%08X vanillaUpdate=%u showChangesCall=0x%08X showChangesTarget=0x%08X vanillaShowChanges=%u policy=pause-aware-startup-bounded rendererLock=try-enter fontRoute=loading-menu-no-precache-no-retained-command",
 				static_cast<UInt32>(kLoadingMenuThreadUpdateCallSite),
 				static_cast<UInt32>(currentUpdateTarget),
 				currentUpdateTarget == kLoadingMenuUpdate ? 1u : 0u,
+				static_cast<UInt32>(kLoadingMenuThreadShowChangesCallSite),
 				static_cast<UInt32>(currentShowChangesTarget),
 				currentShowChangesTarget == kLoadingMenuShowChanges ? 1u : 0u);
 			return true;
 		}
 
-		if (observedReadable && observedTarget == currentUpdateTarget)
+		if (observedUpdateReadable
+			&& observedUpdateTarget == currentUpdateTarget)
 		{
-			OverlayRuntime().predecessorLoadingMenuUpdate = nullptr;
-			OverlayRuntime().loadingMenuUpdateHookInstallFailed = true;
-			gLog.FormattedMessage(
-				"tnvse_native_overlay: LoadingMenuThread prewarm hook write did not publish call=0x%08X predecessor=0x%08X",
-				static_cast<UInt32>(kLoadingMenuThreadUpdateCallSite),
-				static_cast<UInt32>(currentUpdateTarget));
-			return false;
+			runtime.predecessorLoadingMenuUpdate = nullptr;
 		}
-
-		const bool successorExecutable = observedReadable
-			&& hook_identity::IsExecutableTarget(observedTarget);
-		// A different executable CALL target is not evidence that the loading
-		// thread still reaches this consumer. Retain the predecessor pointer for
-		// safety, but keep all producer wait paths fail-closed.
-		OverlayRuntime().loadingMenuUpdateHookInstalled = false;
-		OverlayRuntime().loadingMenuUpdateHookInstallFailed = true;
+		runtime.loadingMenuUpdateHookInstalled = false;
+		runtime.loadingMenuUpdateHookInstallFailed = true;
+		runtime.prewarmConsumerDisabled.store(true, std::memory_order_release);
+		runtime.prewarmReady.store(false, std::memory_order_release);
+		runtime.prewarmActive.store(false, std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_native_overlay: LoadingMenuThread prewarm hook may be retained below observed target=0x%08X predecessor=0x%08X readable=%u executable=%u; reachability unverified, consumer disabled",
-			static_cast<UInt32>(observedTarget),
+			"tnvse_native_overlay: LoadingMenuThread Update safety hook publication failed observed=0x%08X predecessor=0x%08X readable=%u; ShowChanges safety hook remains installed, prewarm consumer disabled",
+			static_cast<UInt32>(observedUpdateTarget),
 			static_cast<UInt32>(currentUpdateTarget),
-			observedReadable ? 1u : 0u,
-			successorExecutable ? 1u : 0u);
+			observedUpdateReadable ? 1u : 0u);
 		return false;
 	}
 

@@ -50,6 +50,11 @@ namespace fonthook::implementation::native_tile_overlay
 		constexpr UInt32 kTileRelease = 0x9FF690;
 		constexpr UInt32 kMenuSetMenuTile = 0xA1DC70;
 		constexpr SIZE_T kLoadingMenu_pMe = 0x11DA0C0;
+		constexpr SIZE_T kLoadingMenuThread_pMe = 0x11DA0C4;
+		constexpr SIZE_T kInterfaceManager_pMe = 0x11DEA10;
+		constexpr SIZE_T kLoadingMenuStartupFlag = 0x11A0294;
+		constexpr size_t kLoadingMenuThreadPauseRequestedOffset = 72;
+		constexpr size_t kLoadingMenuThreadShutdownOffset = 74;
 		// TileMenu::PostParse and the vanilla visibility table only accept
 		// Menu Codes 1001-1084. 1079 is the highest unused gap immediately
 		// below SlotMachineMenu (1080), and keeps the overlay inside the
@@ -87,6 +92,7 @@ namespace fonthook::implementation::native_tile_overlay
 			void (__thiscall*)(void*, BSRenderedTexture*,
 				NiRenderer::ClearFlags, BSRenderedTexture*);
 		using LoadingMenuUpdateFn = void (__thiscall*)(void*);
+		using LoadingMenuShowChangesFn = void (__cdecl*)();
 
 		struct PrewarmOverlayCommand
 		{
@@ -156,11 +162,13 @@ namespace fonthook::implementation::native_tile_overlay
 		CreateMenuByClassFn predecessorCreateMenuByClass = nullptr;
 		RenderedMenuDrawFn predecessorPipboyDraw = nullptr;
 		LoadingMenuUpdateFn predecessorLoadingMenuUpdate = nullptr;
+		LoadingMenuShowChangesFn predecessorLoadingMenuShowChanges = nullptr;
 		bool imeMenuFactoryInstalled = false;
 		bool imeMenuFactoryInstallFailed = false;
 		bool pipboyDrawHookInstalled = false;
 		bool pipboyDrawHookInstallFailed = false;
 		bool loadingMenuUpdateHookInstalled = false;
+		bool loadingMenuShowChangesHookInstalled = false;
 		bool loadingMenuUpdateHookInstallFailed = false;
 		bool loggedPipboyRttExclusion = false;
 		bool creatingImeMenu = false;

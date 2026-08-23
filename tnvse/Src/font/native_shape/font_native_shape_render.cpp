@@ -1083,10 +1083,10 @@ namespace fonthook::vectorfont
 				&& !metadata->nativePayload.packetPrograms.empty() ? 1u : 0u)
 			+ (metadata->nativePayload.preflightAtlasTextures.uses_inline_storage()
 				&& !metadata->nativePayload.preflightAtlasTextures.empty() ? 1u : 0u)
-			+ (g_bEnableFreeTypeFontCommandBuffer
+			+ (IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& metadata->nativePayload.retainedText.packets.uses_inline_storage()
 					? 1u : 0u)
-			+ (g_bEnableFreeTypeFontCommandBuffer
+			+ (IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& metadata->nativePayload.retainedText.runs.uses_inline_storage()
 					? 1u : 0u);
 		RecordFreeTypePerf(
@@ -1281,7 +1281,7 @@ namespace fonthook::vectorfont
 			GetNativeFontPackets(*payload.payloadTemplate,
 				payload.useCompositePackets);
 		const bool buildCommandView =
-			g_bEnableFreeTypeFontCommandBuffer;
+			IsFreeTypeFontCommandBufferEnabledForCurrentRoute();
 		const NativeFontTileRetainedText* retainedText = nullptr;
 		if (buildCommandView)
 		{

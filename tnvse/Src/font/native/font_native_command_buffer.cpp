@@ -725,7 +725,7 @@ namespace fonthook::vectorfont
 	{
 		EndNativeFontFrameCommandBuffer();
 		NativeFontFrameCommandBuffer& buffer = CommandBuffer();
-		buffer.enabled = g_bEnableFreeTypeFontCommandBuffer;
+		buffer.enabled = IsFreeTypeFontCommandBufferEnabledForCurrentRoute();
 		if (!buffer.enabled || !g_bEnableFreeTypeFontRendering
 			|| !g_bEnableFreeTypeNativeAtlas || !accumulator
 			|| !validationToken || !generation)

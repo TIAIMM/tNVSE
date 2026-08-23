@@ -347,6 +347,7 @@ namespace fonthook
 			const ScopedFreeTypeNoPrecacheRoute&) = delete;
 	};
 	bool IsFreeTypeNoPrecacheRouteActive() noexcept;
+	bool IsFreeTypeFontCommandBufferEnabledForCurrentRoute() noexcept;
 	bool IsFreeTypeFontActive(const Font* apFont);
 	bool HasEnabledFreeTypeFontEffects(const Font* apFont);
 	bool GetFreeTypeLayoutIdentity(const Font* apFont, UInt64& arIdentity);

@@ -211,7 +211,7 @@ namespace fonthook::vectorfont
 			}
 			if (!shaderSetReady)
 				return NativeFontFallbackReason::ShaderGeneration;
-			if (g_bEnableFreeTypeFontCommandBuffer)
+			if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute())
 			{
 				for (size_t index = 0; index < packets->size(); ++index)
 				{
@@ -243,7 +243,7 @@ namespace fonthook::vectorfont
 
 			payload.preparedGeneration = generation;
 			payload.preflightAtlasTextureEpoch = atlasTextureEpoch;
-			if (g_bEnableFreeTypeFontCommandBuffer)
+			if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute())
 			{
 				BuildNativeFontTileRetainedText(facade, payload,
 					generation, atlasTextureEpoch);

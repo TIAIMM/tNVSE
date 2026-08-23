@@ -365,7 +365,7 @@ namespace fonthook::vectorfont
 					}
 				}
 				const bool commandFrameActive =
-					g_bEnableFreeTypeFontCommandBuffer
+					IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 					&& hasPreparedPayloads;
 				if (commandFrameActive)
 				{

@@ -238,7 +238,7 @@ namespace fonthook::vectorfont
 			UInt32 commandSpanIndex,
 			NativePacketDrawResult& draw)
 		{
-			if (!g_bEnableFreeTypeFontCommandBuffer
+			if (!IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				|| !pass || !facade
 				|| commandSpanIndex == kInvalidNativeFontCommandIndex)
 			{
@@ -562,7 +562,7 @@ namespace fonthook::vectorfont
 			bool commandExecution = false;
 			bool commandBegun = false;
 			bool directFacadeCommandExecution = false;
-			if (g_bEnableFreeTypeFontCommandBuffer
+			if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& directFacadeSinglePacketCommandIndex
 					!= kInvalidNativeFontCommandIndex)
 			{

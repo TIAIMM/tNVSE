@@ -358,7 +358,8 @@ namespace fonthook::vectorfont
 				const UInt32 directFacadeSinglePacketCommandIndex =
 					singleton->commandDirectFacadeSinglePacketIndex.load(
 						std::memory_order_acquire);
-				const bool commandCurrent = g_bEnableFreeTypeFontCommandBuffer
+				const bool commandCurrent =
+					IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 					&& commandToken && commandToken == validationToken
 					&& directFacadeSinglePacketCommandIndex
 						!= kInvalidNativeFontCommandIndex;
@@ -488,7 +489,7 @@ namespace fonthook::vectorfont
 					? frameEntry.singlePacketCommandIndex
 					: kInvalidNativeFontCommandIndex;
 			bool commandHandled = false;
-			if (g_bEnableFreeTypeFontCommandBuffer
+			if (IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 				&& commandSpanIndex
 					!= kInvalidNativeFontCommandIndex)
 			{

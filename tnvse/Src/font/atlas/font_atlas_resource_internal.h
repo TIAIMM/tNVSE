@@ -37,11 +37,11 @@ namespace fonthook::vectorfont
 	};
 
 	// The synchronous renderer reset callback calls these around its normal
-	// atlas walk. The before phase prevents new publishers and waits without
-	// holding atlasMutex; the after phase reopens publication only after every
-	// registered DEFAULT generation has been rebuilt.
+	// atlas walk. The before phase prevents new publishers and waits for a
+	// bounded interval without holding atlasMutex; the after phase reopens
+	// publication only after every registered DEFAULT generation has been rebuilt.
 	bool EnterDefaultPoolResetBarrier(bool beforeReset,
-		UInt32& waitedPublications, UInt64& deviceEpoch);
+		UInt32& waitedPublications, UInt64& deviceEpoch, bool& timedOut);
 	void LeaveDefaultPoolResetBarrier(bool beforeReset);
 	void SetDefaultPoolPublicationShutdown(bool shutdown);
 

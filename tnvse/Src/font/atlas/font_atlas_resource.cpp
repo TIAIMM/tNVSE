@@ -179,12 +179,13 @@ namespace fonthook::vectorfont
 	}
 
 	bool EnterDefaultPoolResetBarrier(bool beforeReset,
-		UInt32& waitedPublications, UInt64& deviceEpoch)
+		UInt32& waitedPublications, UInt64& deviceEpoch, bool& timedOut)
 	{
 		AtlasState& state = State();
 		std::unique_lock<std::mutex> lock(
 			state.defaultPoolPublicationMutex);
 		waitedPublications = 0;
+		timedOut = false;
 		if (state.defaultPoolShutdown)
 		{
 			deviceEpoch = state.defaultPoolDeviceEpoch;
@@ -194,11 +195,26 @@ namespace fonthook::vectorfont
 		{
 			state.defaultPoolResetInProgress = true;
 			waitedPublications = state.defaultPoolActivePublications;
-			state.defaultPoolPublicationCondition.wait(lock, [&]
+			const bool publicationsDrained =
+				state.defaultPoolPublicationCondition.wait_for(
+					lock, std::chrono::seconds(2), [&]
+					{
+						return !state.defaultPoolActivePublications
+							|| state.defaultPoolShutdown;
+					});
+			if (!publicationsDrained)
 			{
-				return !state.defaultPoolActivePublications
-					|| state.defaultPoolShutdown;
-			});
+				// The renderer invokes this callback before Reset and honors false as
+				// a cancelled reset attempt. Reopen publication before returning so a
+				// stalled publisher cannot turn a recoverable frame into a permanent
+				// device/reset deadlock.
+				state.defaultPoolResetInProgress = false;
+				deviceEpoch = state.defaultPoolDeviceEpoch;
+				timedOut = true;
+				lock.unlock();
+				state.defaultPoolPublicationCondition.notify_all();
+				return false;
+			}
 			if (!state.defaultPoolShutdown)
 				++state.defaultPoolDeviceEpoch;
 		}

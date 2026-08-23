@@ -26,6 +26,12 @@ namespace fonthook
 		return s_freeTypeNoPrecacheRouteDepth != 0;
 	}
 
+	bool IsFreeTypeFontCommandBufferEnabledForCurrentRoute() noexcept
+	{
+		return g_bEnableFreeTypeFontCommandBuffer
+			&& !IsFreeTypeNoPrecacheRouteActive();
+	}
+
 	void FlushFreeTypePersistentFontCache()
 	{
 		vectorfont::FlushGlyphBitmapDiskCache();

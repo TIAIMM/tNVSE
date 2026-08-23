@@ -179,9 +179,22 @@ namespace fonthook::vectorfont
 			AtlasState& state = State();
 			UInt32 waitedPublications = 0;
 			UInt64 deviceEpoch = 0;
+			bool barrierTimedOut = false;
 			if (!EnterDefaultPoolResetBarrier(beforeReset,
-				waitedPublications, deviceEpoch))
-				return true;
+				waitedPublications, deviceEpoch, barrierTimedOut))
+			{
+				if (!barrierTimedOut)
+					return true;
+				state.defaultPoolMaintenancePending.store(
+					true, std::memory_order_release);
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: cancelled renderer reset after DEFAULT atlas publication barrier timed out waitedPublications=%u timeoutMs=2000",
+					waitedPublications);
+				// NiDX9Renderer::Reset invokes before callbacks as callback(1, data)
+				// and aborts the reset when one returns false. No DEFAULT resources
+				// have been released yet, so cancellation is the only safe timeout.
+				return false;
+			}
 			const bool logResetTiming = g_bEnableFreeTypeFontRenderingLog;
 			const auto started = logResetTiming
 				? std::chrono::steady_clock::now()

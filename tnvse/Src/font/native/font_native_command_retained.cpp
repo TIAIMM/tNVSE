@@ -59,7 +59,7 @@ namespace fonthook::vectorfont
 		}
 
 		InvalidateNativeFontStandardPassLiteDispatch(dispatch);
-		if (!g_bEnableFreeTypeFontCommandBuffer
+		if (!IsFreeTypeFontCommandBufferEnabledForCurrentRoute()
 			|| !geometry || !program || !generation
 			|| !State().standardPassLitePredicatesValidated
 			|| geometry->GetSkinInstance()
@@ -145,7 +145,7 @@ namespace fonthook::vectorfont
 		retained.ready = false;
 		retained.atlasTextureEpoch = 0;
 		retained.bridgeEligible = false;
-		if (!g_bEnableFreeTypeFontCommandBuffer || !ownerTile
+		if (!IsFreeTypeFontCommandBufferEnabledForCurrentRoute() || !ownerTile
 			|| !generation || !atlasTextureEpoch
 			|| !payload.payloadTemplate)
 		{
