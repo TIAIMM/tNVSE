@@ -1,6 +1,7 @@
 #pragma once
 
 #include "native_tile_overlay.h"
+#include "owner_thread_shutdown_latch.h"
 
 #include "BSMemory.hpp"
 #include "BSRenderedTexture.hpp"
@@ -102,6 +103,7 @@ namespace fonthook::implementation::native_tile_overlay
 			UInt32 sequence = 0;
 			UInt32 refreshSequence = 0;
 			bool visible = false;
+			bool ownerShutdown = false;
 		};
 
 		struct NativeTileOverlayState
@@ -158,6 +160,7 @@ namespace fonthook::implementation::native_tile_overlay
 		UInt32 prewarmAppliedRefreshSequence = 0;
 		std::atomic<DWORD> prewarmConsumerThreadId{ 0 };
 		std::atomic_bool prewarmConsumerDisabled{ false };
+		OwnerThreadShutdownLatch prewarmOwnerShutdown;
 		std::array<SIZE_T, kMenuVTableEntryCount + 1> imeMenuVtable = {};
 		CreateMenuByClassFn predecessorCreateMenuByClass = nullptr;
 		RenderedMenuDrawFn predecessorPipboyDraw = nullptr;
@@ -228,6 +231,8 @@ namespace fonthook::implementation::native_tile_overlay
 		std::wstring_view stage, float progress);
 	UInt32 PublishPrewarmOverlayVisibility(bool visible);
 	UInt32 PublishPrewarmOverlayRefresh();
+	UInt32 PublishPrewarmOverlayOwnerShutdown();
+	bool IsPrewarmOverlayOwnerShutdownRequested();
 	void ApplyPrewarmOverlayHidden();
 	bool ApplyPrewarmOverlayVisible(const PrewarmOverlayCommand& command);
 }

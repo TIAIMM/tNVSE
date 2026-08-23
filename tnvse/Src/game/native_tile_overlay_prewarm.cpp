@@ -358,11 +358,19 @@ namespace fonthook
 			float progress)
 		{
 			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+			const UInt32 shutdownSequence =
+				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
+			if (shutdownSequence)
+			{
+				ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+				return shutdownSequence;
+			}
 			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
 			CopyPrewarmCommandText(OverlayRuntime().prewarmCommand.detail, detail);
 			CopyPrewarmCommandText(OverlayRuntime().prewarmCommand.stage, stage);
 			OverlayRuntime().prewarmCommand.progress = std::clamp(progress, 0.0f, 1.0f);
 			OverlayRuntime().prewarmCommand.visible = true;
+			OverlayRuntime().prewarmCommand.ownerShutdown = false;
 			OverlayRuntime().prewarmCommand.sequence = sequence;
 			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			OverlayRuntime().prewarmActive.store(
@@ -376,8 +384,16 @@ namespace fonthook
 		UInt32 PublishPrewarmOverlayVisibility(bool visible)
 		{
 			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+			const UInt32 shutdownSequence =
+				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
+			if (shutdownSequence)
+			{
+				ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+				return shutdownSequence;
+			}
 			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
 			OverlayRuntime().prewarmCommand.visible = visible;
+			OverlayRuntime().prewarmCommand.ownerShutdown = false;
 			OverlayRuntime().prewarmCommand.sequence = sequence;
 			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			OverlayRuntime().prewarmActive.store(
@@ -393,13 +409,48 @@ namespace fonthook
 		UInt32 PublishPrewarmOverlayRefresh()
 		{
 			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+			const UInt32 shutdownSequence =
+				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
+			if (shutdownSequence)
+			{
+				ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+				return shutdownSequence;
+			}
 			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
 			OverlayRuntime().prewarmCommand.refreshSequence = sequence;
+			OverlayRuntime().prewarmCommand.ownerShutdown = false;
 			OverlayRuntime().prewarmCommand.sequence = sequence;
 			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			OverlayRuntime().prewarmPublishedSequence.store(
 				sequence, std::memory_order_release);
 			return sequence;
+		}
+
+		UInt32 PublishPrewarmOverlayOwnerShutdown()
+		{
+			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+			UInt32 sequence =
+				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
+			if (!sequence)
+			{
+				sequence = NextPrewarmCommandSequenceLocked();
+				OverlayRuntime().prewarmCommand.visible = false;
+				OverlayRuntime().prewarmCommand.ownerShutdown = true;
+				OverlayRuntime().prewarmCommand.sequence = sequence;
+				OverlayRuntime().prewarmOwnerShutdown.Request(sequence);
+				OverlayRuntime().prewarmPublishedSequence.store(
+					sequence, std::memory_order_release);
+			}
+			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
+			OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+			OverlayRuntime().prewarmConsumerDisabled.store(
+				true, std::memory_order_release);
+			return sequence;
+		}
+
+		bool IsPrewarmOverlayOwnerShutdownRequested()
+		{
+			return OverlayRuntime().prewarmOwnerShutdown.RequestedSequence() != 0;
 		}
 
 		PrewarmOverlayCommand ReadLatestPrewarmOverlayCommand()
@@ -493,6 +544,28 @@ namespace fonthook
 
 		void ConsumeNativePrewarmOverlayCommand()
 		{
+			struct ScopedOwnerWork final
+			{
+				ScopedOwnerWork()
+				{
+					OverlayRuntime().prewarmOwnerShutdown.EnterOwnerWork();
+				}
+				~ScopedOwnerWork()
+				{
+					OverlayRuntime().prewarmOwnerShutdown.LeaveOwnerWork();
+				}
+			} ownerWork;
+
+			DWORD expectedThread = 0;
+			const DWORD currentThread = GetCurrentThreadId();
+			if (OverlayRuntime().prewarmConsumerThreadId.compare_exchange_strong(
+				expectedThread, currentThread, std::memory_order_acq_rel))
+			{
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot fontRoute=freetype-native-no-precache",
+					currentThread);
+			}
+
 			const UInt32 published = OverlayRuntime().prewarmPublishedSequence.load(
 				std::memory_order_acquire);
 			if (!published || published == OverlayRuntime().prewarmConsumedSequence.load(
@@ -506,14 +579,43 @@ namespace fonthook
 			if (!command.sequence)
 				return;
 
-			DWORD expectedThread = 0;
-			const DWORD currentThread = GetCurrentThreadId();
-			if (OverlayRuntime().prewarmConsumerThreadId.compare_exchange_strong(
-				expectedThread, currentThread, std::memory_order_acq_rel))
+			if (command.ownerShutdown)
 			{
+				bool detached = true;
+				try
+				{
+					ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
+					ApplyPrewarmOverlayHidden();
+				}
+				catch (const std::exception& error)
+				{
+					detached = false;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: owner-thread prewarm shutdown detach failed reason=%s policy=forget-non-owning-pointers",
+						error.what());
+				}
+				catch (...)
+				{
+					detached = false;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: owner-thread prewarm shutdown detach failed reason=unknown policy=forget-non-owning-pointers");
+				}
+				// This is the only thread allowed to clear LoadingMenu-owned raw
+				// pointers.  If detaching failed, the child remains owned by the
+				// engine and its normal LoadingMenu teardown reclaims it.
+				ResetPrewarmForParent(nullptr);
+				OverlayRuntime().prewarmAppliedRefreshSequence = 0;
+				OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
+				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+				OverlayRuntime().prewarmConsumerDisabled.store(
+					true, std::memory_order_release);
+				OverlayRuntime().prewarmConsumedSequence.store(
+					command.sequence, std::memory_order_release);
+				OverlayRuntime().prewarmOwnerShutdown.Acknowledge(command.sequence);
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot fontRoute=freetype-native-no-precache",
-					currentThread);
+					"tnvse_native_overlay: owner-thread prewarm shutdown acknowledged sequence=%u thread=%u detached=%u",
+					command.sequence, currentThread, detached ? 1u : 0u);
+				return;
 			}
 			if (OverlayRuntime().prewarmConsumerDisabled.load(std::memory_order_acquire))
 			{

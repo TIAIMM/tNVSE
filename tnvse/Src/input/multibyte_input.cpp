@@ -146,7 +146,6 @@ namespace fonthook
 			ResetModernHelpMenuInputState();
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
-			ShutdownNativeTileOverlayHost();
 			// COM teardown must not depend on whether a later plugin currently
 			// owns the top of the WndProc subclass chain.
 			ShutdownTsfCandidateSupport();
@@ -158,7 +157,6 @@ namespace fonthook
 			ResetMcmExtenderInputState();
 			ResetDialogueHistoryInputState();
 			HideCandidateOverlay();
-			ShutdownNativeTileOverlayHost();
 			RestoreWindowProc();
 		}
 	}

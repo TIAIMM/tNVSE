@@ -286,7 +286,6 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 		fonthook::ShutdownFreeTypeFontPrewarm();
 		fonthook::FlushFreeTypePersistentFontCache();
 		fonthook::ShutdownFreeTypeDefaultPoolAtlas();
-		fonthook::ShutdownNativeTileOverlayHost();
 		fonthook::FlushFreeTypeFontDebugLogFully();
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_DeferredInit
@@ -296,6 +295,15 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	}
 	fonthook::HandleSaveDisplayNameMessage(g_msg);
 	fonthook::HandleMultibyteInputMessage(g_msg);
+	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame
+		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitGame_Console
+		|| g_msg->type == NVSEMessagingInterface::kMessage_ExitToMainMenu))
+	{
+		// Overlay lifetime is independent of whether multibyte input is enabled.
+		// Keep one central shutdown publisher so the LoadingMenu owner receives a
+		// single command and the game thread never repeats destructive teardown.
+		fonthook::ShutdownNativeTileOverlayHost();
+	}
 }
 
 bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)

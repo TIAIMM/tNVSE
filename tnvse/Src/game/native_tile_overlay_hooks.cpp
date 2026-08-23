@@ -74,10 +74,17 @@ namespace fonthook
 			if (IsLoadingMenuThreadPauseOrShutdownRequested()
 				|| IsLoadingMenuVanillaUpdateBlockedAtStartup())
 			{
+				if (IsPrewarmOverlayOwnerShutdownRequested())
+					ConsumeNativePrewarmOverlayCommand();
 				return;
 			}
 			if (OverlayRuntime().predecessorLoadingMenuUpdate)
 				OverlayRuntime().predecessorLoadingMenuUpdate(loadingMenu);
+			if (IsPrewarmOverlayOwnerShutdownRequested())
+			{
+				ConsumeNativePrewarmOverlayCommand();
+				return;
+			}
 			if (IsLoadingMenuThreadPauseOrShutdownRequested())
 				return;
 			ConsumeNativePrewarmOverlayCommand();

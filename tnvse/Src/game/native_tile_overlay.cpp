@@ -367,11 +367,52 @@ namespace fonthook
 
 	void ShutdownNativeTileOverlayHost()
 	{
-		// Stop publishing either Tile tree before destruction. The IME tree is
-		// owned by the game thread and can be released here. The prewarm tree is
-		// owned by LoadingMenuThread; leave its attached child to LoadingMenu's
-		// normal teardown and only forget our non-owning pointers.
+		// NVSE dispatches exit messages synchronously on the game thread without
+		// first joining LoadingMenuThread.  Publish owner-thread teardown and wait
+		// only for a bounded acknowledgement; never clear its raw Tile pointers here.
+		const UInt32 prewarmShutdownSequence =
+			PublishPrewarmOverlayOwnerShutdown();
 		OverlayRuntime().imeReady.store(false, std::memory_order_release);
+		OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
+		OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+
+		constexpr UInt32 kOwnerShutdownTimeoutMs = 500;
+		const DWORD ownerThread = OverlayRuntime().prewarmConsumerThreadId.load(
+			std::memory_order_acquire);
+		const bool ownerReachable = HasVerifiedLoadingMenuUpdateHook()
+			&& (ownerThread
+				|| OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight());
+		bool ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
+			prewarmShutdownSequence);
+		if (!ownerQuiesced && ownerThread == GetCurrentThreadId())
+		{
+			ConsumeNativePrewarmOverlayCommand();
+			ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
+				prewarmShutdownSequence);
+		}
+		if (!ownerQuiesced && ownerReachable)
+		{
+			const ULONGLONG deadline =
+				GetTickCount64() + kOwnerShutdownTimeoutMs;
+			while (!OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
+				prewarmShutdownSequence)
+				&& GetTickCount64() < deadline)
+			{
+				Sleep(1);
+			}
+			ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
+				prewarmShutdownSequence);
+		}
+		if (!ownerQuiesced
+			&& (ownerThread
+				|| OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight()))
+		{
+			gLog.FormattedMessage(
+				"tnvse_native_overlay: owner-thread prewarm shutdown acknowledgement unavailable sequence=%u ownerThread=%u inFlight=%u timeoutMs=%u policy=retain-owner-state-no-cross-thread-clear",
+				prewarmShutdownSequence, ownerThread,
+				OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight(),
+				kOwnerShutdownTimeoutMs);
+		}
 		OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
 		OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
 		InterfaceManager* manager = InterfaceManager::GetSingleton();
@@ -386,6 +427,5 @@ namespace fonthook
 				"tNVSE_IME");
 		}
 		ResetImeForParent(nullptr);
-		ResetPrewarmForParent(nullptr);
 	}
 }
