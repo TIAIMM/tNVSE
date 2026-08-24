@@ -1,4 +1,5 @@
 #include "font_vector_internal.h"
+#include "text_safety.h"
 
 #include "encoding.h"
 #include "load_config.h"
@@ -987,9 +988,15 @@ namespace fonthook
 		char* slash = std::strrchr(modulePath.data(), '\\');
 		if (!slash)
 			return;
-		strcpy_s(slash + 1,
+		if (text_safety::CopyCStringIfFits(slash + 1,
 			modulePath.size() - static_cast<size_t>(slash + 1 - modulePath.data()),
-			"Data\\nvse\\plugins\\tnvse_fonts.xml");
+			"Data\\nvse\\plugins\\tnvse_fonts.xml")
+			!= text_safety::CopyStatus::Copied)
+		{
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: executable path is too long for config path");
+			return;
+		}
 		if (g_bEnableFreeTypeFontRenderingLog)
 		{
 			FreeTypeFontDebugLog(

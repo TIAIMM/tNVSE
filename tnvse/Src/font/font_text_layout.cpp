@@ -6,6 +6,7 @@
 #include "font_vector_internal.h"
 #include "load_config.h"
 #include "native_calls.h"
+#include "text_safety.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -66,10 +67,10 @@ namespace fonthook
 				isPositiveEscape = false;
 				escapeSeqPrefixLen = 2;
 			}
-			char varNameBuffer[128];
+			char varNameBuffer[text_safety::kRetailReplacementNameMaxBytes + 1];
 			int rawLen = 0;
 			while (processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex]
-				&& rawLen < 127
+				&& rawLen < text_safety::kRetailReplacementNameMaxBytes
 				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != ';'
 				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != '\n'
 				&& processedOriginalText[escapeSeqPrefixLen + rawLen + srcTextIndex] != axData->cLineSep)
@@ -94,19 +95,17 @@ namespace fonthook
 					int charScanIndex = 0;
 					while (parsedTextBuffer[charScanIndex] != '\\') ++charScanIndex;
 
-					char iconPath[264] = {};
-					char textureNameBuffer[268];
-					strcpy_s(iconPath, sizeof(iconPath), &parsedTextBuffer[charScanIndex + 1]);
+					std::string iconPath(&parsedTextBuffer[charScanIndex + 1]);
 					if (font->iFontNum == 7)
+						iconPath.insert(0, "glow_");
+					if (iconPath.size() < MAX_PATH)
 					{
-						strcpy_s(textureNameBuffer, MAX_PATH, iconPath);
-						sprintf_s(iconPath, MAX_PATH, "glow_%s", textureNameBuffer);
+						font->AddTextIcon(iconPath.c_str());
+						parsedTextBuffer[charScanIndex] = 1;
+						parsedTextBuffer[charScanIndex + 1] = 0;
+						postEscapeTextLen = charScanIndex + 2;
+						escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
 					}
-					font->AddTextIcon(iconPath);
-					parsedTextBuffer[charScanIndex] = 1;
-					parsedTextBuffer[charScanIndex + 1] = 0;
-					postEscapeTextLen = charScanIndex + 2;
-					escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
 				}
 				if (escapeSeqSizeDiff > 0)
 				{
@@ -1689,7 +1688,8 @@ namespace fonthook
 
 		if (!*dynamicTextBuffer)
 		{
-			strcpy_s(dynamicTextBuffer, textBufferSize, " ");
+			dynamicTextBuffer[0] = ' ';
+			dynamicTextBuffer[1] = '\0';
 			origConsumed = 1;
 			processedTextLen = 1;
 			currentLineCount = 1;

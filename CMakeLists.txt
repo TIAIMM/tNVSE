@@ -160,6 +160,23 @@ if(TNVSE_BUILD_FONT_MULTIBYTE_PREWARM_TESTS)
     COMMAND $<TARGET_FILE:tnvse_font_multibyte_prewarm_tests>)
 endif()
 
+option(TNVSE_BUILD_TEXT_SAFETY_TESTS
+  "Build the deterministic retail text-boundary regression tests" OFF)
+if(TNVSE_BUILD_TEXT_SAFETY_TESTS)
+  enable_testing()
+  add_executable(tnvse_text_safety_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/text_safety_tests.cpp")
+  target_compile_features(tnvse_text_safety_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_text_safety_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
+  target_compile_options(tnvse_text_safety_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_text_safety_tests)
+  set_target_properties(tnvse_text_safety_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME text_safety
+    COMMAND $<TARGET_FILE:tnvse_text_safety_tests>)
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

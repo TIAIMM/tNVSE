@@ -6,6 +6,7 @@
 #include "game_hooks.h"
 #include "load_config.h"
 #include "native_calls.h"
+#include "text_safety.h"
 #include "tnvse.h"
 #include <array>
 #include <cstring>
@@ -235,9 +236,19 @@ namespace fonthook
 				++arIndex;
 				return true;
 			}
+			const UInt32 entityOverhead = apSource[arIndex + 1] == '-'
+				? 3u : 2u; // leading '&', optional '-', and trailing ';'
+			if (length <= entityOverhead
+				|| length - entityOverhead
+					> text_safety::kRetailReplacementNameMaxBytes)
+			{
+				arOut.append(apSource + arIndex, length);
+				arIndex += length;
+				return true;
+			}
 
 			std::string entity(apSource + arIndex, apSource + arIndex + length);
-			char replacement[260] = {};
+			char replacement[text_safety::kRetailReplacementOutputCapacity] = {};
 			Interface_FindTextReplacementString(entity.c_str(), replacement, sizeof(replacement), false);
 			if (replacement[0] == '\\')
 			{

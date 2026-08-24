@@ -3,6 +3,7 @@
 #include "encoding.h"
 #include "load_config.h"
 #include "native_calls.h"
+#include "text_safety.h"
 
 #include <algorithm>
 #include <cctype>
@@ -756,37 +757,21 @@ namespace fonthook
 					continue;
 				}
 
-				// Extract variable name: & or &- followed by chars until ; \n or end
-				size_t nameStart = i + 1;
-				bool isNegative = false;
-				if (text[nameStart] == '-')
-				{
-					isNegative = true;
-					++nameStart;
-				}
-				size_t nameEnd = nameStart;
-				while (nameEnd < text.size()
-					&& text[nameEnd] != ';'
-					&& text[nameEnd] != '\n'
-					&& text[nameEnd] != '\0')
-				{
-					++nameEnd;
-				}
-				if (nameEnd == nameStart || nameEnd >= text.size())
+				text_safety::GameVariableToken token;
+				if (!text_safety::TryParseGameVariableToken(text, i, token))
 				{
 					result.push_back(text[i++]);
 					continue;
 				}
-				bool hasSemicolon = text[nameEnd] == ';';
 
-				std::string varName(text, nameStart, nameEnd - nameStart);
-				char outBuf[1024] = {};
+				std::string varName(text, token.nameBegin, token.nameLength);
+				char outBuf[text_safety::kRetailReplacementOutputCapacity] = {};
 				if (Interface_FindTextReplacementString(
 					varName.c_str(), outBuf,
-					static_cast<UInt32>(sizeof(outBuf)), !isNegative))
+					static_cast<UInt32>(sizeof(outBuf)), token.isPositive))
 				{
 					result.append(outBuf);
-					i = nameEnd + (hasSemicolon ? 1 : 0);
+					i = token.nextIndex;
 					changed = true;
 				}
 				else

@@ -1,8 +1,12 @@
 #include "text_hooks.h"
 #include "dictionary.h"
 #include "font_glyphs.h"
+#include "text_safety.h"
 
+#include <cerrno>
 #include <cstddef>
+#include <limits>
+#include <string_view>
 
 namespace fonthook
 {
@@ -80,28 +84,19 @@ namespace fonthook
 			return safeSource;
 		}
 
-		int FormatDoorPromptCHS(
-			char* buffer, size_t sizeOfBuffer,
-			const char* sDst, const char* sTo, const char* sCellName,
-			bool translatePieces)
+		int WriteFixedUiText(
+			char* buffer, size_t sizeOfBuffer, std::string_view text)
 		{
-			static std::string sConvertedStructuralParticle = GetDoorStructuralParticle();
-
-			std::string translatedDst;
-			std::string translatedCellName;
-			bool usedStructuralParticleFallback = false;
-			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
-			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
-			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
-
-			if (usedStructuralParticleFallback)
-				return sprintf_s(buffer, sizeOfBuffer, "%s%s%s", cellName, to, dst);
-
-			return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", to, cellName, sConvertedStructuralParticle.c_str(), dst);
+			if (text.size() > static_cast<size_t>(std::numeric_limits<int>::max())
+				|| text_safety::CopyTextIfFits(buffer, sizeOfBuffer, text)
+					!= text_safety::CopyStatus::Copied)
+			{
+				return -1;
+			}
+			return static_cast<int>(text.size());
 		}
 
-		int FormatDoorPromptKOR(
-			char* buffer, size_t sizeOfBuffer,
+		std::string BuildDoorPromptCHS(
 			const char* sDst, const char* sTo, const char* sCellName,
 			bool translatePieces)
 		{
@@ -114,10 +109,65 @@ namespace fonthook
 			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
 			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
 
+			std::string prompt;
 			if (usedStructuralParticleFallback)
-				return sprintf_s(buffer, sizeOfBuffer, "%s%s%s", cellName, to, dst);
+			{
+				prompt = cellName;
+				prompt += to;
+				prompt += dst;
+				return prompt;
+			}
 
-			return sprintf_s(buffer, sizeOfBuffer, "%s%s%s%s", cellName, to, sConvertedStructuralParticle.c_str(), dst);
+			prompt = to;
+			prompt += cellName;
+			prompt += sConvertedStructuralParticle;
+			prompt += dst;
+			return prompt;
+		}
+
+		std::string BuildDoorPromptKOR(
+			const char* sDst, const char* sTo, const char* sCellName,
+			bool translatePieces)
+		{
+			static std::string sConvertedStructuralParticle = GetDoorStructuralParticle();
+
+			std::string translatedDst;
+			std::string translatedCellName;
+			bool usedStructuralParticleFallback = false;
+			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
+			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
+			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
+
+			std::string prompt = cellName;
+			if (usedStructuralParticleFallback)
+			{
+				prompt += to;
+				prompt += dst;
+				return prompt;
+			}
+
+			prompt += to;
+			prompt += sConvertedStructuralParticle;
+			prompt += dst;
+			return prompt;
+		}
+
+		std::string BuildDoorDictionarySourceCHS(
+			const char* sDst, const char* sTo, const char* sCellName)
+		{
+			std::string source = SafeCString(sTo);
+			source += SafeCString(sCellName);
+			source += SafeCString(sDst);
+			return source;
+		}
+
+		std::string BuildDoorDictionarySourceKOR(
+			const char* sDst, const char* sTo, const char* sCellName)
+		{
+			std::string source = SafeCString(sCellName);
+			source += SafeCString(sTo);
+			source += SafeCString(sDst);
+			return source;
 		}
 	}
 
@@ -196,12 +246,26 @@ namespace fonthook
 
 	int __cdecl strcpy_sHook(char* dest, int dest_size, const char* src)
 	{
+		if (!dest || dest_size <= 0 || !src)
+		{
+			text_safety::ClearBuffer(
+				dest, dest_size > 0 ? static_cast<size_t>(dest_size) : 0u);
+			return EINVAL;
+		}
+
 		std::string sConvertedStr;
 		ConvertToMultiByte(src, sConvertedStr, HasExtraGlyphsForFont(8));
 		std::string sTranslatedStr;
-		const char* copySource = TranslateText(src, sTranslatedStr)
-			? sTranslatedStr.c_str() : src;
-		const int result = strcpy_s(dest, dest_size, copySource);
+		const std::string_view source(src);
+		const bool translated = TranslateText(src, sTranslatedStr);
+		const bool copied = translated
+			? text_safety::CopyPreferredTextWithFallback(
+				dest, static_cast<size_t>(dest_size), sTranslatedStr, source)
+				!= text_safety::CopyChoice::None
+			: text_safety::CopyTextIfFits(
+				dest, static_cast<size_t>(dest_size), source)
+				== text_safety::CopyStatus::Copied;
+		const int result = copied ? 0 : ERANGE;
 		if (result == 0 && dest_size > 0)
 		{
 			UppercaseQuestTextPreservingDbcs(
@@ -221,17 +285,32 @@ namespace fonthook
 		const char* sformat, const char* sDst,
 		const char* sTo, const char* sCellName)
 	{
+		(void)sformat;
+		if (!buffer || sizeOfBuffer == 0)
+			return -1;
+
+		const std::string original = BuildDoorPromptCHS(
+			sDst, sTo, sCellName, false);
 		if (!g_bEnableDictionaryTranslation)
-			return FormatDoorPromptCHS(buffer, sizeOfBuffer, sDst, sTo, sCellName, false);
+			return WriteFixedUiText(buffer, sizeOfBuffer, original);
 
-		char sourceBuffer[1024] = {};
-		sprintf_s(sourceBuffer, sizeof(sourceBuffer), "%s%s%s", SafeCString(sTo), SafeCString(sCellName), SafeCString(sDst));
-
+		const std::string source = BuildDoorDictionarySourceCHS(
+			sDst, sTo, sCellName);
 		std::string translated;
-		if (TranslateText(sourceBuffer, translated))
-			return sprintf_s(buffer, sizeOfBuffer, "%s", translated.c_str());
+		if (TranslateText(source.c_str(), translated))
+		{
+			const int result = WriteFixedUiText(
+				buffer, sizeOfBuffer, translated);
+			if (result >= 0)
+				return result;
+		}
 
-		return FormatDoorPromptCHS(buffer, sizeOfBuffer, sDst, sTo, sCellName, true);
+		const std::string pieceTranslated = BuildDoorPromptCHS(
+			sDst, sTo, sCellName, true);
+		const int pieceResult = WriteFixedUiText(
+			buffer, sizeOfBuffer, pieceTranslated);
+		return pieceResult >= 0
+			? pieceResult : WriteFixedUiText(buffer, sizeOfBuffer, original);
 	}
 
 	int BSsprintfHookKOR(
@@ -239,17 +318,32 @@ namespace fonthook
 		const char* sformat, const char* sDst,
 		const char* sTo, const char* sCellName)
 	{
+		(void)sformat;
+		if (!buffer || sizeOfBuffer == 0)
+			return -1;
+
+		const std::string original = BuildDoorPromptKOR(
+			sDst, sTo, sCellName, false);
 		if (!g_bEnableDictionaryTranslation)
-			return FormatDoorPromptKOR(buffer, sizeOfBuffer, sDst, sTo, sCellName, false);
+			return WriteFixedUiText(buffer, sizeOfBuffer, original);
 
-		char sourceBuffer[1024] = {};
-		sprintf_s(sourceBuffer, sizeof(sourceBuffer), "%s%s%s", SafeCString(sCellName), SafeCString(sTo), SafeCString(sDst));
-
+		const std::string source = BuildDoorDictionarySourceKOR(
+			sDst, sTo, sCellName);
 		std::string translated;
-		if (TranslateText(sourceBuffer, translated))
-			return sprintf_s(buffer, sizeOfBuffer, "%s", translated.c_str());
+		if (TranslateText(source.c_str(), translated))
+		{
+			const int result = WriteFixedUiText(
+				buffer, sizeOfBuffer, translated);
+			if (result >= 0)
+				return result;
+		}
 
-		return FormatDoorPromptKOR(buffer, sizeOfBuffer, sDst, sTo, sCellName, true);
+		const std::string pieceTranslated = BuildDoorPromptKOR(
+			sDst, sTo, sCellName, true);
+		const int pieceResult = WriteFixedUiText(
+			buffer, sizeOfBuffer, pieceTranslated);
+		return pieceResult >= 0
+			? pieceResult : WriteFixedUiText(buffer, sizeOfBuffer, original);
 	}
 
 } // namespace fonthook

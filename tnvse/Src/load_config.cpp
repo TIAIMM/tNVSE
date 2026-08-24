@@ -1,4 +1,5 @@
 #include "load_config.h"
+#include "text_safety.h"
 
 #include <algorithm>
 #include <cmath>
@@ -103,13 +104,14 @@ void LoadConfig()
 		? std::strrchr(filename, '\\')
 		: nullptr;
 	const bool absoluteConfigPathReady = lastSlash
-		&& strcpy_s(
+		&& fonthook::text_safety::CopyCStringIfFits(
 			lastSlash + 1,
 			_countof(filename) - static_cast<size_t>((lastSlash + 1) - filename),
-			kRelativeConfigPath) == 0;
+			kRelativeConfigPath) == fonthook::text_safety::CopyStatus::Copied;
 	if (!absoluteConfigPathReady)
 	{
-		strcpy_s(filename, _countof(filename), kRelativeConfigPath);
+		fonthook::text_safety::CopyCStringIfFits(
+			filename, _countof(filename), kRelativeConfigPath);
 		gLog.FormattedMessage(
 			"Config path: executable path unavailable or malformed; using relative path %s",
 			filename);

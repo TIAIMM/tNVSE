@@ -1,6 +1,7 @@
 #include "MemoryManager.hpp"
 #include "NiPixelFormat.hpp"
 #include "native_calls.h"
+#include "text_safety.h"
 
 namespace fonthook
 {
@@ -11,11 +12,25 @@ namespace fonthook
 
 	bool __cdecl Interface_FindTextReplacementString(const char* varName, char* outBuffer, UInt32 bufferSize, bool isPositiveEscape)
 	{
+		text_safety::ClearBuffer(outBuffer, bufferSize);
+		if (!text_safety::IsRetailReplacementArgumentSafe(varName)
+			|| !outBuffer
+			|| bufferSize < text_safety::kRetailReplacementOutputCapacity)
+		{
+			return false;
+		}
 		return CdeclCall<bool>(0x7070C0, varName, outBuffer, bufferSize, isPositiveEscape);
 	}
 
 	bool __cdecl Interface_TestConstantForGameSettings(const char* p_varNameBuffer, void* p_parsedTextBuffer)
 	{
+		char* output = static_cast<char*>(p_parsedTextBuffer);
+		text_safety::ClearBuffer(output, 1);
+		if (!text_safety::IsRetailReplacementArgumentSafe(p_varNameBuffer)
+			|| !output)
+		{
+			return false;
+		}
 		return CdeclCall<bool>(0x7073D0, p_varNameBuffer, p_parsedTextBuffer);
 	}
 
