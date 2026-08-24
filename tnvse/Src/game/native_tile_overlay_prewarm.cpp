@@ -352,6 +352,47 @@ namespace fonthook
 				std::copy_n(source.data(), length, target.data());
 		}
 
+		void RecordPrewarmOverlayCommandPublished(UInt32 sequence)
+		{
+			if (!sequence)
+				return;
+			LoadingMenuDiagnosticState& diagnostics =
+				OverlayRuntime().loadingMenuDiagnostics;
+			diagnostics.commandsPublished.fetch_add(
+				1, std::memory_order_relaxed);
+			diagnostics.lastCommandPublishedAt.store(
+				GetTickCount64(), std::memory_order_release);
+		}
+
+		void RecordPrewarmOverlayCommandConsumeAttempt(UInt32 sequence)
+		{
+			LoadingMenuDiagnosticState& diagnostics =
+				OverlayRuntime().loadingMenuDiagnostics;
+			diagnostics.commandConsumeAttempts.fetch_add(
+				1, std::memory_order_relaxed);
+			diagnostics.lastCommandAttemptSequence.store(
+				sequence, std::memory_order_release);
+			diagnostics.lastCommandConsumeAttemptAt.store(
+				GetTickCount64(), std::memory_order_release);
+		}
+
+		void CompletePrewarmOverlayCommand(
+			UInt32 sequence, const char* diagnosticEvent = nullptr)
+		{
+			OverlayRuntime().prewarmConsumedSequence.store(
+				sequence, std::memory_order_release);
+			LoadingMenuDiagnosticState& diagnostics =
+				OverlayRuntime().loadingMenuDiagnostics;
+			diagnostics.commandsConsumed.fetch_add(
+				1, std::memory_order_relaxed);
+			diagnostics.lastCommandConsumedSequence.store(
+				sequence, std::memory_order_release);
+			diagnostics.lastCommandConsumedAt.store(
+				GetTickCount64(), std::memory_order_release);
+			if (diagnosticEvent)
+				LogNativeLoadingMenuDiagnostic(diagnosticEvent);
+		}
+
 		UInt32 PublishPrewarmOverlayUpdate(
 			std::wstring_view detail,
 			std::wstring_view stage,
@@ -378,6 +419,7 @@ namespace fonthook
 				std::memory_order_release);
 			OverlayRuntime().prewarmPublishedSequence.store(
 				sequence, std::memory_order_release);
+			RecordPrewarmOverlayCommandPublished(sequence);
 			return sequence;
 		}
 
@@ -403,6 +445,10 @@ namespace fonthook
 				std::memory_order_release);
 			OverlayRuntime().prewarmPublishedSequence.store(
 				sequence, std::memory_order_release);
+			RecordPrewarmOverlayCommandPublished(sequence);
+			LogNativeLoadingMenuDiagnostic(visible
+				? "prewarm-command-published:show"
+				: "prewarm-command-published:hide");
 			return sequence;
 		}
 
@@ -423,11 +469,13 @@ namespace fonthook
 			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			OverlayRuntime().prewarmPublishedSequence.store(
 				sequence, std::memory_order_release);
+			RecordPrewarmOverlayCommandPublished(sequence);
 			return sequence;
 		}
 
 		UInt32 PublishPrewarmOverlayOwnerShutdown()
 		{
+			bool publishedNewCommand = false;
 			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			UInt32 sequence =
 				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
@@ -440,11 +488,16 @@ namespace fonthook
 				OverlayRuntime().prewarmOwnerShutdown.Request(sequence);
 				OverlayRuntime().prewarmPublishedSequence.store(
 					sequence, std::memory_order_release);
+				publishedNewCommand = true;
 			}
 			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
 			OverlayRuntime().prewarmConsumerDisabled.store(
 				true, std::memory_order_release);
+			if (publishedNewCommand)
+				RecordPrewarmOverlayCommandPublished(sequence);
+			LogNativeLoadingMenuDiagnostic(
+				"prewarm-command-published:owner-shutdown");
 			return sequence;
 		}
 
@@ -466,6 +519,8 @@ namespace fonthook
 		{
 			Tile* parent = SynchronizePrewarmParent();
 			Tile* root = OverlayRuntime().state.prewarmRoot;
+			const bool hadOverlay = root
+				|| OverlayRuntime().state.prewarmTileVisible;
 			const bool attached = IsNamedDirectChild(
 				parent, root, "tNVSE_Prewarm");
 			if (OverlayRuntime().state.prewarmTileVisible
@@ -480,6 +535,8 @@ namespace fonthook
 					parent, root, "tNVSE_Prewarm");
 			}
 			ClearPrewarmResolvedTiles();
+			if (hadOverlay)
+				LogNativeLoadingMenuDiagnostic("prewarm-overlay-hidden-detached");
 		}
 
 		bool ApplyPrewarmOverlayVisible(
@@ -493,6 +550,8 @@ namespace fonthook
 					OverlayRuntime().state.prewarmParentUnavailableLogged = true;
 					gLog.FormattedMessage(
 						"tnvse_native_overlay: LoadingMenu root not ready; retaining queued prewarm progress until owner thread can attach it");
+					LogNativeLoadingMenuDiagnostic(
+						"prewarm-consume-wait:loadingmenu-root-unavailable");
 				}
 				return false;
 			}
@@ -504,6 +563,8 @@ namespace fonthook
 					OverlayRuntime().prewarmConsumerDisabled.store(
 						true, std::memory_order_release);
 					OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
+					LogNativeLoadingMenuDiagnostic(
+						"prewarm-host-load-failed:consumer-disabled");
 				}
 				return true;
 			}
@@ -512,6 +573,7 @@ namespace fonthook
 			{
 				SetVisible(OverlayRuntime().state.prewarmRoot, true);
 				OverlayRuntime().state.prewarmTileVisible = true;
+				LogNativeLoadingMenuDiagnostic("prewarm-overlay-visible");
 			}
 
 			SetText(OverlayRuntime().state.prewarmDetail, command.detail.data());
@@ -578,6 +640,7 @@ namespace fonthook
 				ReadLatestPrewarmOverlayCommand();
 			if (!command.sequence)
 				return;
+			RecordPrewarmOverlayCommandConsumeAttempt(command.sequence);
 
 			if (command.ownerShutdown)
 			{
@@ -609,8 +672,9 @@ namespace fonthook
 				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
 				OverlayRuntime().prewarmConsumerDisabled.store(
 					true, std::memory_order_release);
-				OverlayRuntime().prewarmConsumedSequence.store(
-					command.sequence, std::memory_order_release);
+				CompletePrewarmOverlayCommand(
+					command.sequence,
+					"prewarm-command-consumed:owner-shutdown");
 				OverlayRuntime().prewarmOwnerShutdown.Acknowledge(command.sequence);
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: owner-thread prewarm shutdown acknowledged sequence=%u thread=%u detached=%u",
@@ -620,8 +684,17 @@ namespace fonthook
 			if (OverlayRuntime().prewarmConsumerDisabled.load(std::memory_order_acquire))
 			{
 				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
-				OverlayRuntime().prewarmConsumedSequence.store(
-					command.sequence, std::memory_order_release);
+				bool expected = false;
+				const bool firstDisabledConsumption =
+					OverlayRuntime().loadingMenuDiagnostics
+						.loggedPrewarmConsumerDisabledConsumption
+						.compare_exchange_strong(
+							expected, true, std::memory_order_acq_rel);
+				CompletePrewarmOverlayCommand(
+					command.sequence,
+					firstDisabledConsumption
+						? "prewarm-command-consumed:consumer-disabled"
+						: nullptr);
 				return;
 			}
 			if (command.visible && !IsPrewarmOverlayMakeNodeRouteInstalled())
@@ -633,8 +706,9 @@ namespace fonthook
 				OverlayRuntime().prewarmConsumerDisabled.store(
 					true, std::memory_order_release);
 				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
-				OverlayRuntime().prewarmConsumedSequence.store(
-					command.sequence, std::memory_order_release);
+				CompletePrewarmOverlayCommand(
+					command.sequence,
+					"prewarm-command-consumed:makenode-route-unavailable");
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: prewarm progress disabled because TileText::MakeNode no-precache route is not the verified top-level owner; blocking font prewarm continues");
 				return;
@@ -667,6 +741,8 @@ namespace fonthook
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: prewarm progress consumer disabled reason=%s policy=font-prewarm-continues",
 					error.what());
+				LogNativeLoadingMenuDiagnostic(
+					"prewarm-consumer-exception:standard");
 			}
 			catch (...)
 			{
@@ -676,9 +752,10 @@ namespace fonthook
 				OverlayRuntime().state.prewarmLoadFailed = true;
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: prewarm progress consumer disabled reason=unknown policy=font-prewarm-continues");
+				LogNativeLoadingMenuDiagnostic(
+					"prewarm-consumer-exception:unknown");
 			}
-			OverlayRuntime().prewarmConsumedSequence.store(
-				command.sequence, std::memory_order_release);
+			CompletePrewarmOverlayCommand(command.sequence);
 		}
 	}
 }

@@ -12,6 +12,7 @@ namespace fonthook::vectorfont
 		constexpr ULONGLONG kMainThreadAtlasExecutionTimeoutMs = 120000;
 		constexpr ULONGLONG kPrewarmNoProgressTimeoutMs = 180000;
 		constexpr ULONGLONG kPrewarmOverallTimeoutMs = 15ull * 60ull * 1000ull;
+		constexpr ULONGLONG kPrewarmDiagnosticHeartbeatMs = 5000;
 		constexpr DWORD kPrewarmWorkerExitGraceMs = 2000;
 
 		enum class MainThreadRequestState : UInt8
@@ -443,6 +444,28 @@ namespace fonthook::vectorfont
 			coordinator.condition.notify_all();
 		}
 
+		const char* MainThreadRequestStateName(
+			MainThreadRequestState state) noexcept
+		{
+			switch (state)
+			{
+			case MainThreadRequestState::Idle:
+				return "idle";
+			case MainThreadRequestState::Queued:
+				return "queued";
+			case MainThreadRequestState::Executing:
+				return "executing";
+			case MainThreadRequestState::Completed:
+				return "completed";
+			case MainThreadRequestState::Cancelled:
+				return "cancelled";
+			case MainThreadRequestState::Abandoned:
+				return "abandoned";
+			default:
+				return "unknown";
+			}
+		}
+
 		void StartFontPrewarmWorker()
 		{
 			if (!g_bEnableFreeTypeFontRendering)
@@ -786,6 +809,8 @@ namespace fonthook::vectorfont
 				coordinator.runControl.Heartbeat(), kPrewarmNoProgressTimeoutMs,
 				kPrewarmOverallTimeoutMs);
 			UInt32 iterations = 0;
+			ULONGLONG nextDiagnosticAt =
+				startedAt + kPrewarmDiagnosticHeartbeatMs;
 			PrewarmWatchdogReason watchdogReason = PrewarmWatchdogReason::None;
 			for (;;)
 			{
@@ -806,7 +831,55 @@ namespace fonthook::vectorfont
 				if (settled)
 					break;
 
-				watchdogReason = watchdog.Observe(GetTickCount64(),
+				const ULONGLONG now = GetTickCount64();
+				if (g_bEnableFreeTypeFontRenderingLog
+					&& now >= nextDiagnosticAt)
+				{
+					MainThreadRequestState requestState =
+						MainThreadRequestState::Idle;
+					PrewarmAtlasRequestKind requestKind =
+						PrewarmAtlasRequestKind::LoadSnapshot;
+					UInt64 requestToken = 0;
+					UInt64 requestRunToken = 0;
+					UInt32 requestFontId = 0;
+					ULONGLONG requestQueuedAt = 0;
+					ULONGLONG requestExecutingAt = 0;
+					{
+						MainThreadAtlasRequest& request = MainThreadRequest();
+						std::lock_guard<std::mutex> lock(request.mutex);
+						requestState = request.state;
+						requestKind = request.kind;
+						requestToken = request.token;
+						requestRunToken = request.runToken;
+						requestFontId = request.fontId;
+						requestQueuedAt = request.queuedAt;
+						requestExecutingAt = request.executingAt;
+					}
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: DeferredInit pre-entry prewarm heartbeat run=%llu elapsedMs=%llu stalledMs=%llu heartbeat=%llu status=%s settled=%u request={state:%s,kind:%s,font:%u,token:%llu,run:%llu,queueAgeMs:%llu,executionAgeMs:%llu} loadingMenuSnapshot=next-line",
+						static_cast<unsigned long long>(runToken),
+						static_cast<unsigned long long>(now - startedAt),
+						static_cast<unsigned long long>(
+							now - watchdog.LastProgressAt()),
+						static_cast<unsigned long long>(
+							coordinator.runControl.Heartbeat()),
+						FontPrewarmPumpStatusName(status),
+						settled ? 1u : 0u,
+						MainThreadRequestStateName(requestState),
+						PrewarmAtlasRequestKindName(requestKind),
+						requestFontId,
+						static_cast<unsigned long long>(requestToken),
+						static_cast<unsigned long long>(requestRunToken),
+						static_cast<unsigned long long>(requestQueuedAt
+							? now - requestQueuedAt : 0),
+						static_cast<unsigned long long>(requestExecutingAt
+							? now - requestExecutingAt : 0));
+					LogNativeLoadingMenuDiagnostic(
+						"prewarm-barrier-heartbeat");
+					nextDiagnosticAt = now + kPrewarmDiagnosticHeartbeatMs;
+				}
+
+				watchdogReason = watchdog.Observe(now,
 					coordinator.runControl.Heartbeat());
 				if (watchdogReason != PrewarmWatchdogReason::None)
 				{

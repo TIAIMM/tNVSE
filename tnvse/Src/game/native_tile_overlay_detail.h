@@ -145,9 +145,93 @@ namespace fonthook::implementation::native_tile_overlay
 			bool valid = false;
 		};
 
+	enum class LoadingMenuDiagnosticPhase : UInt32
+	{
+		Idle,
+		UpdateGuard,
+		UpdatePredecessor,
+		UpdateOverlayConsume,
+		ShowChangesGuard,
+		ShowChangesRendererLock,
+		ShowChangesPredecessor,
+		LoadingTextMakeNode,
+	};
+
+	enum class LoadingMenuUpdateDisposition : UInt32
+	{
+		Unknown,
+		Running,
+		SkippedPauseOrShutdown,
+		SkippedStartupBarrier,
+	};
+
+	struct LoadingMenuDiagnosticState
+	{
+		std::atomic<UInt64> traceId{ 0 };
+		std::atomic<SIZE_T> observedLoadingMenu{ 0 };
+		std::atomic<SIZE_T> observedLoadingMenuRoot{ 0 };
+		std::atomic<ULONGLONG> traceStartedAt{ 0 };
+		std::atomic<ULONGLONG> lastActivityAt{ 0 };
+		std::atomic<ULONGLONG> lastUpdateEnterAt{ 0 };
+		std::atomic<ULONGLONG> lastUpdateExitAt{ 0 };
+		std::atomic<ULONGLONG> lastShowChangesEnterAt{ 0 };
+		std::atomic<ULONGLONG> lastShowChangesExitAt{ 0 };
+		std::atomic<ULONGLONG> lastLoadingTextMakeNodeEnterAt{ 0 };
+		std::atomic<ULONGLONG> lastLoadingTextMakeNodeExitAt{ 0 };
+		std::atomic<ULONGLONG> phaseEnteredAt{ 0 };
+		std::atomic<ULONGLONG> lastCommandPublishedAt{ 0 };
+		std::atomic<ULONGLONG> lastCommandConsumeAttemptAt{ 0 };
+		std::atomic<ULONGLONG> lastCommandConsumedAt{ 0 };
+		std::atomic<ULONGLONG> lastHeartbeatLogAt{ 0 };
+		std::atomic<ULONGLONG> lastStallLogAt{ 0 };
+		std::atomic<ULONGLONG> lastSlowLogAt{ 0 };
+		std::atomic<ULONGLONG> lastShowSkipLogAt{ 0 };
+		std::atomic<UInt64> updateCalls{ 0 };
+		std::atomic<UInt64> showChangesCalls{ 0 };
+		std::atomic<UInt64> loadingTextMakeNodeCalls{ 0 };
+		std::atomic<UInt64> updateSkippedPauseOrShutdown{ 0 };
+		std::atomic<UInt64> updateSkippedStartupBarrier{ 0 };
+		std::atomic<UInt64> showChangesSkippedPauseOrShutdown{ 0 };
+		std::atomic<UInt64> showChangesSkippedRendererUnavailable{ 0 };
+		std::atomic<UInt64> showChangesSkippedRendererLock{ 0 };
+		std::atomic<UInt64> commandsPublished{ 0 };
+		std::atomic<UInt64> commandConsumeAttempts{ 0 };
+		std::atomic<UInt64> commandsConsumed{ 0 };
+		std::atomic<UInt32> lastUpdateDurationUs{ 0 };
+		std::atomic<UInt32> lastShowChangesDurationUs{ 0 };
+		std::atomic<UInt32> lastLoadingTextMakeNodeDurationUs{ 0 };
+		std::atomic<UInt32> lastLoadingTextTileNameHash{ 0 };
+		std::atomic<UInt32> lastLoadingTextFontTraitBits{ 0 };
+		std::atomic<SIZE_T> lastLoadingTextTile{ 0 };
+		std::atomic<UInt32> lastLoadingTextProducedNode{ 0 };
+		std::atomic<UInt32> lastCommandAttemptSequence{ 0 };
+		std::atomic<UInt32> lastCommandConsumedSequence{ 0 };
+		std::atomic<UInt32> updateInFlight{ 0 };
+		std::atomic<UInt32> showChangesInFlight{ 0 };
+		std::atomic<UInt32> loadingTextMakeNodeInFlight{ 0 };
+		std::atomic<UInt32> lastShowSkipReason{ 0 };
+		std::atomic<UInt64> lastShowSkipTrace{ 0 };
+		std::atomic<UInt64> lastLoadingTextBeginLoggedTrace{ 0 };
+		std::atomic<UInt64> lastLoadingTextEndLoggedTrace{ 0 };
+		std::atomic_bool pendingLoadingTextFirstCompleteLog{ false };
+		std::atomic_bool pendingLoadingTextSlowLog{ false };
+		std::atomic<UInt32> pendingLoadingTextSlowDurationUs{ 0 };
+		std::atomic<SIZE_T> pendingLoadingTextSlowTile{ 0 };
+		std::atomic<UInt32> pendingLoadingTextSlowNameHash{ 0 };
+		std::atomic<UInt32> pendingLoadingTextSlowFontBits{ 0 };
+		std::atomic_bool loggedPrewarmConsumerDisabledConsumption{ false };
+		std::atomic<LoadingMenuDiagnosticPhase> phase{
+			LoadingMenuDiagnosticPhase::Idle
+		};
+		std::atomic<LoadingMenuUpdateDisposition> updateDisposition{
+			LoadingMenuUpdateDisposition::Unknown
+		};
+	};
+
 	struct NativeTileOverlayRuntimeState
 	{
 		NativeTileOverlayState state;
+		LoadingMenuDiagnosticState loadingMenuDiagnostics;
 		std::atomic_bool imeReady{ false };
 		std::atomic<UInt32> imeHostGeneration{ 1 };
 		std::atomic_bool prewarmReady{ false };

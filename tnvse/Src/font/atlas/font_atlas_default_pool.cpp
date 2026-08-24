@@ -3,6 +3,7 @@
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
+#include "native_tile_overlay.h"
 
 #include "NiDX9Renderer.hpp"
 #include "NiFixedString.hpp"
@@ -176,6 +177,9 @@ namespace fonthook::vectorfont
 
 		bool DefaultPoolResetCallback(bool beforeReset, void*)
 		{
+			LogNativeLoadingMenuDiagnostic(beforeReset
+				? "d3d-reset-callback:before-enter"
+				: "d3d-reset-callback:after-enter");
 			AtlasState& state = State();
 			UInt32 waitedPublications = 0;
 			UInt64 deviceEpoch = 0;
@@ -193,6 +197,8 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: cancelled renderer reset after DEFAULT atlas publication barrier timed out waitedPublications=%u timeoutMs=2000 nativeRecoveryDeferred=%u",
 					waitedPublications, nativeRecoveryDeferred ? 1u : 0u);
+				LogNativeLoadingMenuDiagnostic(
+					"d3d-reset-callback:publication-barrier-timeout");
 				// NiDX9Renderer::Reset invokes before callbacks as callback(1, data)
 				// and aborts the reset when one returns false. No DEFAULT resources
 				// have been released yet, so cancellation is the only safe timeout.
@@ -370,6 +376,9 @@ namespace fonthook::vectorfont
 			}
 			retiredReleases.clear();
 			LeaveDefaultPoolResetBarrier(beforeReset);
+			LogNativeLoadingMenuDiagnostic(beforeReset
+				? "d3d-reset-callback:before-complete"
+				: "d3d-reset-callback:after-complete");
 			if (logResetTiming)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(

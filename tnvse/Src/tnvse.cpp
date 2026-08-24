@@ -268,6 +268,10 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
+		// This remains active even when optional prewarm UI is disabled. It samples
+		// only atomics/raw singleton pointers and reports a LoadingMenu hook phase
+		// that has remained in flight, which is essential for non-crashing hangs.
+		fonthook::PumpNativeLoadingMenuDiagnostics();
 		if (fonthook::AreFreeTypeFontHooksInstalled())
 		{
 			PrepareConfiguredGameFonts();

@@ -304,9 +304,16 @@ namespace fonthook
 			|| (!OverlayRuntime().prewarmConsumerThreadId.load(std::memory_order_acquire)
 				&& !OverlayRuntime().prewarmReady.load(std::memory_order_acquire)))
 		{
+			if (timeoutMs && g_bEnableFreeTypeFontRenderingLog)
+			{
+				LogNativeLoadingMenuDiagnostic(
+					"prewarm-refresh-wait-skipped:no-reachable-consumer");
+			}
 			return true;
 		}
 
+		const ULONGLONG startedAt = GetTickCount64();
+		LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-begin");
 		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
 		while (OverlayRuntime().prewarmConsumedSequence.load(std::memory_order_acquire)
 			!= sequence)
@@ -318,11 +325,19 @@ namespace fonthook
 					sequence,
 					OverlayRuntime().prewarmConsumedSequence.load(
 						std::memory_order_acquire),
-					timeoutMs);
+						timeoutMs);
+				LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-timeout");
 				return false;
 			}
 			Sleep(1);
 		}
+		gLog.FormattedMessage(
+			"tnvse_native_overlay: synchronized prewarm text refresh sequence=%u consumed=%u waitMs=%llu",
+			sequence,
+			OverlayRuntime().prewarmConsumedSequence.load(
+				std::memory_order_acquire),
+			static_cast<unsigned long long>(GetTickCount64() - startedAt));
+		LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-complete");
 		return true;
 	}
 
@@ -338,9 +353,16 @@ namespace fonthook
 			|| (!OverlayRuntime().prewarmConsumerThreadId.load(std::memory_order_acquire)
 				&& !OverlayRuntime().prewarmReady.load(std::memory_order_acquire)))
 		{
+			if (timeoutMs && g_bEnableFreeTypeFontRenderingLog)
+			{
+				LogNativeLoadingMenuDiagnostic(
+					"prewarm-quiesce-wait-skipped:no-reachable-consumer");
+			}
 			return true;
 		}
 
+		const ULONGLONG startedAt = GetTickCount64();
+		LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-begin");
 		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
 		while (OverlayRuntime().prewarmConsumedSequence.load(std::memory_order_acquire)
 			!= sequence)
@@ -352,11 +374,19 @@ namespace fonthook
 					sequence,
 					OverlayRuntime().prewarmConsumedSequence.load(
 						std::memory_order_acquire),
-					timeoutMs);
+						timeoutMs);
+				LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-timeout");
 				return false;
 			}
 			Sleep(1);
 		}
+		gLog.FormattedMessage(
+			"tnvse_native_overlay: quiesced prewarm progress sequence=%u consumed=%u waitMs=%llu",
+			sequence,
+			OverlayRuntime().prewarmConsumedSequence.load(
+				std::memory_order_acquire),
+			static_cast<unsigned long long>(GetTickCount64() - startedAt));
+		LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-complete");
 		return true;
 	}
 
@@ -412,6 +442,8 @@ namespace fonthook
 				prewarmShutdownSequence, ownerThread,
 				OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight(),
 				kOwnerShutdownTimeoutMs);
+			LogNativeLoadingMenuDiagnostic(
+				"prewarm-owner-shutdown-wait-timeout");
 		}
 		OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
 		OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
@@ -427,5 +459,8 @@ namespace fonthook
 				"tNVSE_IME");
 		}
 		ResetImeForParent(nullptr);
+		LogNativeLoadingMenuDiagnostic(ownerQuiesced
+			? "native-overlay-shutdown-complete"
+			: "native-overlay-shutdown-retained-owner-state");
 	}
 }

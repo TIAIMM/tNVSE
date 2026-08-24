@@ -36,5 +36,16 @@ namespace fonthook
 	bool QuiesceNativePrewarmOverlay(UInt32 timeoutMs);
 	bool IsNativePrewarmOverlayActive();
 
+	// Emits one correlated snapshot of the LoadingMenu owner thread, hook phase,
+	// renderer hand-off, and queued prewarm overlay state. The periodic pump is
+	// intentionally rate-limited and becomes verbose only when the existing
+	// FreeType rendering log option is enabled.
+	void LogNativeLoadingMenuDiagnostic(const char* event);
+	void PumpNativeLoadingMenuDiagnostics();
+	void BeginNativeLoadingMenuTextGeometryDiagnostic(
+		const void* tile, const char* tileName, float fontTrait);
+	void EndNativeLoadingMenuTextGeometryDiagnostic(
+		const void* tile, bool producedNode);
+
 	void ShutdownNativeTileOverlayHost();
 }

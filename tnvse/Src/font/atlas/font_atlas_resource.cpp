@@ -3,6 +3,7 @@
 #include "font_manager.h"
 #include "load_config.h"
 #include "native_calls.h"
+#include "native_tile_overlay.h"
 
 #include "BSMemory.hpp"
 #include "NiDX9Renderer.hpp"
@@ -33,6 +34,7 @@ namespace fonthook::vectorfont
 
 		thread_local bool s_atlasAllocationMemoryPressure = false;
 		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
+		std::atomic<UInt32> s_defaultPoolResetPublicationTimeoutCount = 0;
 
 		struct DefaultPoolPublicationThreadState
 		{
@@ -105,6 +107,22 @@ namespace fonthook::vectorfont
 				}))
 		{
 			m_failureReason = "reset-in-progress";
+			const UInt32 activePublications =
+				state.defaultPoolActivePublications;
+			const UInt64 deviceEpoch = state.defaultPoolDeviceEpoch;
+			lock.unlock();
+			const UInt32 timeoutCount =
+				s_defaultPoolResetPublicationTimeoutCount.fetch_add(
+					1, std::memory_order_relaxed) + 1;
+			if (timeoutCount <= 8 || (timeoutCount % 64u) == 0)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: DEFAULT atlas publication timed out waiting for reset completion timeoutMs=2000 count=%u activePublications=%u deviceEpoch=%llu policy=fail-current-publication-runtime-demand",
+					timeoutCount, activePublications,
+					static_cast<unsigned long long>(deviceEpoch));
+				LogNativeLoadingMenuDiagnostic(
+					"d3d-reset-publication-wait-timeout");
+			}
 			return;
 		}
 		if (state.defaultPoolShutdown)

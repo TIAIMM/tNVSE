@@ -7,6 +7,7 @@
 #include "hook_identity.h"
 #include "hook_site.h"
 #include "load_config.h"
+#include "native_tile_overlay.h"
 #include "pipboy_search_icon_compat.h"
 #include "SafeWrite.h"
 #include "text_hooks.h"
@@ -976,7 +977,12 @@ namespace fonthook
 				// around SetText/RebuildTextGeometry ends before LoadingMenu reaches
 				// ShowChanges and therefore cannot protect this boundary.
 				ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
+				BeginNativeLoadingMenuTextGeometryDiagnostic(
+					tile,
+					tile ? tile->strName.c_str() : "",
+					tile ? tile->GetValueFloat(Tile::kTileValue_font) : 0.0f);
 				node = s_tileTextMakeNode ? s_tileTextMakeNode(tile) : nullptr;
+				EndNativeLoadingMenuTextGeometryDiagnostic(tile, node != nullptr);
 			}
 			else
 			{
