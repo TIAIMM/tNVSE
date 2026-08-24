@@ -51,7 +51,6 @@ namespace fonthook::vectorfont
 			const std::vector<std::shared_ptr<AtlasResource>>& pages,
 			const std::vector<GlyphMaskType>& masks,
 			const DirectAtlasGlyphTable& table);
-		bool IsSpaceCodePoint(UInt32 codePoint);
 		size_t GetDirectGlyphSlotCount(VectorFontByteClass byteClass);
 		bool ResolveDirectGlyphSlot(VectorFontByteClass byteClass,
 			UInt32 encodedCode, size_t& slot);

@@ -425,13 +425,17 @@ namespace fonthook::vectorfont
 		return true;
 	}
 
-	constexpr UInt32 kAtlasSnapshotVersion = 23;
+	constexpr UInt32 kAtlasSnapshotVersion = 24;
+	// Payload identity v24 invalidates snapshots produced before complete UHC and
+	// GB2312-alias enumeration and before empty-outline glyphs became explicit
+	// direct-table records. Reusing those pages can leave the new manifest with
+	// no resident placement for an otherwise valid encoded unit.
 	// Payload identity v23 separates the device-independent logical lookup key
 	// from the physical page identity. D3D9 capability maxima are validated
 	// against the stored page shape at load time and are never part of the
 	// lookup key, so a compatible device can restore the snapshot without the
 	// transient .tnvfmask files.
-	constexpr UInt32 kAtlasSnapshotPayloadIdentityVersion = 23;
+	constexpr UInt32 kAtlasSnapshotPayloadIdentityVersion = 24;
 	constexpr UInt32 kAtlasSnapshotFlagGloballyRepacked = 1u << 0;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlas = 1u << 1;
 	constexpr UInt32 kAtlasSnapshotFlagSingleAtlasOverflow = 1u << 2;
@@ -450,6 +454,8 @@ namespace fonthook::vectorfont
 		| kAtlasSnapshotFlagPhysicalPayloadAlias
 		| kAtlasSnapshotFlagPhysicalFontPool;
 	constexpr UInt32 kAtlasSnapshotAliasVersion = 1;
+	// Version 24 invalidates incomplete encoded-unit coverage from older prewarm
+	// enumeration and empty-outline rules.
 	// Version 23 stores jointly packed logical roles as validated aliases to one
 	// full physical snapshot. Placements and pixels are no longer duplicated on
 	// disk, while every role retains its own snapshot identity header.

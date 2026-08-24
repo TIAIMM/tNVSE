@@ -141,6 +141,25 @@ if(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS)
     COMMAND $<TARGET_FILE:tnvse_font_prewarm_run_control_tests>)
 endif()
 
+option(TNVSE_BUILD_FONT_MULTIBYTE_PREWARM_TESTS
+  "Build the deterministic multibyte prewarm policy tests" OFF)
+if(TNVSE_BUILD_FONT_MULTIBYTE_PREWARM_TESTS)
+  enable_testing()
+  add_executable(tnvse_font_multibyte_prewarm_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_multibyte_prewarm_tests.cpp")
+  target_compile_features(tnvse_font_multibyte_prewarm_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_font_multibyte_prewarm_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font")
+  target_compile_definitions(tnvse_font_multibyte_prewarm_tests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(tnvse_font_multibyte_prewarm_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_font_multibyte_prewarm_tests)
+  set_target_properties(tnvse_font_multibyte_prewarm_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME font_multibyte_prewarm
+    COMMAND $<TARGET_FILE:tnvse_font_multibyte_prewarm_tests>)
+endif()
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

@@ -137,6 +137,7 @@ namespace fonthook::vectorfont
 			job.encodedUnitIndex = 0;
 			job.validDoubleByteCount = 0;
 			job.rasterizedGlyphCount = 0;
+			job.knownEmptyGlyphCount = 0;
 			job.sdfGlyphCount = 0;
 			job.rasterScaleMilli = rasterScaleMilli;
 			job.targetUnitCount = 0;
@@ -613,11 +614,12 @@ namespace fonthook::vectorfont
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm font=%u prewarmEncoding=%s scale=%.3f glyphs=%u doubleByte=%u renderMode=%s distanceFieldGlyphs=%u status=%s",
+				"tnvse_freetype_font: prewarm font=%u prewarmEncoding=%s scale=%.3f glyphs=%u doubleByte=%u knownEmpty=%u renderMode=%s distanceFieldGlyphs=%u status=%s",
 				job.fontId,
 				GetFontPrewarmRangeName(job.prewarmRange, job.codePage),
 				job.rasterScaleMilli ? job.rasterScaleMilli / 1000.0f : 0.0f,
 				job.rasterizedGlyphCount, job.validDoubleByteCount,
+				job.knownEmptyGlyphCount,
 				GetConfiguredFontRenderModeName(),
 				job.sdfGlyphCount, status);
 		}

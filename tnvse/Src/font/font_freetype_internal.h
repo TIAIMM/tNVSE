@@ -3,6 +3,7 @@
 // Private FreeType runtime model shared only by sibling implementation units.
 
 #include "font_vector_internal.h"
+#include "font_multibyte_prewarm_policy.h"
 #include "font_sparse_codepoint_table.h"
 
 #include <ft2build.h>
@@ -473,7 +474,7 @@ namespace fonthook::vectorfont
 
 	struct PersistentGlyphManifestEntry
 	{
-		UInt8 valid = 0;
+		UInt8 flags = 0;
 		UInt8 byteClass = 0;
 		UInt16 faceIndex = 0;
 		UInt32 glyphIndex = 0;
@@ -647,6 +648,7 @@ namespace fonthook::vectorfont
 	bool DecodeCodePoint(const char* bytes, int length, UInt32& codePoint);
 	float GetFixedCellAdvance(const ByteStyle& style);
 	float GetFixedCellGlyphOffset(const ByteStyle& style, const FT_GlyphSlot slot);
+	bool IsResolvedGlyphKnownEmpty(const ResolvedGlyph& resolved);
 	void ApplyResolvedIdentity(VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved);
 	VerticalEffectExtents GetVerticalEffectExtents(const FontConfig& config);
 	void RemoveEffectExtentsFromMetrics(const FontConfig& config,

@@ -91,6 +91,7 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 			size_t encodedUnitStart = 0;
 			UInt32 validDoubleByteCount = 0;
 			UInt32 rasterizedGlyphCount = 0;
+			UInt32 knownEmptyGlyphCount = 0;
 			UInt32 sdfGlyphCount = 0;
 			UInt32 targetUnitCount = 0;
 			UInt32 rasterScaleMilli = 0;

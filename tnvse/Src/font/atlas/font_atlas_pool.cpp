@@ -750,7 +750,7 @@ namespace fonthook::vectorfont
 			if (sourcesReady && !saved)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: physical atlas pool snapshot save failed version=%u owner=%u members=%u stage=%s reason=%s win32Error=%lu detailIndex=%u resources=%u roleSources=%u pages=%u aliasTargets=%u aliasFiles=%u placements=%llu sourceGpuBytes=%llu candidateGpuBytes=%llu elapsedMs=%llu",
+					"tnvse_freetype_font: physical atlas pool snapshot save failed version=%u owner=%u members=%u stage=%s reason=%s win32Error=%lu detailIndex=%u resources=%u roleSources=%u pages=%u aliasTargets=%u aliasFiles=%u compatibleGlyphAliases=%u placements=%llu sourceGpuBytes=%llu candidateGpuBytes=%llu elapsedMs=%llu",
 					kPhysicalAtlasPoolVersion, pool.ownerFontId,
 					static_cast<UInt32>(pool.members.size()),
 					saveDiagnostics.stage, saveDiagnostics.reason,
@@ -761,6 +761,7 @@ namespace fonthook::vectorfont
 					saveDiagnostics.pageCount,
 					saveDiagnostics.aliasTargetCount,
 					saveDiagnostics.aliasFileCount,
+					saveDiagnostics.compatibleGlyphAliasCount,
 					static_cast<unsigned long long>(
 						saveDiagnostics.placementCount),
 					static_cast<unsigned long long>(

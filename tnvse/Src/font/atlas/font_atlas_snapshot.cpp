@@ -571,9 +571,35 @@ namespace fonthook::vectorfont
 
 	bool SaveGlyphAtlasSnapshot(RuntimeFont& runtime, float rasterScale)
 	{
+		auto saveRole = [&](VectorFontByteClass byteClass,
+			bool* jointRolePublished = nullptr)
+		{
+			SnapshotSaveDiagnostics diagnostics;
+			const bool saved = SaveGlyphAtlasSnapshotRole(runtime,
+				byteClass, rasterScale, jointRolePublished,
+				nullptr, nullptr, nullptr, &diagnostics);
+			if (!saved)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: atlas snapshot save failed font=%u role=%s stage=%s reason=%s win32Error=%lu detailIndex=%u resources=%u pages=%u compatibleGlyphAliases=%u placements=%llu sourceGpuBytes=%llu candidateGpuBytes=%llu",
+					GetRuntimeConfig(runtime).fontId,
+					byteClass == VectorFontByteClass::DoubleByte
+						? "doubleByte" : "singleByte",
+					diagnostics.stage, diagnostics.reason,
+					diagnostics.win32Error, diagnostics.detailIndex,
+					diagnostics.resourceCount, diagnostics.pageCount,
+					diagnostics.compatibleGlyphAliasCount,
+					static_cast<unsigned long long>(
+						diagnostics.placementCount),
+					static_cast<unsigned long long>(
+						diagnostics.sourceGpuBytes),
+					static_cast<unsigned long long>(
+						diagnostics.candidateGpuBytes));
+			}
+			return saved;
+		};
 		bool jointRolePublished = false;
-		if (!SaveGlyphAtlasSnapshotRole(runtime,
-			VectorFontByteClass::SingleByte, rasterScale,
+		if (!saveRole(VectorFontByteClass::SingleByte,
 			&jointRolePublished))
 		{
 			return false;
@@ -582,8 +608,7 @@ namespace fonthook::vectorfont
 			|| !IsDbcsCodePage(GetFreeTypeTextCodePage())
 			|| IsPrewarmAtlasAlias(GetRuntimeConfig(runtime),
 				VectorFontByteClass::DoubleByte)
-			|| SaveGlyphAtlasSnapshotRole(runtime,
-				VectorFontByteClass::DoubleByte, rasterScale);
+			|| saveRole(VectorFontByteClass::DoubleByte);
 	}
 
 	bool ConsolidatePhysicalFontAtlasGroups(float rasterScale,

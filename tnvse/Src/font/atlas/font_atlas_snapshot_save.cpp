@@ -528,6 +528,8 @@ namespace fonthook::vectorfont
 			&& UsesPlacedLevelZeroSnapshot(doubleByteKey);
 		std::vector<std::pair<AtlasCacheKey,
 			std::shared_ptr<AtlasResource>>> resources;
+		std::vector<std::pair<AtlasCacheKey,
+			std::shared_ptr<AtlasResource>>> baseRoleResources;
 		{
 			std::lock_guard<std::mutex> lock(State().atlasMutex);
 			auto collectRole = [&](const AtlasCacheKey& roleKey,
@@ -578,27 +580,6 @@ namespace fonthook::vectorfont
 						&& CollectRoleFilteredResources(
 							source.key, *source.table, groupResources,
 							groupPhysicalSources);
-				}
-				if (collected)
-				{
-					std::unordered_set<UInt64> uniqueCacheIds;
-					std::vector<std::pair<AtlasCacheKey,
-						std::shared_ptr<AtlasResource>>> deduplicated;
-					deduplicated.reserve(groupResources.size());
-					for (auto& item : groupResources)
-					{
-						auto& glyphs = item.second->glyphs;
-						glyphs.erase(std::remove_if(glyphs.begin(),
-							glyphs.end(),
-							[&](const AtlasGlyphRecord& glyph)
-							{
-								return !uniqueCacheIds.insert(
-									glyph.cacheId).second;
-							}), glyphs.end());
-						if (!glyphs.empty())
-							deduplicated.push_back(std::move(item));
-					}
-					groupResources.swap(deduplicated);
 				}
 				if (collected)
 				{
@@ -667,6 +648,7 @@ namespace fonthook::vectorfont
 					&& jointResources.size()
 						<= static_cast<size_t>(kMaximumAtlasSnapshotPages) * 2u)
 				{
+					baseRoleResources = resources;
 					resources.swap(jointResources);
 					jointlyPackedRoles = true;
 					packingByteClass = VectorFontByteClass::DoubleByte;
@@ -690,14 +672,69 @@ namespace fonthook::vectorfont
 		// physical layout or streaming its source snapshots.
 		if (UsesPlacedLevelZeroSnapshot(key))
 		{
-			if (!BuildRepackedSnapshotPages(key, resources, pages,
+			SnapshotSaveDiagnostics localRepackDiagnostics;
+			SnapshotSaveDiagnostics* repackDiagnostics = saveDiagnostics
+				? saveDiagnostics : &localRepackDiagnostics;
+			bool repacked = BuildRepackedSnapshotPages(key, resources, pages,
 				originalGpuBytes, packingByteClass,
 				jointlyPackedFontGroup && physicalGroup->version
 					== kPhysicalAtlasPoolVersion ? 1u : 0u,
-				physicalGroupPreview == nullptr, saveDiagnostics))
+				physicalGroupPreview == nullptr, repackDiagnostics);
+			if (!repacked && jointlyPackedRoles && !jointlyPackedFontGroup
+				&& !baseRoleResources.empty())
 			{
+				const char* jointFailure = repackDiagnostics->reason;
+				const UInt32 jointDetail = repackDiagnostics->detailIndex;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: joint byte-role repack fallback font=%u role=%s reason=%s detailIndex=%u policy=save-roles-separately",
+					config.fontId,
+					byteClass == VectorFontByteClass::DoubleByte
+						? "doubleByte" : "singleByte",
+					jointFailure, jointDetail);
+				resources.swap(baseRoleResources);
+				pages.clear();
+				originalGpuBytes = 0;
+				jointlyPackedRoles = false;
+				packingByteClass = byteClass;
+				jointDoubleByteSourcePageCount = 0;
+				if (saveDiagnostics)
+				{
+					*saveDiagnostics = {};
+					saveDiagnostics->stage = "repack-role-fallback";
+					saveDiagnostics->resourceCount =
+						static_cast<UInt32>(resources.size());
+				}
+				else
+				{
+					localRepackDiagnostics = {};
+					localRepackDiagnostics.stage = "repack-role-fallback";
+					localRepackDiagnostics.resourceCount =
+						static_cast<UInt32>(resources.size());
+				}
+				repacked = BuildRepackedSnapshotPages(key, resources, pages,
+					originalGpuBytes, packingByteClass, 0,
+					true, repackDiagnostics);
+			}
+			if (!repacked && jointlyPackedFontGroup
+				&& !physicalGroupPreview && physicalGroup
+				&& physicalGroup->version == kPhysicalAtlasGroupVersion)
+			{
+				const char* groupFailure = repackDiagnostics->reason;
+				const UInt32 groupDetail = repackDiagnostics->detailIndex;
+				const bool fallbackMarked = MarkPhysicalAtlasGroupFallback(
+					runtime, key, sourcePageCount);
+				if (physicalGroupFallback)
+					*physicalGroupFallback = true;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group fallback version=%u owner=%u members=%u reason=repack-%s detailIndex=%u markerPersisted=%u policy=retain-per-font-atlases",
+					physicalGroup->version, physicalGroup->ownerFontId,
+					static_cast<UInt32>(physicalGroup->members.size()),
+					groupFailure, groupDetail,
+					fallbackMarked ? 1u : 0u);
 				return false;
 			}
+			if (!repacked)
+				return false;
 		}
 		else
 		{
@@ -797,7 +834,8 @@ namespace fonthook::vectorfont
 					&& MarkPhysicalAtlasGroupFallback(
 						runtime, key, sourcePageCount);
 				if (physicalGroupFallback)
-					*physicalGroupFallback = fallbackMarked;
+					*physicalGroupFallback = physicalGroup->version
+						== kPhysicalAtlasGroupVersion;
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: physical atlas group fallback version=%u owner=%u members=%u uniqueSingleProfiles=%u doubleLayouts=%u logicalRoleSources=%u pages=%u sourceGpuBytes=%llu candidateGpuBytes=%llu reason=%s markerPersisted=%u policy=retain-per-font-atlases",
 					physicalGroup->version,

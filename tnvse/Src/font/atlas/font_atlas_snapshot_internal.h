@@ -63,6 +63,7 @@ namespace fonthook::vectorfont
 			UInt32 pageCount = 0;
 			UInt32 aliasTargetCount = 0;
 			UInt32 aliasFileCount = 0;
+			UInt32 compatibleGlyphAliasCount = 0;
 			UInt32 detailIndex = 0;
 			UInt64 placementCount = 0;
 			UInt64 sourceGpuBytes = 0;

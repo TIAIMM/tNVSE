@@ -1,20 +1,12 @@
 #include "encoding.h"
+#include "font_multibyte_prewarm_policy.h"
 #include "load_config.h"
 
 namespace fonthook
 {
 	bool IsDbcsCodePage(UInt32 codePage)
 	{
-		switch (codePage)
-		{
-		case 936:
-		case 950:
-		case 932:
-		case 949:
-			return true;
-		default:
-			return false;
-		}
+		return multibyte_prewarm::IsDbcsCodePage(codePage);
 	}
 
 	bool IsEastAsianUiMode()
@@ -35,12 +27,14 @@ namespace fonthook
 	// ===================== GBK (Code Page 936) =====================
 	bool IsGBKLeadByte(UInt8 c)
 	{
-		return (c >= 0x81 && c <= 0xFE);
+		return multibyte_prewarm::IsLeadByte(
+			multibyte_prewarm::kCodePageGbk, c);
 	}
 
 	bool IsGBKTrailByte(UInt8 c)
 	{
-		return (c >= 0x40 && c <= 0xFE && c != 0x7F);
+		return multibyte_prewarm::IsTrailByte(
+			multibyte_prewarm::kCodePageGbk, c);
 	}
 
 	bool TryDecodeGBK(const char* p, UInt32& outCode)
@@ -56,12 +50,14 @@ namespace fonthook
 	// ===================== Big5 (Code Page 950) =====================
 	bool IsBig5LeadByte(UInt8 c)
 	{
-		return (c >= 0x81 && c <= 0xFE);
+		return multibyte_prewarm::IsLeadByte(
+			multibyte_prewarm::kCodePageBig5, c);
 	}
 
 	bool IsBig5TrailByte(UInt8 c)
 	{
-		return ((c >= 0x40 && c <= 0x7E) || (c >= 0xA1 && c <= 0xFE));
+		return multibyte_prewarm::IsTrailByte(
+			multibyte_prewarm::kCodePageBig5, c);
 	}
 
 	bool TryDecodeBig5(const char* p, UInt32& outCode)
@@ -77,16 +73,14 @@ namespace fonthook
 	// ===================== Shift-JIS (Code Page 932) =====================
 	bool IsSJISLeadByte(UInt8 c)
 	{
-		if (c >= 0x81 && c <= 0x9F) return true;
-		if (c >= 0xE0 && c <= 0xFC) return true;
-		return false;
+		return multibyte_prewarm::IsLeadByte(
+			multibyte_prewarm::kCodePageShiftJis, c);
 	}
 
 	bool IsSJISTrailByte(UInt8 c)
 	{
-		if (c >= 0x40 && c <= 0x7E) return true;
-		if (c >= 0x80 && c <= 0xFC) return true;
-		return false;
+		return multibyte_prewarm::IsTrailByte(
+			multibyte_prewarm::kCodePageShiftJis, c);
 	}
 
 	bool TryDecodeSJIS(const char* p, UInt32& outCode)
@@ -102,15 +96,14 @@ namespace fonthook
 	// ===================== Korean/UHC (Code Page 949) =====================
 	bool IsKoreanLeadByte(UInt8 c)
 	{
-		return (c >= 0x81 && c <= 0xC8);
+		return multibyte_prewarm::IsLeadByte(
+			multibyte_prewarm::kCodePageUhc, c);
 	}
 
 	bool IsKoreanTrailByte(UInt8 c)
 	{
-		if (c >= 0x41 && c <= 0x5A) return true;
-		if (c >= 0x60 && c <= 0x7A) return true;
-		if (c >= 0x81 && c <= 0xFE) return true;
-		return false;
+		return multibyte_prewarm::IsTrailByte(
+			multibyte_prewarm::kCodePageUhc, c);
 	}
 
 	bool TryDecodeKorean(const char* p, UInt32& outCode)

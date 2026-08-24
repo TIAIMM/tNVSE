@@ -609,7 +609,8 @@ namespace fonthook::vectorfont
 		{
 			const PersistentGlyphManifestEntry& entry = records[index].entry;
 			const size_t roleIndex = entry.byteClass;
-			if (!entry.valid || roleIndex >= usedFaces.size()
+			if (!multibyte_prewarm::IsGlyphManifestEntryValid(entry.flags)
+				|| roleIndex >= usedFaces.size()
 				|| entry.faceIndex >= usedFaces[roleIndex].size())
 			{
 				continue;

@@ -757,6 +757,22 @@ namespace fonthook::vectorfont
 				RefreshGlyphBitmapCpuMemory(*bitmap);
 				return bitmap;
 			}
+			FT_BBox outlineBox = {};
+			if (slot->outline.n_points <= 0 || slot->outline.n_contours <= 0)
+			{
+				RefreshGlyphBitmapCpuMemory(*bitmap);
+				return bitmap;
+			}
+			FT_Outline_Get_CBox(&slot->outline, &outlineBox);
+			if (outlineBox.xMax <= outlineBox.xMin
+				|| outlineBox.yMax <= outlineBox.yMin)
+			{
+				// Empty glyphs are valid, resolved resources. Return a non-null,
+				// non-drawable bitmap for every mask type so dynamic atlas and SDF
+				// fallbacks cannot reinterpret them as pending raster failures.
+				RefreshGlyphBitmapCpuMemory(*bitmap);
+				return bitmap;
+			}
 			if (role.style->embolden > 0.0f && slot->outline.n_points)
 			{
 				const FT_Pos strength = key.embolden26Dot6;

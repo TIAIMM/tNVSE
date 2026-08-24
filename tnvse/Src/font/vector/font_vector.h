@@ -25,6 +25,7 @@ namespace fonthook
 		UInt16 directSlot = std::numeric_limits<UInt16>::max();
 		bool hasGlyphIdentity = false;
 		bool hasDirectMetrics = false;
+		bool knownEmpty = false;
 		UInt8 byteLength = 0;
 		VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		FontLetter* metrics = nullptr;

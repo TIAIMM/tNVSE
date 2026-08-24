@@ -456,11 +456,30 @@ namespace fonthook::vectorfont
 			return centeredLeading - xMin;
 		}
 
+		bool IsResolvedGlyphKnownEmpty(const ResolvedGlyph& resolved)
+		{
+			if (!resolved.role || !resolved.runtimeFace
+				|| !LoadGlyph(*resolved.role, *resolved.runtimeFace,
+					resolved.glyphIndex))
+			{
+				return false;
+			}
+			const FT_GlyphSlot slot = resolved.runtimeFace->ftFace->glyph;
+			if (!slot || slot->format != FT_GLYPH_FORMAT_OUTLINE)
+				return true;
+			if (slot->outline.n_points <= 0 || slot->outline.n_contours <= 0)
+				return true;
+			FT_BBox box = {};
+			FT_Outline_Get_CBox(&slot->outline, &box);
+			return box.xMax <= box.xMin || box.yMax <= box.yMin;
+		}
+
 		void ApplyResolvedIdentity(VectorEncodedGlyph& glyph, const ResolvedGlyph& resolved)
 		{
 			glyph.faceIndex = static_cast<UInt16>(resolved.faceIndex);
 			glyph.glyphIndex = resolved.glyphIndex;
 			glyph.hasGlyphIdentity = true;
+			glyph.knownEmpty = IsResolvedGlyphKnownEmpty(resolved);
 		}
 
 		VerticalEffectExtents GetVerticalEffectExtents(const FontConfig& config)

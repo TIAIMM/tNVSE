@@ -22,15 +22,6 @@ namespace fonthook::vectorfont
 
 namespace implementation::font_atlas_direct
 {
-		bool IsSpaceCodePoint(UInt32 codePoint)
-		{
-			return codePoint == 0x20 || codePoint == 0xA0
-				|| codePoint == 0x1680
-				|| (codePoint >= 0x2000 && codePoint <= 0x200A)
-				|| codePoint == 0x202F || codePoint == 0x205F
-				|| codePoint == 0x3000;
-		}
-
 		bool ConvertCompositeTableToVanillaLetters(
 			DirectAtlasGlyphTable& table,
 			const std::vector<std::shared_ptr<AtlasResource>>& pages,
@@ -462,7 +453,7 @@ namespace implementation::font_atlas_direct
 					direct.encodedCode =
 						static_cast<UInt16>(encodedCode);
 					direct.flags = kDirectCachedLetterValid
-						| (IsSpaceCodePoint(glyph.codePoint)
+						| (glyph.knownEmpty
 							? kDirectCachedLetterKnownEmpty : 0);
 					direct.byteClass =
 						static_cast<UInt8>(byteClass);
@@ -482,6 +473,8 @@ namespace implementation::font_atlas_direct
 				}
 				for (const VectorEncodedGlyph& glyph : glyphs)
 				{
+					if (glyph.knownEmpty)
+						continue;
 					for (GlyphMaskType mask : masks)
 					{
 						requests.push_back({ &glyph, mask,
@@ -536,6 +529,7 @@ namespace implementation::font_atlas_direct
 				const bool knownEmpty =
 					(glyph.flags & kDirectCachedLetterKnownEmpty) != 0;
 				bool complete = true;
+				GlyphMaskType missingMask = GlyphMaskType::Fill;
 				UInt32 layers = 0;
 				for (GlyphMaskType mask : masks)
 				{
@@ -546,6 +540,7 @@ namespace implementation::font_atlas_direct
 					if (!layer)
 					{
 						complete = false;
+						missingMask = mask;
 						break;
 					}
 					++layers;
@@ -556,7 +551,18 @@ namespace implementation::font_atlas_direct
 					table->resolvedLayers += layers;
 				}
 				else
-				return false;
+				{
+					gLog.FormattedMessage(
+						"tnvse_freetype_font: direct cached-letter table incomplete font=%u role=%s encoded=0x%04X missingMask=%u knownEmpty=%u resolvedGlyphs=%u resolvedLayers=%u",
+						config.fontId,
+						byteClass == VectorFontByteClass::DoubleByte
+							? "doubleByte" : "singleByte",
+						glyph.encodedCode,
+						static_cast<UInt32>(missingMask),
+						knownEmpty ? 1u : 0u,
+						table->resolvedGlyphs, table->resolvedLayers);
+					return false;
+				}
 			}
 			if (!table->resolvedGlyphs)
 				return false;

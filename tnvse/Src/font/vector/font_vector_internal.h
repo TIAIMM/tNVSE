@@ -69,12 +69,12 @@ namespace fonthook::vectorfont
 	// than the SDF result. This revision is included in every CPU-effect
 	// bitmap/cache identity.
 	constexpr UInt32 kCpuEffectCoverageVersion = 3;
-	// Version 12 removes the unused 16-band glyph-collision profile from every
-	// manifest record. Version 11 added the final direct cached-letter/composite
-	// profile contract.
+	// Version 13 turns the former valid byte into validated flags and persists a
+	// data-derived empty-outline witness. Version 12 removed the unused 16-band
+	// glyph-collision profile from every manifest record.
 	// Atlas snapshot identity also consumes this ABI because a restored atlas is
 	// usable only with its matching complete manifest.
-	constexpr UInt32 kPersistentGlyphManifestVersion = 12;
+	constexpr UInt32 kPersistentGlyphManifestVersion = 13;
 	// Version 3 separates the final BGRA-composite profile from the former
 	// aggressive coverage representation while retaining cache-domain routing.
 	constexpr UInt8 kPersistentGlyphManifestCacheIdentityVersion = 3;

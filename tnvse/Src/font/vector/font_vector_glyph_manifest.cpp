@@ -80,21 +80,29 @@ namespace fonthook::vectorfont
 			return runtime.maskContentRoleHashes[roleIndex];
 		}
 
-		bool IsGb2312RoundTrip(const char bytes[2])
+		bool IsAssignedGb2312Pair(const char bytes[2])
 		{
 			constexpr UInt32 kGb2312CodePage = 20936;
 			wchar_t decoded[2] = {};
+			bool strictDecodeUnavailable = false;
 			int decodedCount = MultiByteToWideChar(kGb2312CodePage,
 				MB_ERR_INVALID_CHARS, bytes, 2, decoded,
 				static_cast<int>(std::size(decoded)));
 			if (!decodedCount && GetLastError() == ERROR_INVALID_FLAGS)
 			{
+				strictDecodeUnavailable = true;
 				decodedCount = MultiByteToWideChar(kGb2312CodePage, 0,
 					bytes, 2, decoded, static_cast<int>(std::size(decoded)));
 			}
 			if (decodedCount != 1)
 				return false;
+			if (!strictDecodeUnavailable)
+				return true;
 
+			// Legacy conversion implementations without MB_ERR_INVALID_CHARS may
+			// substitute an invalid byte pair. Reject substitution, but do not
+			// require byte-for-byte canonical round-tripping: GB2312 0xA1AC is a
+			// valid alias which CP20936 maps to U+2225 and encodes back as 0xA1CE.
 			char encoded[2] = {};
 			BOOL usedDefault = FALSE;
 			int encodedCount = WideCharToMultiByte(kGb2312CodePage,
@@ -107,8 +115,7 @@ namespace fonthook::vectorfont
 					decoded, decodedCount, encoded,
 					static_cast<int>(std::size(encoded)), nullptr, &usedDefault);
 			}
-			return encodedCount == 2 && !usedDefault
-				&& encoded[0] == bytes[0] && encoded[1] == bytes[1];
+			return encodedCount == 2 && !usedDefault;
 		}
 
 		void BuildGlyphManifestCodeTable(UInt32 codePage,
@@ -137,7 +144,7 @@ namespace fonthook::vectorfont
 						static_cast<char>(lead), static_cast<char>(trail)
 					};
 					if (validateGb2312Assignments
-						&& !IsGb2312RoundTrip(bytes))
+						&& !IsAssignedGb2312Pair(bytes))
 					{
 						continue;
 					}
@@ -367,7 +374,7 @@ namespace fonthook::vectorfont
 			{
 				const PersistentGlyphManifestRecord& record = records[index];
 				const PersistentGlyphManifestEntry& entry = record.entry;
-				if (!entry.valid)
+				if (!multibyte_prewarm::IsGlyphManifestEntryValid(entry.flags))
 					continue;
 				const VectorFontByteClass byteClass = record.encodedCode > 0xFF
 					? VectorFontByteClass::DoubleByte
@@ -665,7 +672,8 @@ namespace fonthook::vectorfont
 					: GetGlyphManifestRecord(*manifest, encodedCode))
 				: nullptr;
 			PersistentGlyphManifestEntry* entry = record ? &record->entry : nullptr;
-			if (!entry || !entry->valid
+			if (!entry
+				|| !multibyte_prewarm::IsGlyphManifestEntryValid(entry->flags)
 				|| entry->byteClass != static_cast<UInt8>(byteClass)
 				|| (!validatedIndex && entry->checksum != HashBytes64(entry,
 					offsetof(PersistentGlyphManifestEntry, checksum))))
@@ -682,6 +690,9 @@ namespace fonthook::vectorfont
 				glyph->faceIndex = entry->faceIndex;
 				glyph->glyphIndex = entry->glyphIndex;
 				glyph->hasGlyphIdentity = true;
+				glyph->knownEmpty =
+					multibyte_prewarm::IsGlyphManifestEntryKnownEmpty(
+						entry->flags);
 			}
 			if (metrics)
 			{
@@ -720,7 +731,8 @@ namespace fonthook::vectorfont
 					: GetGlyphManifestRecord(*manifest, encodedCode))
 				: nullptr;
 			const PersistentGlyphManifestEntry* entry = record ? &record->entry : nullptr;
-			if (!entry || !entry->valid
+			if (!entry
+				|| !multibyte_prewarm::IsGlyphManifestEntryValid(entry->flags)
 				|| entry->byteClass != static_cast<UInt8>(byteClass)
 				|| entry->faceIndex
 					>= runtime.roles[static_cast<size_t>(byteClass)].faces.size()
@@ -739,6 +751,8 @@ namespace fonthook::vectorfont
 			glyph.faceIndex = entry->faceIndex;
 			glyph.glyphIndex = entry->glyphIndex;
 			glyph.hasGlyphIdentity = true;
+			glyph.knownEmpty =
+				multibyte_prewarm::IsGlyphManifestEntryKnownEmpty(entry->flags);
 			return true;
 		}
 
@@ -749,10 +763,13 @@ namespace fonthook::vectorfont
 			PersistentGlyphManifestRecord* record = manifest
 				? GetGlyphManifestRecord(*manifest, glyph.encodedCode) : nullptr;
 			PersistentGlyphManifestEntry* destination = record ? &record->entry : nullptr;
-			if (!destination || !manifest->writable || destination->valid)
+			if (!destination || !manifest->writable
+				|| multibyte_prewarm::IsGlyphManifestEntryValid(
+					destination->flags))
 				return;
 			PersistentGlyphManifestEntry entry;
-			entry.valid = 1;
+			entry.flags = multibyte_prewarm::MakeGlyphManifestEntryFlags(
+				glyph.knownEmpty || IsResolvedGlyphKnownEmpty(resolved));
 			entry.byteClass = static_cast<UInt8>(glyph.byteClass);
 			entry.faceIndex = static_cast<UInt16>(resolved.faceIndex);
 			entry.glyphIndex = resolved.glyphIndex;

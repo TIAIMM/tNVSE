@@ -378,6 +378,8 @@ namespace fonthook::vectorfont
 				active.job.validDoubleByteCount;
 			const UInt32 rasterizedStart =
 				active.job.rasterizedGlyphCount;
+			const UInt32 knownEmptyStart =
+				active.job.knownEmptyGlyphCount;
 			const UInt32 sdfStart = active.job.sdfGlyphCount;
 			const bool metricsOnlyDoubleByte =
 				active.sharedDoubleAlias
@@ -401,6 +403,7 @@ namespace fonthook::vectorfont
 				active.job.encodedUnitIndex = encodedUnitStart;
 				active.job.validDoubleByteCount = doubleByteStart;
 				active.job.rasterizedGlyphCount = rasterizedStart;
+				active.job.knownEmptyGlyphCount = knownEmptyStart;
 				active.job.sdfGlyphCount = sdfStart;
 				active.exhausted = false;
 			};
@@ -510,6 +513,13 @@ namespace fonthook::vectorfont
 					}
 					if (length == 2)
 						++active.job.validDoubleByteCount;
+					if (glyph.knownEmpty)
+					{
+						++active.job.knownEmptyGlyphCount;
+						++glyphCount;
+						++active.job.rasterizedGlyphCount;
+						continue;
+					}
 					PrewarmRuntime().session.requestedGlyphs.push_back(glyph);
 					const VectorEncodedGlyph* requested =
 						&PrewarmRuntime().session.requestedGlyphs.back();

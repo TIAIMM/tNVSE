@@ -409,6 +409,7 @@ namespace fonthook::vectorfont
 				return SealedDirectGlyphLookup::Unavailable;
 			if (letter.iTextureIndex < -2)
 				return SealedDirectGlyphLookup::Invalid;
+			glyph.knownEmpty = letter.iTextureIndex == -2;
 			glyph.directWidth = letter.fWidth;
 			glyph.directHeight = letter.fHeight;
 			glyph.directLeadingEdge = letter.fLeadingEdge;
@@ -428,6 +429,8 @@ namespace fonthook::vectorfont
 			{
 				return SealedDirectGlyphLookup::Invalid;
 			}
+			glyph.knownEmpty =
+				(letter.flags & kDirectCachedLetterKnownEmpty) != 0;
 			glyph.directWidth = letter.width;
 			glyph.directHeight = letter.height;
 			glyph.directLeadingEdge = letter.leadingEdge;
@@ -1037,7 +1040,7 @@ namespace fonthook::vectorfont
 			output.byteClass = static_cast<UInt8>(glyph.byteClass);
 			if (letter.flags & kDirectCachedLetterKnownEmpty)
 			{
-				if (!IsSpaceCodePoint(glyph.codePoint))
+				if (!glyph.knownEmpty)
 					return fail("known-empty");
 				output.knownEmpty = true;
 				continue;
@@ -1241,7 +1244,7 @@ namespace fonthook::vectorfont
 			}
 			if (letter.flags & kDirectCachedLetterKnownEmpty)
 			{
-				if (!IsSpaceCodePoint(request.glyph->codePoint))
+				if (!request.glyph->knownEmpty)
 					return false;
 				results[requestIndex].knownEmpty = true;
 				continue;
@@ -1328,7 +1331,7 @@ namespace fonthook::vectorfont
 			if ((letter.flags & kDirectCachedLetterKnownEmpty)
 				&& (letter.flags & kDirectCachedLetterValid))
 			{
-				if (!IsSpaceCodePoint(glyph.codePoint))
+				if (!glyph.knownEmpty)
 					return false;
 				results[glyphIndex].knownEmpty = true;
 				continue;

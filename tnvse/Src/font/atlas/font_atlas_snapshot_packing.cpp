@@ -1,4 +1,5 @@
 #include "font_atlas_snapshot_internal.h"
+#include "font_multibyte_prewarm_policy.h"
 
 #define STBRP_STATIC
 #define STB_RECT_PACK_IMPLEMENTATION
@@ -136,6 +137,26 @@ namespace fonthook::vectorfont
 			size_t sourceBytes = 0;
 			VectorFontByteClass byteClass = VectorFontByteClass::SingleByte;
 		};
+
+		multibyte_prewarm::RepackedGlyphSemantic MakeRepackedGlyphSemantic(
+			const AtlasSnapshotPlacement& placement)
+		{
+			return {
+				placement.rect.width,
+				placement.rect.height,
+				placement.left,
+				placement.top,
+				placement.effectiveWidth,
+				placement.effectiveHeight,
+				placement.strokeWidth26Dot6,
+				placement.atlasRgb,
+				placement.bakedRgba,
+				placement.maskType,
+				placement.sdfSpread,
+				placement.colorBaked,
+				placement.bakedLayer
+			};
+		}
 
 		struct SnapshotPackedGlyph
 		{
@@ -492,12 +513,16 @@ namespace fonthook::vectorfont
 				return false;
 			};
 			std::vector<SnapshotGlyphData> glyphs;
-			std::unordered_set<UInt64> cacheIds;
+			std::unordered_map<UInt64, size_t> cacheIds;
+			UInt32 compatibleGlyphAliasCount = 0;
 			originalGpuBytes = 0;
 			bool hasSingleByte = false;
 			bool hasDoubleByte = false;
 			if (saveDiagnostics)
+			{
 				saveDiagnostics->resourceCount = static_cast<UInt32>(resources.size());
+				saveDiagnostics->compatibleGlyphAliasCount = 0;
+			}
 			for (size_t resourceIndex = 0; resourceIndex < resources.size();
 				++resourceIndex)
 			{
@@ -547,9 +572,11 @@ namespace fonthook::vectorfont
 					const size_t bytes = static_cast<size_t>(placement.rect.width)
 						* placement.rect.height * AtlasBytesPerPixel(resource.pixelMode);
 					if (placement.cacheId != record.cacheId
-						|| std::memcmp(&placement.rect, &record.rect, sizeof(record.rect)) != 0
-						|| !cacheIds.insert(record.cacheId).second)
-						return fail("source-glyph-record-mismatch-or-duplicate", resourceIndex);
+						|| std::memcmp(&placement.rect, &record.rect,
+							sizeof(record.rect)) != 0)
+					{
+						return fail("source-glyph-record-mismatch", resourceIndex);
+					}
 					SnapshotGlyphData glyph;
 					glyph.placement = placement;
 					glyph.sourceSnapshot = sourceSnapshot;
@@ -557,13 +584,32 @@ namespace fonthook::vectorfont
 					glyph.sourceOffset = sourceOffsets[placementIndex];
 					glyph.sourceBytes = bytes;
 					glyph.byteClass = item.first.byteClass;
+					const auto [existing, inserted] = cacheIds.emplace(
+						record.cacheId, glyphs.size());
+					if (!inserted)
+					{
+						if (existing->second >= glyphs.size()
+							|| glyphs[existing->second].sourceBytes != glyph.sourceBytes
+							|| !(MakeRepackedGlyphSemantic(
+								glyphs[existing->second].placement)
+								== MakeRepackedGlyphSemantic(glyph.placement)))
+						{
+							return fail("source-glyph-alias-conflict", resourceIndex);
+						}
+						++compatibleGlyphAliasCount;
+						continue;
+					}
 					glyphs.push_back(std::move(glyph));
 				}
 			}
 			if (glyphs.empty())
 				return fail("no-source-glyphs");
 			if (saveDiagnostics)
+			{
 				saveDiagnostics->placementCount = glyphs.size();
+				saveDiagnostics->compatibleGlyphAliasCount =
+					compatibleGlyphAliasCount;
+			}
 			const bool mixedByteRoles = hasSingleByte && hasDoubleByte;
 			std::sort(glyphs.begin(), glyphs.end(), [mixedByteRoles](
 				const auto& lhs, const auto& rhs)
@@ -692,11 +738,13 @@ namespace fonthook::vectorfont
 			if (emitDiagnostics)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: atlas repack selected font=%u role=%s glyphs=%u plans=%u pages=%u targetWidth=%u heuristic=%s gpuBytes=%llu dimensions=power-of-two objective=page-count-then-bytes",
+					"tnvse_freetype_font: atlas repack selected font=%u role=%s glyphs=%u compatibleAliases=%u plans=%u pages=%u targetWidth=%u heuristic=%s gpuBytes=%llu dimensions=power-of-two objective=page-count-then-bytes",
 					baseKey.fontId,
 					baseKey.byteClass == VectorFontByteClass::DoubleByte
 						? "doubleByte" : "singleByte",
-					static_cast<UInt32>(glyphs.size()), attemptedPlans,
+					static_cast<UInt32>(glyphs.size()),
+					compatibleGlyphAliasCount,
+					attemptedPlans,
 					static_cast<UInt32>(pages.size()),
 					selectedPlan.targetWidth,
 					selectedPlan.heuristic
