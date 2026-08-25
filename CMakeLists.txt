@@ -116,7 +116,8 @@ if(TNVSE_BUILD_MENU_SEARCH_OWNER_STATE_TESTS)
   foreach(_tnvse_forbidden_menu_search_state IN ITEMS
       "keyboardActive"
       "stateSyncWasActive"
-      "kStewieMenuSearchSync_Toggle")
+      "kStewieMenuSearchSync_Toggle"
+      "menusearch_active_maintenance")
     string(FIND "${_tnvse_menu_search_contents}"
       "${_tnvse_forbidden_menu_search_state}" _tnvse_forbidden_offset)
     if(NOT _tnvse_forbidden_offset EQUAL -1)

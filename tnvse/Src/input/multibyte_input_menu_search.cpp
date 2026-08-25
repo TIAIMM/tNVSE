@@ -26,6 +26,8 @@ namespace fonthook
 		constexpr DWORD kStewieMenuSearchDiscoveryIntervalMs = 50;
 		constexpr size_t kMaximumMenuTileTraversalNodes = 16384;
 		using MenuSearchOwnerState = menu_search_owner_state::State;
+		using MenuSearchObservationAuthority =
+			menu_search_owner_state::ObservationAuthority;
 
 		constexpr SIZE_T kInventoryMenuHandleKeyboardInputVTableEntry = 0x10739E4;
 		constexpr SIZE_T kStatsMenuHandleKeyboardInputVTableEntry = 0x1070004;
@@ -58,6 +60,7 @@ namespace fonthook
 			bool ownerReconcilePending = false;
 			DWORD ownerReconcileStartTick = 0;
 			DWORD ownerReconcileDueTick = 0;
+			UInt32 ownerReconcileKey = 0;
 			bool targetReported = false;
 		};
 
@@ -161,7 +164,8 @@ namespace fonthook
 		MenuSearchOwnerState ObserveMenuSearchOwnerState(
 			const StewieMenuSearchAdapterSite& site,
 			Menu* menu,
-			Tile* tile)
+			Tile* tile,
+			menu_search_owner_state::Observation* details = nullptr)
 		{
 			menu_search_owner_state::Observation observation;
 			observation.menuVisible = menu && IsGameMenuVisible(site.menuID);
@@ -172,6 +176,8 @@ namespace fonthook
 			if (!observation.menuVisible || !observation.ownerSurfaceEnabled
 				|| !observation.tileAvailable)
 			{
+				if (details)
+					*details = observation;
 				return menu_search_owner_state::Resolve(observation);
 			}
 
@@ -208,11 +214,14 @@ namespace fonthook
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
 				// A menu/root replacement can invalidate a non-owning Tile pointer
-				// between validation and observation. Unknown fails closed and lets
-				// the main-loop discovery path acquire the replacement.
+				// between validation and observation. Return Unknown; the caller's
+				// authority policy decides whether this is a harmless presentation
+				// miss or a real replacement boundary.
 				observation.tileAvailable = false;
 			}
 
+			if (details)
+				*details = observation;
 			return menu_search_owner_state::Resolve(observation);
 		}
 
@@ -237,6 +246,7 @@ namespace fonthook
 			site.ownerReconcilePending = false;
 			site.ownerReconcileStartTick = 0;
 			site.ownerReconcileDueTick = 0;
+			site.ownerReconcileKey = 0;
 		}
 
 		bool TileTreeContains(Tile* root, Tile* target)
@@ -337,8 +347,9 @@ namespace fonthook
 			const SInt32 dueInMs = site.ownerReconcilePending
 				? static_cast<SInt32>(site.ownerReconcileDueTick - GetTickCount())
 				: 0;
+			menu_search_owner_state::Observation observation;
 			const MenuSearchOwnerState observedState = ObserveMenuSearchOwnerState(
-				site, menu, resolvedTile);
+				site, menu, resolvedTile, &observation);
 			SIZE_T currentHandler = 0;
 			ReadMenuSearchHandler(site, currentHandler);
 
@@ -347,7 +358,9 @@ namespace fonthook
 				"gameVisible=%u pipVisible=%u/%u/%u menu=0x%08X activeMenu=0x%08X activeMenuID=%u "
 				"root=0x%08X trackedRaw=0x%08X tracked=0x%08X fallback=0x%08X resolved=0x%08X "
 				"tileID=%u tileVisible=%.1f tileAlpha=%.1f ownerState=%s pending=%u "
-				"dueInMs=%d observedState=%s installed=%u currentHandler=0x%08X expectedHandler=0x%08X "
+				"dueInMs=%d observedState=%s ownerSurface=%u activeTrait=%u/%.1f "
+				"visibleTrait=%u/%.1f alphaTrait=%u/%.1f stringTrait=%u/%u "
+				"installed=%u currentHandler=0x%08X expectedHandler=0x%08X "
 				"predecessorHandler=0x%08X string=\"%s\"",
 				stage ? stage : "unknown",
 				site.menuName,
@@ -372,6 +385,15 @@ namespace fonthook
 				site.ownerReconcilePending ? 1 : 0,
 				dueInMs,
 				menu_search_owner_state::Name(observedState),
+				observation.ownerSurfaceEnabled ? 1 : 0,
+				observation.activeTraitPresent ? 1 : 0,
+				observation.activeTraitValue,
+				observation.visibleTraitPresent ? 1 : 0,
+				observation.visibleTraitValue,
+				observation.alphaTraitPresent ? 1 : 0,
+				observation.alphaTraitValue,
+				observation.stringTraitPresent ? 1 : 0,
+				observation.stringNonEmpty ? 1 : 0,
 				site.adapterInstalled ? 1 : 0,
 				static_cast<UInt32>(currentHandler),
 				static_cast<UInt32>(site.adapterHandler),
@@ -381,20 +403,25 @@ namespace fonthook
 
 		void ApplyObservedMenuSearchOwnerState(
 			StewieMenuSearchAdapterSite& site,
-			MenuSearchOwnerState observedState,
+			MenuSearchOwnerState rawObservedState,
 			const char* reason,
+			MenuSearchObservationAuthority authority =
+				MenuSearchObservationAuthority::Authoritative,
 			bool forceSessionRefresh = false,
 			bool consumePendingReconcile = true)
 		{
 			const MenuSearchOwnerState previousState = site.ownerState;
-			const bool isActive = menu_search_owner_state::IsActive(observedState);
-			const bool stateChanged = previousState != observedState;
+			const MenuSearchOwnerState effectiveState =
+				menu_search_owner_state::MergeObservation(
+					previousState, rawObservedState, authority);
+			const bool isActive = menu_search_owner_state::IsActive(effectiveState);
+			const bool stateChanged = previousState != effectiveState;
 			const menu_search_owner_state::ReconcileDecision decision =
 				menu_search_owner_state::DecideReconcile(
-					previousState, observedState, site.adapterInstalled,
+					previousState, effectiveState, site.adapterInstalled,
 					forceSessionRefresh);
 
-			site.ownerState = observedState;
+			site.ownerState = effectiveState;
 			if (consumePendingReconcile)
 				ResetMenuSearchOwnerReconcile(site);
 			if (!stateChanged && !(forceSessionRefresh && isActive))
@@ -416,11 +443,14 @@ namespace fonthook
 			}
 
 			DebugLog(
-				"tnvse_multibyte_input_event: source=OwnerState action=menusearch_reconcile reason=%s menu=%u previous=%s observed=%s forceRefresh=%u",
+				"tnvse_multibyte_input_event: source=OwnerState action=menusearch_reconcile reason=%s menu=%u previous=%s raw=%s effective=%s authority=%s forceRefresh=%u",
 				reason ? reason : "unknown",
 				site.menuID,
 				menu_search_owner_state::Name(previousState),
-				menu_search_owner_state::Name(observedState),
+				menu_search_owner_state::Name(rawObservedState),
+				menu_search_owner_state::Name(effectiveState),
+				authority == MenuSearchObservationAuthority::Authoritative
+					? "authoritative" : "presentation",
 				forceSessionRefresh ? 1 : 0);
 			DebugLogMenuSearchState(
 				reason ? reason : "owner_reconciled", site,
@@ -444,25 +474,33 @@ namespace fonthook
 			site.tile = tile;
 			site.seenTick = GetTickCount();
 			site.targetReported = false;
-			const MenuSearchOwnerState observedState =
+			const MenuSearchOwnerState rawObservedState =
 				ObserveMenuSearchOwnerState(site, menu, tile);
+			const MenuSearchOwnerState boundaryState = replaced
+				? menu_search_owner_state::ResolveReplacementObservation(
+					rawObservedState)
+				: rawObservedState;
 			ApplyObservedMenuSearchOwnerState(
 				site,
-				observedState,
+				boundaryState,
 				replaced ? "menusearch_tile_replaced" : "menusearch_tile_tracked",
+				replaced ? MenuSearchObservationAuthority::Authoritative
+					: MenuSearchObservationAuthority::Presentation,
 				replaced && refreshOnReplacement
-					&& menu_search_owner_state::IsActive(observedState),
+					&& menu_search_owner_state::IsActive(boundaryState),
 				!site.ownerReconcilePending);
 
 			DebugLog(
-				"tnvse_multibyte_input_debug: menusearch_track name=%s menu=%u root=0x%08X tile=0x%08X id=%u source=main_loop replaced=%u observed=%s",
+				"tnvse_multibyte_input_debug: menusearch_track name=%s menu=%u root=0x%08X tile=0x%08X id=%u source=main_loop replaced=%u raw=%s boundary=%s effective=%s",
 				site.menuName,
 				site.menuID,
 				reinterpret_cast<UInt32>(root),
 				reinterpret_cast<UInt32>(tile),
 				TileID(tile),
 				replaced ? 1 : 0,
-				menu_search_owner_state::Name(observedState));
+				menu_search_owner_state::Name(rawObservedState),
+				menu_search_owner_state::Name(boundaryState),
+				menu_search_owner_state::Name(site.ownerState));
 		}
 
 		void DiscoverMenuSearchTiles()
@@ -545,7 +583,7 @@ namespace fonthook
 			if (!searchTile)
 			{
 				ApplyObservedMenuSearchOwnerState(
-					*site, MenuSearchOwnerState::Unknown,
+					*site, MenuSearchOwnerState::Inactive,
 					"menusearch_no_tracked_searchbar");
 				DebugLog(
 					"tnvse_multibyte_input_debug: menusearch_target_miss reason=no_tracked_searchbar menu=%u root=0x%08X legacyID=%u",
@@ -631,11 +669,13 @@ namespace fonthook
 
 			const DWORD now = GetTickCount();
 			site->targetReported = false;
-			if (!site->ownerReconcilePending)
-				site->ownerReconcileStartTick = now;
+			// The mailbox is latest-event only. A newer control key replaces the
+			// prior reconcile and receives its own complete retry window.
+			site->ownerReconcileStartTick = now;
 			site->ownerReconcilePending = true;
 			site->ownerReconcileDueTick =
 				now + kStewieMenuSearchStateSyncDelayMs;
+			site->ownerReconcileKey = key;
 
 			DebugLog(
 				"tnvse_multibyte_input_event: source=%s action=menusearch_owner_reconcile_schedule menu=%u key=0x%08X handled=%u cached=%s dueInMs=%u",
@@ -782,9 +822,10 @@ namespace fonthook
 				});
 			if (!needsMaintenance)
 				return;
-			// Only an active or explicitly pending site is observed. Inactive menus
+			// Only an active or explicitly pending site is inspected. Inactive menus
 			// retain the zero-traversal fast path, especially while MapMenu rebuilds
-			// its Data/Notes subtree.
+			// its Data/Notes subtree. Presentation traits are read only for an
+			// event-bound delayed reconcile, never as an active-session heartbeat.
 			const DWORD now = GetTickCount();
 			for (StewieMenuSearchAdapterSite& site : s_menuSearchSites)
 			{
@@ -794,7 +835,8 @@ namespace fonthook
 					continue;
 				}
 
-				Menu* menu = GetOpenMenu(site.menuID);
+				Menu* menu = IsGameMenuVisible(site.menuID)
+					? GetOpenMenu(site.menuID) : nullptr;
 				DebugLogMenuSearchState("owner_reconcile_due", site, menu);
 				if (!menu)
 				{
@@ -803,17 +845,51 @@ namespace fonthook
 						"menusearch_reconcile_no_menu");
 					continue;
 				}
+				if (site.menuID == Pause && !IsStartMenuSaveListEnabled(menu))
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site, MenuSearchOwnerState::Inactive,
+						"menusearch_reconcile_owner_surface_disabled");
+					continue;
+				}
+
+				// Ctrl+R is an idempotent authoritative reset in every Stewie
+				// MenuSearch handler. It does not need a presentation-trait round trip.
+				if (site.ownerReconcileKey == 'r')
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site,
+						menu_search_owner_state::ResolveHandledControlObservation(
+							site.ownerState, MenuSearchOwnerState::Unknown,
+							menu_search_owner_state::ControlAction::Reset),
+						"menusearch_reconcile_ctrl_r");
+					continue;
+				}
 
 				Tile* root = MenuRoot(menu);
+				if (!root)
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site, MenuSearchOwnerState::Inactive,
+						"menusearch_reconcile_no_root");
+					continue;
+				}
 				Tile* searchTile = GetTrackedMenuSearchTile(menu);
 				if (!searchTile)
 					searchTile = FindTileByID(root, kStewieMenuSearch_TextTile);
+				if (!searchTile)
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site, MenuSearchOwnerState::Inactive,
+						"menusearch_reconcile_no_tile");
+					continue;
+				}
 				if (searchTile && (site.root != root || site.tile != searchTile))
 					TrackMenuSearchTile(site, menu, root, searchTile);
 
-				const MenuSearchOwnerState observedState =
+				const MenuSearchOwnerState rawObservedState =
 					ObserveMenuSearchOwnerState(site, menu, searchTile);
-				if (observedState == MenuSearchOwnerState::Unknown
+				if (rawObservedState == MenuSearchOwnerState::Unknown
 					&& static_cast<SInt32>(now - site.ownerReconcileStartTick)
 						< static_cast<SInt32>(kStewieMenuSearchStateSyncTimeoutMs))
 				{
@@ -823,13 +899,30 @@ namespace fonthook
 						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_owner_reconcile_retry menu=%u hasTile=%u observed=%s retryInMs=%u",
 						site.menuID,
 						searchTile ? 1 : 0,
-						menu_search_owner_state::Name(observedState),
+						menu_search_owner_state::Name(rawObservedState),
 						static_cast<UInt32>(kStewieMenuSearchStateSyncRetryMs));
+					continue;
+				}
+				if (rawObservedState == MenuSearchOwnerState::Unknown)
+				{
+					const UInt32 pendingKey = site.ownerReconcileKey;
+					ResetMenuSearchOwnerReconcile(site);
+					DebugLog(
+						"tnvse_multibyte_input_event: source=MainLoop action=menusearch_owner_reconcile_unresolved menu=%u key=0x%08X cached=%s timeoutMs=%u",
+						site.menuID,
+						pendingKey,
+						menu_search_owner_state::Name(site.ownerState),
+						static_cast<UInt32>(kStewieMenuSearchStateSyncTimeoutMs));
 					continue;
 				}
 
 				ApplyObservedMenuSearchOwnerState(
-					site, observedState, "menusearch_owner_reconcile");
+					site,
+					menu_search_owner_state::ResolveHandledControlObservation(
+						site.ownerState, rawObservedState,
+						menu_search_owner_state::ControlAction::Toggle),
+					"menusearch_owner_reconcile",
+					MenuSearchObservationAuthority::Authoritative);
 			}
 
 			for (StewieMenuSearchAdapterSite& site : s_menuSearchSites)
@@ -854,26 +947,42 @@ namespace fonthook
 						"menusearch_menu_missing");
 					continue;
 				}
+				if (site.menuID == Pause && !IsStartMenuSaveListEnabled(menu))
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site, MenuSearchOwnerState::Inactive,
+						"menusearch_owner_surface_disabled");
+					continue;
+				}
 
 				Tile* root = MenuRoot(menu);
+				if (!root)
+				{
+					ApplyObservedMenuSearchOwnerState(
+						site, MenuSearchOwnerState::Inactive,
+						"menusearch_root_missing");
+					continue;
+				}
 				Tile* searchTile = GetTrackedMenuSearchTile(menu);
 				if (!searchTile)
 					searchTile = FindTileByID(root, kStewieMenuSearch_TextTile);
 				if (!searchTile)
 				{
 					ApplyObservedMenuSearchOwnerState(
-						site, MenuSearchOwnerState::Unknown,
+						site, MenuSearchOwnerState::Inactive,
 						"menusearch_tile_missing");
 					continue;
 				}
 				if (site.root != root || site.tile != searchTile)
+				{
 					TrackMenuSearchTile(site, menu, root, searchTile);
+					continue;
+				}
 
-				const MenuSearchOwnerState observedState =
-					ObserveMenuSearchOwnerState(site, menu, searchTile);
-				if (observedState != MenuSearchOwnerState::Active)
-					ApplyObservedMenuSearchOwnerState(
-						site, observedState, "menusearch_active_maintenance");
+				// The root and tracked Tile still belong to the same visible owner.
+				// Do not poll _IsActive/alpha/string here: Stewie's internal
+				// IsSearchMode/InputField::isActive state is authoritative, while these
+				// values are only rendering mirrors and can transiently read inactive.
 			}
 		}
 
@@ -888,9 +997,24 @@ namespace fonthook
 				return false;
 
 			StewieMenuSearchAdapterSite* site = FindMenuSearchSiteByMenu(menu);
+			const MenuSearchOwnerState cachedBefore = site
+				? site->ownerState : MenuSearchOwnerState::Unknown;
 			handled = CallStewiePredecessorInput(menu, input);
 			if (!site)
 				return true;
+			if (!handled)
+			{
+				// The exact chained owner rejected the control input. Do not guess a
+				// toggle from cached or presentation state (LevelUpMenu legitimately
+				// rejects Ctrl+F outside the perk-selection surface).
+				ResetMenuSearchOwnerReconcile(*site);
+				DebugLog(
+					"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_control_rejected menu=%u key=0x%08X cached=%s",
+					MenuID(menu),
+					input,
+					menu_search_owner_state::Name(cachedBefore));
+				return true;
+			}
 
 			Tile* root = MenuRoot(menu);
 			Tile* searchTile = GetTrackedMenuSearchTile(menu);
@@ -899,9 +1023,25 @@ namespace fonthook
 			if (searchTile && (site->root != root || site->tile != searchTile))
 				TrackMenuSearchTile(*site, menu, root, searchTile);
 
-			const MenuSearchOwnerState observedState =
+			const MenuSearchOwnerState rawObservedState =
 				ObserveMenuSearchOwnerState(*site, menu, searchTile);
-			if (observedState == MenuSearchOwnerState::Unknown)
+			const menu_search_owner_state::ControlAction controlAction = key == 'r'
+				? menu_search_owner_state::ControlAction::Reset
+				: menu_search_owner_state::ControlAction::Toggle;
+			const MenuSearchOwnerState controlState =
+				menu_search_owner_state::ResolveHandledControlObservation(
+					site->ownerState, rawObservedState, controlAction);
+			if (controlAction == menu_search_owner_state::ControlAction::Reset)
+			{
+				// Every Stewie MenuSearch Ctrl+R path synchronously clears
+				// IsSearchMode/SetActive. Treat it as an idempotent owner reset even
+				// if the display Tile was replaced before it could be inspected.
+				ApplyObservedMenuSearchOwnerState(
+					*site, controlState,
+					"menusearch_ctrl_r_owner",
+					MenuSearchObservationAuthority::Authoritative);
+			}
+			else if (rawObservedState == MenuSearchOwnerState::Unknown)
 			{
 				ScheduleMenuSearchOwnerReconcile(
 					menu, input, "StewieTweaksInputTarget", handled);
@@ -909,16 +1049,18 @@ namespace fonthook
 			else
 			{
 				ApplyObservedMenuSearchOwnerState(
-					*site, observedState,
-					key == 'r' ? "menusearch_ctrl_r_owner"
-						: "menusearch_ctrl_f_owner");
+					*site, controlState,
+					"menusearch_ctrl_f_owner",
+					MenuSearchObservationAuthority::Authoritative);
 			}
 			DebugLog(
-				"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_control_observed menu=%u key=0x%08X handled=%u observed=%s",
+				"tnvse_multibyte_input_event: source=StewieTweaksInputTarget action=menusearch_control_observed menu=%u key=0x%08X handled=%u cachedBefore=%s raw=%s effective=%s",
 				MenuID(menu),
 				input,
 				handled ? 1 : 0,
-				menu_search_owner_state::Name(observedState));
+				menu_search_owner_state::Name(cachedBefore),
+				menu_search_owner_state::Name(rawObservedState),
+				menu_search_owner_state::Name(site->ownerState));
 			return true;
 		}
 
@@ -1225,7 +1367,7 @@ namespace fonthook
 					allCurrent = false;
 					site.adapterInstalled = false;
 					ApplyObservedMenuSearchOwnerState(
-						site, MenuSearchOwnerState::Unknown,
+						site, MenuSearchOwnerState::Inactive,
 						"menusearch_adapter_ownership_lost");
 					site.observedHandler = currentHandler;
 					if (readable && currentHandler == site.predecessorHandler)
@@ -1289,10 +1431,15 @@ namespace fonthook
 					TrackMenuSearchTile(site, menu, root, tile, false);
 				const MenuSearchOwnerState observedState =
 					ObserveMenuSearchOwnerState(site, menu, tile);
+				const MenuSearchOwnerState effectiveState =
+					menu_search_owner_state::MergeObservation(
+						site.ownerState, observedState,
+						MenuSearchObservationAuthority::Presentation);
 				ApplyObservedMenuSearchOwnerState(
 					site, observedState, "menusearch_adapter_installed",
+					MenuSearchObservationAuthority::Presentation,
 					wasActive
-						&& observedState == MenuSearchOwnerState::Active);
+						&& effectiveState == MenuSearchOwnerState::Active);
 				DebugLogMenuSearchState("adapter_installed", site, menu);
 			}
 		}

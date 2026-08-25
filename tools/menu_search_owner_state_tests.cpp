@@ -94,10 +94,51 @@ int main()
 	cached = Resolve(activePlain);
 	Expect(cached == State::Active,
 		"an active owner must override a stale inactive cache");
-	cached = State::Active;
-	cached = Resolve(initialPlain);
-	Expect(cached == State::Inactive,
-		"an inactive owner must override a stale active cache");
+
+	Expect(MergeObservation(State::Active, State::Inactive,
+			ObservationAuthority::Presentation) == State::Active,
+		"an inactive presentation mirror must not close a confirmed session");
+	Observation inactiveInputField = inputField;
+	inactiveInputField.activeTraitValue = 0.0f;
+	Expect(MergeObservation(State::Active, Resolve(inactiveInputField),
+			ObservationAuthority::Presentation) == State::Active,
+		"a transient InputField _IsActive mirror must not detach IME ownership");
+	Expect(MergeObservation(State::Active, Resolve(dimmedPlain),
+			ObservationAuthority::Presentation) == State::Active,
+		"a transient plain SearchBar alpha mirror must not detach IME ownership");
+	Expect(MergeObservation(State::Active, State::Inactive,
+			ObservationAuthority::Authoritative) == State::Inactive,
+		"an authoritative inactive transition must close a confirmed session");
+	Expect(MergeObservation(State::Inactive, State::Active,
+			ObservationAuthority::Presentation) == State::Active,
+		"a positive presentation mirror may adopt an already-open search field");
+	Expect(MergeObservation(State::Active, State::Unknown,
+			ObservationAuthority::Authoritative) == State::Active,
+		"an unknown authoritative read must preserve a confirmed active state");
+	Expect(MergeObservation(State::Inactive, State::Unknown,
+			ObservationAuthority::Presentation) == State::Inactive,
+		"an unknown presentation read must preserve a confirmed inactive state");
+	Expect(ResolveReplacementObservation(State::Active) == State::Active,
+		"a positively active replacement may inherit ownership");
+	Expect(ResolveReplacementObservation(State::Inactive) == State::Inactive,
+		"an inactive replacement must end ownership");
+	Expect(ResolveReplacementObservation(State::Unknown) == State::Inactive,
+		"an unreadable replacement must fail closed at the lifecycle boundary");
+	Expect(ResolveHandledControlObservation(State::Inactive, State::Active,
+			ControlAction::Toggle) == State::Active,
+		"post-handler Ctrl+F active must repair a stale inactive cache");
+	Expect(ResolveHandledControlObservation(State::Active, State::Inactive,
+			ControlAction::Toggle) == State::Inactive,
+		"post-handler Ctrl+F inactive must repair a stale active cache");
+	Expect(ResolveHandledControlObservation(State::Inactive, State::Inactive,
+			ControlAction::Toggle) == State::Inactive,
+		"a LevelUp Ctrl+F rejection must remain inactive instead of blind toggling");
+	Expect(ResolveHandledControlObservation(State::Active, State::Active,
+			ControlAction::Reset) == State::Inactive,
+		"Ctrl+R must be inactive even if a presentation mirror remains active");
+	Expect(ResolveHandledControlObservation(State::Active, State::Unknown,
+			ControlAction::Toggle) == State::Active,
+		"an unreadable post-handler Ctrl+F observation must preserve confirmed state");
 
 	const ReconcileDecision opened = DecideReconcile(
 		State::Inactive, State::Active, true);
@@ -127,6 +168,24 @@ int main()
 	Expect(closed.clearCachedTarget && !closed.activateSession
 			&& closed.endSession,
 		"an absolute inactive observation must close the local session");
+	const ReconcileDecision unresolved = DecideReconcile(
+		State::Active, State::Unknown, true);
+	Expect(!unresolved.clearCachedTarget && !unresolved.activateSession
+			&& !unresolved.endSession,
+		"an unknown observation must never end an active session");
+
+	State stableActive = State::Active;
+	for (int frame = 0; frame < 1000; ++frame)
+	{
+		stableActive = MergeObservation(stableActive, State::Inactive,
+			ObservationAuthority::Presentation);
+	}
+	Expect(stableActive == State::Active,
+		"repeated transient presentation false values must not detach IME ownership");
+	stableActive = MergeObservation(stableActive, State::Inactive,
+		ObservationAuthority::Authoritative);
+	Expect(stableActive == State::Inactive,
+		"an explicit lifecycle close must still terminate after transient mirrors");
 
 	Observation rejectedLevelUp = initialPlain;
 	Expect(Resolve(rejectedLevelUp) == State::Inactive,

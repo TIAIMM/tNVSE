@@ -11,6 +11,23 @@ namespace fonthook::multibyte_input::menu_search_owner_state
 		Active,
 	};
 
+	// Tile traits are presentation mirrors. They are useful for adopting an
+	// already-open search field, but a transient inactive mirror must never tear
+	// down an input session whose ownership was confirmed at Stewie's chained
+	// keyboard-handler boundary. Authoritative observations are reserved for
+	// that boundary and for explicit menu/Tile lifecycle transitions.
+	enum class ObservationAuthority : std::uint8_t
+	{
+		Presentation,
+		Authoritative,
+	};
+
+	enum class ControlAction : std::uint8_t
+	{
+		Toggle,
+		Reset,
+	};
+
 	struct Observation
 	{
 		bool menuVisible = false;
@@ -65,6 +82,52 @@ namespace fonthook::multibyte_input::menu_search_owner_state
 		return state == State::Active;
 	}
 
+	[[nodiscard]] constexpr State MergeObservation(
+		State currentState,
+		State observedState,
+		ObservationAuthority authority)
+	{
+		// An unreadable/missing presentation value carries no transition. Keeping
+		// the last confirmed state also makes SEH-protected Tile replacement races
+		// fail without spuriously closing the IME session.
+		if (observedState == State::Unknown)
+			return currentState;
+
+		if (authority == ObservationAuthority::Presentation
+			&& currentState == State::Active
+			&& observedState == State::Inactive)
+		{
+			return State::Active;
+		}
+
+		return observedState;
+	}
+
+	[[nodiscard]] constexpr State ResolveReplacementObservation(
+		State observedState)
+	{
+		// A different Tile/root is a real ownership boundary. Only a replacement
+		// that positively reports active may inherit the old input session.
+		return observedState == State::Active
+			? State::Active : State::Inactive;
+	}
+
+	[[nodiscard]] constexpr State ResolveHandledControlObservation(
+		State currentState,
+		State observedState,
+		ControlAction action)
+	{
+		// Ctrl+R is an idempotent reset in every supported Stewie handler.
+		if (action == ControlAction::Reset)
+			return State::Inactive;
+
+		// Ctrl+F may be rejected by an owner-specific gate (for example the
+		// LevelUp perk page), so use the post-handler absolute observation rather
+		// than blindly negating tNVSE's cached state.
+		return MergeObservation(currentState, observedState,
+			ObservationAuthority::Authoritative);
+	}
+
 	[[nodiscard]] constexpr bool IsTrackedTileReplacement(
 		bool previouslyTracked,
 		bool sameRoot,
@@ -86,6 +149,9 @@ namespace fonthook::multibyte_input::menu_search_owner_state
 		bool adapterInstalled,
 		bool forceSessionRefresh = false)
 	{
+		if (observedState == State::Unknown)
+			return {};
+
 		const bool wasActive = IsActive(previousState);
 		const bool isActive = IsActive(observedState);
 		return {
