@@ -41,6 +41,7 @@ std::string g_sOptionalStructuralParticle;
 bool g_bRemovePlural;
 bool g_bSaveDisplayNameMap;
 bool g_bEnableDictionaryTranslation;
+bool g_bDisableDictionaryTranslationInConsole = true;
 bool g_bEnableDictionaryTranslationLog;
 bool g_bEnableMuxQuestPromptTranslation;
 bool g_bEnableDictionaryPerkDescriptionTranslation;
@@ -383,6 +384,13 @@ void LoadConfig()
 		&& ReadConfigInt(kDictionarySection,
 			"bEnableDictionaryTranslation", 1, filename) != 0;
 	gLog.FormattedMessage("g_bEnableDictionaryTranslation: %d", g_bEnableDictionaryTranslation);
+
+	g_bDisableDictionaryTranslationInConsole = ReadConfigInt(
+		kDictionarySection,
+		"bDisableDictionaryTranslationInConsole", 1, filename) != 0;
+	gLog.FormattedMessage(
+		"g_bDisableDictionaryTranslationInConsole: %d",
+		g_bDisableDictionaryTranslationInConsole);
 
 	g_bEnableDictionaryTranslationLog = g_bEnableMultibyteFontHook
 		&& ReadConfigInt(kDictionarySection,

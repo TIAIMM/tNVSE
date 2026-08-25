@@ -1,4 +1,5 @@
 #include "dictionary_internal.h"
+#include "dictionary_translation_guard.h"
 #include "dictionary_ui_syntax.h"
 #include "encoding.h"
 #include "load_config.h"
@@ -27,6 +28,25 @@ namespace fonthook
 	bool IsDictionaryTranslationSuppressedForCurrentTile() noexcept
 	{
 		return s_suppressDictionaryTranslationForCurrentTile;
+	}
+
+	namespace
+	{
+		bool ShouldBypassDictionaryTranslation() noexcept
+		{
+			const bool currentTileSuppressed =
+				IsDictionaryTranslationSuppressedForCurrentTile();
+			const bool shouldReadConsoleState =
+				g_bEnableDictionaryTranslation
+				&& !currentTileSuppressed
+				&& g_bDisableDictionaryTranslationInConsole;
+			return dictionary_translation_guard::ShouldBypassDictionaryTranslation(
+				g_bEnableDictionaryTranslation,
+				currentTileSuppressed,
+				g_bDisableDictionaryTranslationInConsole,
+				shouldReadConsoleState
+					&& dictionary_translation_guard::IsRetailConsoleOpen());
+		}
 	}
 
 	namespace implementation::dictionary_translate {}
@@ -2073,8 +2093,7 @@ namespace fonthook
 
 	bool TranslateText(const char* source, std::string& translated)
 	{
-		if (!g_bEnableDictionaryTranslation
-			|| IsDictionaryTranslationSuppressedForCurrentTile())
+		if (ShouldBypassDictionaryTranslation())
 			return false;
 		const bool result = TranslateInternal(source, translated, 0);
 		return result;
@@ -2083,8 +2102,7 @@ namespace fonthook
 	bool TranslateRichText(const char* source, std::string& translated)
 	{
 		translated.clear();
-		if (!g_bEnableDictionaryTranslation || !source || !*source ||
-			IsDictionaryTranslationSuppressedForCurrentTile())
+		if (ShouldBypassDictionaryTranslation() || !source || !*source)
 			return false;
 
 		const RichTextParts parts = ExtractRichTextParts(source);

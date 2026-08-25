@@ -41,6 +41,7 @@ extern std::string g_sOptionalStructuralParticle;
 extern bool g_bRemovePlural;
 extern bool g_bSaveDisplayNameMap;
 extern bool g_bEnableDictionaryTranslation;
+extern bool g_bDisableDictionaryTranslationInConsole;
 extern bool g_bEnableDictionaryTranslationLog;
 extern bool g_bEnableMuxQuestPromptTranslation;
 extern bool g_bEnableDictionaryPerkDescriptionTranslation;

@@ -90,6 +90,23 @@ if(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS)
     COMMAND $<TARGET_FILE:tnvse_dictionary_ui_syntax_tests>)
 endif()
 
+option(TNVSE_BUILD_DICTIONARY_TRANSLATION_GUARD_TESTS
+  "Build the dictionary console-suppression policy tests" OFF)
+if(TNVSE_BUILD_DICTIONARY_TRANSLATION_GUARD_TESTS)
+  enable_testing()
+  add_executable(tnvse_dictionary_translation_guard_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/dictionary_translation_guard_tests.cpp")
+  target_compile_features(tnvse_dictionary_translation_guard_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_dictionary_translation_guard_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary")
+  target_compile_options(tnvse_dictionary_translation_guard_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_dictionary_translation_guard_tests)
+  set_target_properties(tnvse_dictionary_translation_guard_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME dictionary_translation_guard
+    COMMAND $<TARGET_FILE:tnvse_dictionary_translation_guard_tests>)
+endif()
+
 option(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS
   "Build the deterministic renderer reset recovery state tests" OFF)
 if(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS)

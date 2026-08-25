@@ -566,6 +566,10 @@ namespace fonthook
 			return;
 		}
 
+		gLog.FormattedMessage(
+			"tnvse_dictionary: console-open translation bypass policy=%s",
+			g_bDisableDictionaryTranslationInConsole ? "enabled" : "disabled");
+
 		const std::string configPath = GetGameDirectory() + "\\Data\\nvse\\plugins\\tnvse_dictionary.xml";
 		if (!FileExists(configPath))
 		{
