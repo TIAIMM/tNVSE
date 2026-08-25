@@ -35,7 +35,9 @@ namespace fonthook
 				return nullptr;
 			for (Tile* child : parent->kChildren)
 			{
-				Menu* menu = child ? child->GetMenu() : nullptr;
+				if (!child || child->GetType() != Tile::kTileID_menu)
+					continue;
+				Menu* menu = static_cast<TileMenu*>(child)->menu;
 				if (menu && menu->GetID() == menuClass)
 					return child;
 			}

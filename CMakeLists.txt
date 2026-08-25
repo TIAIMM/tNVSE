@@ -202,7 +202,27 @@ set(TNVSE_NATIVE_OVERLAY_XMLS
 set(TNVSE_NATIVE_OVERLAY_TEXTURES
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Textures/Interface/tNVSE/font_prewarm_label.dds")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+	"${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
+  _tnvse_ime_overlay_xml)
+if(NOT _tnvse_ime_overlay_xml MATCHES "^[ \t\r\n]*<menu([ \t\r\n>])")
+  message(FATAL_ERROR "ImeOverlay.xml must retain a TileMenu root")
+endif()
+foreach(_tnvse_forbidden_ime_tag class template)
+  if(_tnvse_ime_overlay_xml MATCHES
+      "<[ \t\r\n]*${_tnvse_forbidden_ime_tag}([ \t\r\n>])")
+    message(FATAL_ERROR
+      "ImeOverlay.xml is late-bound to a local Menu; forbidden tag: ${_tnvse_forbidden_ime_tag}")
+  endif()
+endforeach()
+if(NOT _tnvse_ime_overlay_xml MATCHES
+    "<stackingtype>[ \t\r\n]*&does_not_stack;[ \t\r\n]*</stackingtype>")
+  message(FATAL_ERROR
+    "The locally-bound IME Menu must remain non-stacking")
+endif()
+unset(_tnvse_forbidden_ime_tag)
+unset(_tnvse_ime_overlay_xml)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml"
   _tnvse_prewarm_overlay_xml)
 foreach(_tnvse_forbidden_prewarm_tag text font string)
@@ -228,11 +248,19 @@ set(_tnvse_prewarm_overlay_cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_prewarm.cpp")
 set(_tnvse_loading_menu_hooks_cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_hooks.cpp")
+set(_tnvse_ime_overlay_cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_ime.cpp")
+set(_tnvse_overlay_detail_header
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_detail.h")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${_tnvse_prewarm_overlay_cpp}"
-  "${_tnvse_loading_menu_hooks_cpp}")
+  "${_tnvse_loading_menu_hooks_cpp}"
+  "${_tnvse_ime_overlay_cpp}"
+  "${_tnvse_overlay_detail_header}")
 file(READ "${_tnvse_prewarm_overlay_cpp}" _tnvse_prewarm_overlay_source)
 file(READ "${_tnvse_loading_menu_hooks_cpp}" _tnvse_loading_menu_hooks_source)
+file(READ "${_tnvse_ime_overlay_cpp}" _tnvse_ime_overlay_source)
+file(READ "${_tnvse_overlay_detail_header}" _tnvse_overlay_detail_source)
 foreach(_tnvse_forbidden_overlay_pattern
     "Sleep[ \t\r\n]*\\("
     "ReleaseAndDestroyAttachedRoot[ \t\r\n]*\\("
@@ -256,12 +284,44 @@ foreach(_tnvse_removed_loading_menu_symbol
       "Removed LoadingMenu wrapper/lock remains in hook implementation: ${_tnvse_removed_loading_menu_symbol}")
   endif()
 endforeach()
+string(CONCAT _tnvse_ime_local_menu_source
+  "${_tnvse_loading_menu_hooks_source}\n"
+  "${_tnvse_ime_overlay_source}\n"
+  "${_tnvse_overlay_detail_source}")
+foreach(_tnvse_removed_ime_factory_symbol
+    "CreateMenuByClassHook"
+    "kCreateMenuByClassCallSite"
+    "predecessorCreateMenuByClass"
+    "creatingImeMenu"
+    "imeMenuFactory")
+  if(_tnvse_ime_local_menu_source MATCHES
+      "${_tnvse_removed_ime_factory_symbol}")
+    message(FATAL_ERROR
+      "Removed global IME menu-factory hook state remains: ${_tnvse_removed_ime_factory_symbol}")
+  endif()
+endforeach()
+if(NOT _tnvse_ime_overlay_source MATCHES
+    "CdeclCall<void>[ \t\r\n]*\\([ \t\r\n]*kMenuRegisterTile")
+  message(FATAL_ERROR
+    "Local IME Menu binding must publish the retail menu registry slot")
+endif()
+if(NOT _tnvse_ime_overlay_source MATCHES
+    "tileMenu->menu[ \t\r\n]*=[ \t\r\n]*menu")
+  message(FATAL_ERROR
+    "Local IME Menu binding must publish TileMenu::menu ownership")
+endif()
 unset(_tnvse_forbidden_overlay_pattern)
 unset(_tnvse_removed_loading_menu_symbol)
+unset(_tnvse_removed_ime_factory_symbol)
 unset(_tnvse_prewarm_overlay_source)
 unset(_tnvse_loading_menu_hooks_source)
+unset(_tnvse_ime_overlay_source)
+unset(_tnvse_overlay_detail_source)
+unset(_tnvse_ime_local_menu_source)
 unset(_tnvse_prewarm_overlay_cpp)
 unset(_tnvse_loading_menu_hooks_cpp)
+unset(_tnvse_ime_overlay_cpp)
+unset(_tnvse_overlay_detail_header)
 set_source_files_properties(
   ${TNVSE_NATIVE_OVERLAY_XMLS}
   ${TNVSE_NATIVE_OVERLAY_TEXTURES}

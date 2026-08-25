@@ -287,10 +287,9 @@ namespace fonthook
 		if (currentImeParent
 			&& currentImeParent == OverlayRuntime().state.imeParent)
 		{
-			ReleaseAndDestroyAttachedRoot(
+			ReleaseAndDestroyImeRoot(
 				currentImeParent,
-				OverlayRuntime().state.imeRoot,
-				"tNVSE_IME");
+				OverlayRuntime().state.imeRoot);
 		}
 		ResetImeForParent(nullptr);
 		LogNativeLoadingMenuDiagnostic("native-overlay-shutdown-complete");

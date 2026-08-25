@@ -57,33 +57,110 @@ namespace fonthook
 		}
 
 
+		TileMenu* AsDirectMenuRoot(Tile* root)
+		{
+			return root && root->GetType() == Tile::kTileID_menu
+				? static_cast<TileMenu*>(root)
+				: nullptr;
+		}
+
+
+		void ReleaseAndDestroyImeRoot(Tile* parent, Tile* root)
+		{
+			if (IsNamedDirectChild(parent, root, "tNVSE_IME"))
+			{
+				TileMenu* menuRoot = AsDirectMenuRoot(root);
+				Menu* menu = menuRoot ? menuRoot->menu : nullptr;
+				Tile* registered =
+					InterfaceManager::GetMenuByType(kImeMenuClass);
+				if (menu && menu->GetID() == kImeMenuClass
+					&& registered != root)
+				{
+					// TileMenu's retail destructor unregisters GetID() even when
+					// this root does not own the current registry slot. Roll back
+					// the ownership edge first so a malformed/duplicate local root
+					// cannot clear a foreign or surviving IME registration.
+					ThisStdCall<void>(
+						kMenuSetMenuTile, menu, nullptr, false);
+					menuRoot->menu = nullptr;
+					menu->uiID = 0;
+					delete menu;
+					gLog.FormattedMessage(
+						"tnvse_native_overlay: rolled back unregistered local IME Menu root=%p preservedRegistry=%p before Tile destruction",
+						root,
+						registered);
+				}
+			}
+			ReleaseAndDestroyAttachedRoot(parent, root, "tNVSE_IME");
+		}
+
+
+		bool PublishImeMenuRegistration(TileMenu* root)
+		{
+			if (!root)
+				return false;
+
+			Tile* registered = InterfaceManager::GetMenuByType(kImeMenuClass);
+			if (registered && registered != root)
+				return false;
+			if (registered != root)
+				CdeclCall<void>(kMenuRegisterTile, kImeMenuClass, root);
+			return InterfaceManager::GetMenuByType(kImeMenuClass) == root;
+		}
+
+
 		bool IsImeMenuRegistered(Tile* root)
 		{
-			Menu* menu = root ? root->GetMenu() : nullptr;
+			TileMenu* menuRoot = AsDirectMenuRoot(root);
+			Menu* menu = menuRoot ? menuRoot->menu : nullptr;
 			return menu
 				&& menu->GetID() == kImeMenuClass
 				&& menu->uiID == kImeMenuClass
-				&& menu->pRootTile == static_cast<TileMenu*>(root)
+				&& menu->pRootTile == menuRoot
 				&& InterfaceManager::GetMenuByType(kImeMenuClass) == root;
 		}
 
 		bool RegisterImeMenuRoot(Tile* root)
 		{
-			Menu* menu = root ? root->GetMenu() : nullptr;
+			TileMenu* menuRoot = AsDirectMenuRoot(root);
+			Menu* menu = menuRoot ? menuRoot->menu : nullptr;
 			if (!menu || menu->GetID() != kImeMenuClass)
 				return false;
+			Tile* registered = InterfaceManager::GetMenuByType(kImeMenuClass);
+			if (registered && registered != root)
+				return false;
 
-			// TileMenu::PostParse binds once when it encounters <class>,
-			// before the remaining root traits have been parsed. Repeat the
-			// vanilla Create() finalization after ReadXML completes, matching
-			// built-in menus and Stewie Tweaks' injected menu lifecycle.
-			menu->uiID = kImeMenuClass;
+			// Reproduce the retail TileMenu::PostParse finalization order after
+			// the class-less XML has been parsed completely. The root owns Menu
+			// from this point onward; TileMenu's destructor unbinds, unregisters,
+			// and destroys it.
 			ThisStdCall<void>(
 				kMenuSetMenuTile,
 				menu,
-				static_cast<TileMenu*>(root),
+				menuRoot,
 				false);
+			menu->uiID = kImeMenuClass;
+			if (!PublishImeMenuRegistration(menuRoot))
+				return false;
 			return IsImeMenuRegistered(root);
+		}
+
+
+		bool BindLocalImeMenuRoot(Tile* root)
+		{
+			TileMenu* tileMenu = AsDirectMenuRoot(root);
+			if (!tileMenu || tileMenu->menu)
+				return false;
+
+			Menu* menu = CreateLocalImeMenu();
+			if (!menu)
+				return false;
+
+			// Publish the ownership edge before finalization, exactly as retail
+			// PostParse does after its factory returns. Any later failure is rolled
+			// back by destroying only root; TileMenu then owns Menu cleanup.
+			tileMenu->menu = menu;
+			return RegisterImeMenuRoot(root);
 		}
 
 		Tile* NormalizeOwnedImeRoots(Tile* parent)
@@ -105,7 +182,8 @@ namespace fonthook
 			Tile* selected = nullptr;
 			for (Tile* root : ownedRoots)
 			{
-				Menu* menu = root->GetMenu();
+				TileMenu* menuRoot = AsDirectMenuRoot(root);
+				Menu* menu = menuRoot ? menuRoot->menu : nullptr;
 				if (!selected
 					&& menu
 					&& menu->GetID() == kImeMenuClass)
@@ -113,8 +191,7 @@ namespace fonthook
 					selected = root;
 					continue;
 				}
-				ReleaseAndDestroyAttachedRoot(
-					parent, root, "tNVSE_IME");
+				ReleaseAndDestroyImeRoot(parent, root);
 			}
 
 			if (ownedRoots.size() > (selected ? 1u : 0u))
@@ -131,7 +208,8 @@ namespace fonthook
 		{
 			if (!root || _stricmp(root->strName.c_str(), "tNVSE_IME"))
 				return false;
-			Menu* menu = root->GetMenu();
+			TileMenu* menuRoot = AsDirectMenuRoot(root);
+			Menu* menu = menuRoot ? menuRoot->menu : nullptr;
 			if (!menu || menu->GetID() != kImeMenuClass)
 				return false;
 
@@ -245,8 +323,7 @@ namespace fonthook
 				}
 				ClearImeResolvedTiles();
 				OverlayRuntime().state.imeLoadFailed = false;
-				ReleaseAndDestroyAttachedRoot(
-					parent, root, "tNVSE_IME");
+				ReleaseAndDestroyImeRoot(parent, root);
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: IME Menu was detached, malformed, or lost its native registration; reloading");
 			}
@@ -270,8 +347,7 @@ namespace fonthook
 				}
 
 				ClearImeResolvedTiles();
-				ReleaseAndDestroyAttachedRoot(
-					parent, existing, "tNVSE_IME");
+				ReleaseAndDestroyImeRoot(parent, existing);
 				gLog.FormattedMessage(
 					"tnvse_native_overlay: discarded malformed owned IME Menu class=%u before reloading",
 					kImeMenuClass);
@@ -295,28 +371,26 @@ namespace fonthook
 						: "<registered outside current pMenuRoot>");
 				return false;
 			}
-			if (!EnsureImeMenuFactory())
+			if (!EnsureLocalImeMenuSupport())
 			{
 				OverlayRuntime().state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: IME Menu factory unavailable; native IME overlay unavailable and system candidate UI remains suppressed");
+					"tnvse_native_overlay: local IME Menu support unavailable; native IME overlay unavailable and system candidate UI remains suppressed");
 				return false;
 			}
 
-			OverlayRuntime().creatingImeMenu = true;
 			Tile* root = ThisStdCall<Tile*>(
 				kTileReadFile, parent, kImeOverlayXmlPath);
-			OverlayRuntime().creatingImeMenu = false;
 			if (!root || !IsDirectChild(parent, root)
+				|| !BindLocalImeMenuRoot(root)
 				|| !ResolveImeTiles(root)
-				|| !RegisterImeMenuRoot(root))
+				|| !IsImeMenuRegistered(root))
 			{
 				ClearImeResolvedTiles();
-				ReleaseAndDestroyAttachedRoot(
-					parent, root, "tNVSE_IME");
+				ReleaseAndDestroyImeRoot(parent, root);
 				OverlayRuntime().state.imeLoadFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: failed to load, resolve, or register IME Menu path='%s'; native IME overlay unavailable and system candidate UI remains suppressed",
+					"tnvse_native_overlay: failed to load, locally bind, resolve, or register IME Menu path='%s'; native IME overlay unavailable and system candidate UI remains suppressed",
 					kImeOverlayXmlPath);
 				return false;
 			}
@@ -324,7 +398,7 @@ namespace fonthook
 			SetVisible(OverlayRuntime().state.imeRoot, false);
 			OverlayRuntime().imeReady.store(true, std::memory_order_release);
 			gLog.FormattedMessage(
-				"tnvse_native_overlay: loaded IME Menu path='%s' host=%p parent=%p class=%u",
+				"tnvse_native_overlay: loaded class-less IME XML and locally bound Menu path='%s' host=%p parent=%p class=%u",
 				kImeOverlayXmlPath,
 				OverlayRuntime().state.imeRoot,
 				parent,

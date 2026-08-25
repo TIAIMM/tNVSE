@@ -236,8 +236,11 @@ namespace fonthook
 			return kImeMenuClass;
 		}
 
-		Menu* CreateImeMenu()
+		Menu* CreateLocalImeMenu()
 		{
+			if (!OverlayRuntime().imeMenuVtableInitialized)
+				return nullptr;
+
 			void* storage = BSNew(sizeof(Menu));
 			if (!storage)
 				return nullptr;
@@ -254,18 +257,6 @@ namespace fonthook
 			menu->unk18 =
 				static_cast<UInt32>(kImeMenuDepthContribution);
 			return menu;
-		}
-
-		Menu* __fastcall CreateMenuByClassHook(
-			void* factory,
-			void*,
-			UInt32 menuClass)
-		{
-			if (menuClass == kImeMenuClass && OverlayRuntime().creatingImeMenu)
-				return CreateImeMenu();
-			return OverlayRuntime().predecessorCreateMenuByClass
-				? OverlayRuntime().predecessorCreateMenuByClass(factory, menuClass)
-				: nullptr;
 		}
 
 		void __fastcall PipboyRenderedMenuDrawHook(
@@ -487,96 +478,46 @@ namespace fonthook
 			return false;
 		}
 
-		bool EnsureImeMenuFactory()
+		bool EnsureLocalImeMenuSupport()
 		{
 			if (!EnsurePipboyDrawExclusionHook())
 				return false;
-			if (OverlayRuntime().imeMenuFactoryInstalled)
-			{
-				SIZE_T currentTarget = 0;
-				const bool targetReadable = hook_identity::ReadRel32Target(
-					kCreateMenuByClassCallSite,
-					hook_identity::Rel32Opcode::Call,
-					currentTarget);
-				const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
-					&CreateMenuByClassHook);
-				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
-					OverlayRuntime().predecessorCreateMenuByClass);
-				if (targetReadable
-					&& currentTarget == adapterTarget
-					&& predecessorTarget != adapterTarget
-					&& hook_identity::IsExecutableTarget(predecessorTarget))
-				{
-					return true;
-				}
-				if (targetReadable
-					&& currentTarget == predecessorTarget
-					&& hook_identity::IsExecutableTarget(currentTarget))
-				{
-					OverlayRuntime().imeMenuFactoryInstalled = false;
-					OverlayRuntime().predecessorCreateMenuByClass = nullptr;
-				}
-				else
-				{
-					OverlayRuntime().imeMenuFactoryInstalled = false;
-					OverlayRuntime().imeMenuFactoryInstallFailed = true;
-					gLog.FormattedMessage(
-						"tnvse_native_overlay: IME Menu factory capability revoked; observed target=0x%08X adapter=0x%08X predecessor=0x%08X readable=%u",
-						static_cast<UInt32>(currentTarget),
-						static_cast<UInt32>(adapterTarget),
-						static_cast<UInt32>(predecessorTarget),
-						targetReadable ? 1u : 0u);
-					return false;
-				}
-			}
-			if (OverlayRuntime().imeMenuFactoryInstallFailed)
+			if (OverlayRuntime().imeMenuVtableInitialized)
+				return true;
+			if (OverlayRuntime().imeMenuVtableInitializationFailed)
 				return false;
 
-			SIZE_T currentTarget = 0;
-			if (!hook_identity::ReadRel32Target(
-				kCreateMenuByClassCallSite,
-				hook_identity::Rel32Opcode::Call,
-				currentTarget))
-			{
-				OverlayRuntime().imeMenuFactoryInstallFailed = true;
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: cannot install IME Menu factory hook; expected CALL at 0x%08X",
-					static_cast<UInt32>(kCreateMenuByClassCallSite));
-				return false;
-			}
-
-			if (currentTarget == reinterpret_cast<SIZE_T>(
-					&CreateMenuByClassHook))
-			{
-				const SIZE_T predecessorTarget = reinterpret_cast<SIZE_T>(
-					OverlayRuntime().predecessorCreateMenuByClass);
-				OverlayRuntime().imeMenuFactoryInstalled =
-					predecessorTarget != currentTarget
-					&& hook_identity::IsExecutableTarget(predecessorTarget);
-				if (!OverlayRuntime().imeMenuFactoryInstalled)
-				{
-					OverlayRuntime().imeMenuFactoryInstallFailed = true;
-					gLog.FormattedMessage(
-						"tnvse_native_overlay: IME Menu factory hook is present but its predecessor is unavailable predecessor=0x%08X",
-						static_cast<UInt32>(predecessorTarget));
-				}
-				return OverlayRuntime().imeMenuFactoryInstalled;
-			}
-			if (!hook_identity::IsExecutableTarget(currentTarget)
+			if (!hook_identity::IsExecutableTarget(kMenuConstructor)
 				|| !hook_identity::IsAccessibleRegion(
 					kMenuVTable - sizeof(SIZE_T),
 					(kMenuVTableEntryCount + 1) * sizeof(SIZE_T),
 					false))
 			{
-				OverlayRuntime().imeMenuFactoryInstallFailed = true;
+				OverlayRuntime().imeMenuVtableInitializationFailed = true;
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: cannot install IME Menu factory hook; invalid CreateMenuByClass target=0x%08X or Menu vtable",
-					static_cast<UInt32>(currentTarget));
+					"tnvse_native_overlay: cannot initialize local IME Menu; Menu constructor or vtable is unavailable constructor=0x%08X vtable=0x%08X",
+					static_cast<UInt32>(kMenuConstructor),
+					static_cast<UInt32>(kMenuVTable));
 				return false;
 			}
 
 			const SIZE_T* vanillaVtable =
 				reinterpret_cast<const SIZE_T*>(kMenuVTable);
+			if (!std::all_of(
+					vanillaVtable,
+					vanillaVtable + kMenuVTableEntryCount,
+					[](SIZE_T target)
+					{
+						return hook_identity::IsExecutableTarget(target);
+					}))
+			{
+				OverlayRuntime().imeMenuVtableInitializationFailed = true;
+				gLog.FormattedMessage(
+					"tnvse_native_overlay: cannot initialize local IME Menu; base Menu vtable contains a non-executable target vtable=0x%08X",
+					static_cast<UInt32>(kMenuVTable));
+				return false;
+			}
+
 			OverlayRuntime().imeMenuVtable.front() = vanillaVtable[-1];
 			std::copy_n(
 				vanillaVtable,
@@ -584,52 +525,12 @@ namespace fonthook
 				OverlayRuntime().imeMenuVtable.begin() + 1);
 			OverlayRuntime().imeMenuVtable[kMenuGetIdVtableIndex + 1] =
 				reinterpret_cast<SIZE_T>(&ImeMenuGetId);
-			OverlayRuntime().predecessorCreateMenuByClass =
-				reinterpret_cast<CreateMenuByClassFn>(currentTarget);
-			// InterfaceManager menu factory -> CreateMenuByClass
-			// (__thiscall target via __fastcall shim).
-			WriteRelCall(kCreateMenuByClassCallSite, &CreateMenuByClassHook);
-			const SIZE_T adapterTarget = reinterpret_cast<SIZE_T>(
-				&CreateMenuByClassHook);
-			SIZE_T observedTarget = 0;
-			const bool observedReadable = hook_identity::ReadRel32Target(
-				kCreateMenuByClassCallSite,
-				hook_identity::Rel32Opcode::Call,
-				observedTarget);
-			if (observedReadable && observedTarget == adapterTarget)
-			{
-				OverlayRuntime().imeMenuFactoryInstalled = true;
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: installed dedicated IME Menu factory class=%u chainedTarget=0x%08X",
-					kImeMenuClass,
-					static_cast<UInt32>(currentTarget));
-				return true;
-			}
-
-			if (observedReadable && observedTarget == currentTarget)
-			{
-				OverlayRuntime().predecessorCreateMenuByClass = nullptr;
-				OverlayRuntime().imeMenuFactoryInstallFailed = true;
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: IME Menu factory hook write did not publish call=0x%08X predecessor=0x%08X",
-					static_cast<UInt32>(kCreateMenuByClassCallSite),
-					static_cast<UInt32>(currentTarget));
-				return false;
-			}
-
-			const bool successorExecutable = observedReadable
-				&& hook_identity::IsExecutableTarget(observedTarget);
-			// Preserve the saved predecessor for a possibly live chain, while
-			// keeping the factory unavailable until our CALL target is observable.
-			OverlayRuntime().imeMenuFactoryInstalled = false;
-			OverlayRuntime().imeMenuFactoryInstallFailed = true;
+			OverlayRuntime().imeMenuVtableInitialized = true;
 			gLog.FormattedMessage(
-				"tnvse_native_overlay: IME Menu factory hook may be retained below observed target=0x%08X predecessor=0x%08X readable=%u executable=%u; reachability unverified, feature disabled",
-				static_cast<UInt32>(observedTarget),
-				static_cast<UInt32>(currentTarget),
-				observedReadable ? 1u : 0u,
-				successorExecutable ? 1u : 0u);
-			return false;
+				"tnvse_native_overlay: initialized local IME Menu class=%u vtable=%p; global Interface::CreateMenuByClass callsite remains untouched",
+				kImeMenuClass,
+				OverlayRuntime().imeMenuVtable.data() + 1);
+			return true;
 		}
 
 	}

@@ -1,5 +1,4 @@
 <menu name="tNVSE_IME">
-	<class> 1079 </class>
 	<stackingtype> &does_not_stack; </stackingtype>
 	<visible> &false; </visible>
 	<target> &false; </target>

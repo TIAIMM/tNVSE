@@ -46,6 +46,10 @@ namespace fonthook::implementation::native_tile_overlay
 		constexpr UInt32 kTileReadFile = 0xA01B00;
 		constexpr UInt32 kTileRelease = 0x9FF690;
 		constexpr UInt32 kMenuSetMenuTile = 0xA1DC70;
+		// Retail TileMenu::PostParse uses this variadic registry setter after
+		// Menu::SetMenuTile. Passing (menuCode, TileMenu*) publishes the root in
+		// the same table read by InterfaceManager::GetMenuByType.
+		constexpr UInt32 kMenuRegisterTile = 0xA1E130;
 		constexpr SIZE_T kLoadingMenu_pMe = 0x11DA0C0;
 		constexpr SIZE_T kLoadingMenuThread_pMe = 0x11DA0C4;
 		constexpr SIZE_T kInterfaceManager_pMe = 0x11DEA10;
@@ -57,7 +61,6 @@ namespace fonthook::implementation::native_tile_overlay
 		// engine's native menu ownership without colliding with vanilla menus.
 		constexpr UInt32 kImeMenuClass = 1079;
 		static_assert(kImeMenuClass >= 1001 && kImeMenuClass <= 1084);
-		constexpr SIZE_T kCreateMenuByClassCallSite = 0x7079A3;
 		constexpr SIZE_T kMenuConstructor = 0xA1C4A0;
 		constexpr SIZE_T kMenuVTable = 0x1095484;
 		constexpr size_t kMenuVTableEntryCount = 18;
@@ -80,8 +83,6 @@ namespace fonthook::implementation::native_tile_overlay
 			                                         // LoadingMenu::pMe
 		};
 
-		using CreateMenuByClassFn =
-			Menu* (__thiscall*)(void*, UInt32);
 		using RenderedMenuDrawFn =
 			void (__thiscall*)(void*, BSRenderedTexture*,
 				NiRenderer::ClearFlags, BSRenderedTexture*);
@@ -149,24 +150,23 @@ namespace fonthook::implementation::native_tile_overlay
 		PrewarmOverlayMailbox prewarmMailbox;
 		PrewarmOverlayInstance prewarmInstance;
 		std::array<SIZE_T, kMenuVTableEntryCount + 1> imeMenuVtable = {};
-		CreateMenuByClassFn predecessorCreateMenuByClass = nullptr;
 		RenderedMenuDrawFn predecessorPipboyDraw = nullptr;
 		LoadingMenuUpdateFn predecessorLoadingMenuUpdate = nullptr;
-		bool imeMenuFactoryInstalled = false;
-		bool imeMenuFactoryInstallFailed = false;
+		bool imeMenuVtableInitialized = false;
+		bool imeMenuVtableInitializationFailed = false;
 		bool pipboyDrawHookInstalled = false;
 		bool pipboyDrawHookInstallFailed = false;
 		bool loadingMenuUpdateHookInstalled = false;
 		bool loadingMenuUpdateHookInstallFailed = false;
 		bool loggedPipboyRttExclusion = false;
-		bool creatingImeMenu = false;
 		UInt32 imeVisualBoundsLogCount = 0;
 	};
 
 	NativeTileOverlayRuntimeState& OverlayRuntime();
 	void AdvanceImeHostGeneration();
 	void ConsumeNativePrewarmOverlayCommand(Menu* loadingMenu);
-	bool EnsureImeMenuFactory();
+	bool EnsureLocalImeMenuSupport();
+	Menu* CreateLocalImeMenu();
 
 	bool IsDirectChild(const Tile* parent, const Tile* child);
 	bool IsNamedDirectChild(const Tile* parent, const Tile* child,
@@ -186,6 +186,7 @@ namespace fonthook::implementation::native_tile_overlay
 	bool HasExpectedImeLinePresentation(size_t visibleCount);
 	void ReleaseAndDestroyAttachedRoot(Tile* parent, Tile* root,
 		const char* expectedName);
+	void ReleaseAndDestroyImeRoot(Tile* parent, Tile* root);
 
 	void ClearImeResolvedTiles();
 	void ResetImeForParent(Tile* parent);
