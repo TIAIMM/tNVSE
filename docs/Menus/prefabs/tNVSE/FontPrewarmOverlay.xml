@@ -29,7 +29,7 @@
 		<zoom> &scale; </zoom>
 		<target> &false; </target>
 		<width> 620 </width>
-		<height> 190 </height>
+		<height> 120 </height>
 		<x>
 			<copy src="parent" trait="width" />
 			<sub src="me" trait="width" />
@@ -48,6 +48,32 @@
 		<depth> 1 </depth>
 	</image>
 
+	<image name="tNVSE_Prewarm_Label">
+		<filename> Interface\tNVSE\font_prewarm_label.dds </filename>
+		<zoom> &scale; </zoom>
+		<target> &false; </target>
+		<x>
+			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="x" />
+			<add>
+				<copy src="sibling(tNVSE_Prewarm_Panel)" trait="width" />
+				<sub src="me" trait="width" />
+				<div> 2 </div>
+			</add>
+		</x>
+		<y>
+			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
+			<add> 12 </add>
+		</y>
+		<width> 420 </width>
+		<height> 52.5 </height>
+		<red> 255 </red>
+		<green> 255 </green>
+		<blue> 255 </blue>
+		<alpha> 255 </alpha>
+		<systemcolor> &nosystemcolor; </systemcolor>
+		<depth> 2 </depth>
+	</image>
+
 	<image name="tNVSE_Prewarm_Track">
 		<filename> Interface\Shared\solid.dds </filename>
 		<texatlas> Interface\InterfaceShared.tai </texatlas>
@@ -59,7 +85,7 @@
 		</x>
 		<y>
 			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
-			<add>105</add>
+			<add>82</add>
 		</y>
 		<width> 520 </width>
 		<height> 16 </height>
@@ -87,95 +113,4 @@
 		<systemcolor> &nosystemcolor; </systemcolor>
 		<depth> 3 </depth>
 	</image>
-
-	<text name="tNVSE_Prewarm_Title">
-		<target> &false; </target>
-		<x>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="x" />
-			<add>30</add>
-		</x>
-		<y>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
-			<add>20</add>
-		</y>
-		<font> 1 </font>
-		<zoom> 80 </zoom>
-		<string> Preparing font cache </string>
-		<justify> &left; </justify>
-		<systemcolor> &nosystemcolor; </systemcolor>
-		<red> 244 </red>
-		<green> 244 </green>
-		<blue> 244 </blue>
-		<alpha> 255 </alpha>
-		<depth> 4 </depth>
-	</text>
-
-	<text name="tNVSE_Prewarm_Detail">
-		<target> &false; </target>
-		<x>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="x" />
-			<add>30</add>
-		</x>
-		<y>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
-			<add>52</add>
-		</y>
-		<font> 1 </font>
-		<zoom> 80 </zoom>
-		<string></string>
-		<wrapwidth> 560 </wrapwidth>
-		<justify> &left; </justify>
-		<systemcolor> &nosystemcolor; </systemcolor>
-		<red> 218 </red>
-		<green> 218 </green>
-		<blue> 218 </blue>
-		<alpha> 255 </alpha>
-		<depth> 4 </depth>
-	</text>
-
-	<text name="tNVSE_Prewarm_Stage">
-		<target> &false; </target>
-		<x>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="x" />
-			<add>50</add>
-		</x>
-		<y>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
-			<add>137</add>
-		</y>
-		<font> 1 </font>
-		<zoom> 80 </zoom>
-		<string></string>
-		<wrapwidth> 420 </wrapwidth>
-		<justify> &left; </justify>
-		<systemcolor> &nosystemcolor; </systemcolor>
-		<red> 208 </red>
-		<green> 208 </green>
-		<blue> 208 </blue>
-		<alpha> 255 </alpha>
-		<depth> 4 </depth>
-	</text>
-
-	<text name="tNVSE_Prewarm_Percent">
-		<target> &false; </target>
-		<x>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="x" />
-			<add>500</add>
-		</x>
-		<y>
-			<copy src="sibling(tNVSE_Prewarm_Panel)" trait="y" />
-			<add>137</add>
-		</y>
-		<width> 70 </width>
-		<font> 1 </font>
-		<zoom> 80 </zoom>
-		<string> 0% </string>
-		<justify> &right; </justify>
-		<systemcolor> &nosystemcolor; </systemcolor>
-		<red> 232 </red>
-		<green> 232 </green>
-		<blue> 232 </blue>
-		<alpha> 255 </alpha>
-		<depth> 4 </depth>
-	</text>
 </rect>

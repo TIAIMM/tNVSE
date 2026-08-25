@@ -194,7 +194,7 @@ namespace fonthook
 				std::memory_order_acquire);
 
 			gLog.FormattedMessage(
-				"tnvse_loading_menu_diag: event=%s trace=%llu traceAgeMs=%llu thread=%u phase=%s phaseAgeMs=%llu menu=%p root=%p loadingThread=%p interface=%p startup=%u pause=%u shutdown=%u update={state:%s,calls:%llu,inFlight:%u,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,skipPause:%llu,skipStartup:%llu} show={calls:%llu,inFlight:%u,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,skipPause:%llu,skipRenderer:%llu,skipLock:%llu,lastSkip:%u} text={calls:%llu,inFlight:%u,tile:%p,nameHash:%08X,fontBits:%08X,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,produced:%u} prewarm={published:%u,consumed:%u,pending:%u,command:%u,visible:%u,ownerShutdown:%u,refresh:%u,progress:%.3f,active:%u,ready:%u,disabled:%u,consumerThread:%u,ownerWork:%u,shutdownSequence:%u,publishCount:%llu,consumeAttempts:%llu,consumeCount:%llu,lastAttempt:%u,lastCompleted:%u,publishAgoMs:%llu,attemptAgoMs:%llu,consumeAgoMs:%llu}",
+				"tnvse_loading_menu_diag: event=%s trace=%llu traceAgeMs=%llu thread=%u phase=%s phaseAgeMs=%llu menu=%p root=%p loadingThread=%p interface=%p startup=%u pause=%u shutdown=%u update={state:%s,calls:%llu,inFlight:%u,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,skipPause:%llu,skipStartup:%llu} show={calls:%llu,inFlight:%u,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,skipPause:%llu,skipRenderer:%llu,skipLock:%llu,lastSkip:%u} text={calls:%llu,inFlight:%u,tile:%p,nameHash:%08X,fontBits:%08X,lastEnterAgoMs:%llu,lastExitAgoMs:%llu,lastUs:%u,produced:%u} prewarm={published:%u,consumed:%u,pending:%u,command:%u,visible:%u,ownerShutdown:%u,presentation:graphical-only,progress:%.3f,active:%u,ready:%u,disabled:%u,consumerThread:%u,ownerWork:%u,shutdownSequence:%u,publishCount:%llu,consumeAttempts:%llu,consumeCount:%llu,lastAttempt:%u,lastCompleted:%u,publishAgoMs:%llu,attemptAgoMs:%llu,consumeAgoMs:%llu}",
 				event ? event : "unspecified",
 				static_cast<unsigned long long>(diagnostics.traceId.load(
 					std::memory_order_acquire)),
@@ -274,7 +274,6 @@ namespace fonthook
 				command.sequence,
 				command.visible ? 1u : 0u,
 				command.ownerShutdown ? 1u : 0u,
-				command.refreshSequence,
 				command.progress,
 				runtime.prewarmActive.load(std::memory_order_acquire) ? 1u : 0u,
 				runtime.prewarmReady.load(std::memory_order_acquire) ? 1u : 0u,

@@ -1,7 +1,5 @@
 #include "native_tile_overlay_detail.h"
 
-#include "game_hooks.h"
-
 namespace fonthook
 {
 	namespace implementation::native_tile_overlay {}
@@ -9,28 +7,15 @@ namespace fonthook
 
 	namespace implementation::native_tile_overlay
 	{
-		float ReadTextHeight(Tile* tile)
-		{
-			const float height = tile
-				? tile->GetValueFloat(Tile::kTileValue_height)
-				: 0.0f;
-			return std::isfinite(height) && height > 0.0f
-				? std::max(kPrewarmMinimumTextHeight, height)
-				: kPrewarmMinimumTextHeight;
-		}
-
 		void ClearPrewarmResolvedTiles()
 		{
 			OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
 			OverlayRuntime().state.prewarmRoot = nullptr;
 			OverlayRuntime().state.prewarmShade = nullptr;
 			OverlayRuntime().state.prewarmPanel = nullptr;
+			OverlayRuntime().state.prewarmLabel = nullptr;
 			OverlayRuntime().state.prewarmTrack = nullptr;
-			OverlayRuntime().state.prewarmDetail = nullptr;
-			OverlayRuntime().state.prewarmStage = nullptr;
 			OverlayRuntime().state.prewarmFill = nullptr;
-			OverlayRuntime().state.prewarmPercent = nullptr;
-			OverlayRuntime().state.prewarmTitle = nullptr;
 			OverlayRuntime().state.prewarmLayoutSignature.fill(0.0f);
 			OverlayRuntime().state.prewarmProgressWidth = 520.0f;
 			OverlayRuntime().state.prewarmTileVisible = false;
@@ -76,31 +61,21 @@ namespace fonthook
 				FindDirectChild(root, "tNVSE_Prewarm_Shade");
 			Tile* panel =
 				FindDirectChild(root, "tNVSE_Prewarm_Panel");
+			Tile* label =
+				FindDirectChild(root, "tNVSE_Prewarm_Label");
 			Tile* track =
 				FindDirectChild(root, "tNVSE_Prewarm_Track");
-			Tile* detail =
-				FindDirectChild(root, "tNVSE_Prewarm_Detail");
-			Tile* stage =
-				FindDirectChild(root, "tNVSE_Prewarm_Stage");
 			Tile* fill =
 				FindDirectChild(root, "tNVSE_Prewarm_Fill");
-			Tile* percent =
-				FindDirectChild(root, "tNVSE_Prewarm_Percent");
-			Tile* title =
-				FindDirectChild(root, "tNVSE_Prewarm_Title");
-			if (!shade || !panel || !track || !detail || !stage || !fill
-				|| !percent || !title)
+			if (!shade || !panel || !label || !track || !fill)
 				return false;
 
 			OverlayRuntime().state.prewarmRoot = root;
 			OverlayRuntime().state.prewarmShade = shade;
 			OverlayRuntime().state.prewarmPanel = panel;
+			OverlayRuntime().state.prewarmLabel = label;
 			OverlayRuntime().state.prewarmTrack = track;
-			OverlayRuntime().state.prewarmDetail = detail;
-			OverlayRuntime().state.prewarmStage = stage;
 			OverlayRuntime().state.prewarmFill = fill;
-			OverlayRuntime().state.prewarmPercent = percent;
-			OverlayRuntime().state.prewarmTitle = title;
 			return true;
 		}
 
@@ -112,25 +87,19 @@ namespace fonthook
 			{
 				return false;
 			}
-			const std::array<Tile*, 8> required = {
+			const std::array<Tile*, 5> required = {
 				OverlayRuntime().state.prewarmShade,
 				OverlayRuntime().state.prewarmPanel,
+				OverlayRuntime().state.prewarmLabel,
 				OverlayRuntime().state.prewarmTrack,
-				OverlayRuntime().state.prewarmDetail,
-				OverlayRuntime().state.prewarmStage,
 				OverlayRuntime().state.prewarmFill,
-				OverlayRuntime().state.prewarmPercent,
-				OverlayRuntime().state.prewarmTitle,
 			};
-			const std::array<const char*, 8> names = {
+			const std::array<const char*, 5> names = {
 				"tNVSE_Prewarm_Shade",
 				"tNVSE_Prewarm_Panel",
+				"tNVSE_Prewarm_Label",
 				"tNVSE_Prewarm_Track",
-				"tNVSE_Prewarm_Detail",
-				"tNVSE_Prewarm_Stage",
 				"tNVSE_Prewarm_Fill",
-				"tNVSE_Prewarm_Percent",
-				"tNVSE_Prewarm_Title",
 			};
 			for (size_t i = 0; i < required.size(); ++i)
 			{
@@ -212,8 +181,14 @@ namespace fonthook
 
 		void LayoutPrewarmOverlay()
 		{
-			if (!OverlayRuntime().state.prewarmRoot || !OverlayRuntime().state.prewarmPanel)
+			if (!OverlayRuntime().state.prewarmRoot
+				|| !OverlayRuntime().state.prewarmPanel
+				|| !OverlayRuntime().state.prewarmLabel
+				|| !OverlayRuntime().state.prewarmTrack
+				|| !OverlayRuntime().state.prewarmFill)
+			{
 				return;
+			}
 			const float rootWidth =
 				OverlayRuntime().state.prewarmRoot->GetValueFloat(
 					Tile::kTileValue_width);
@@ -228,21 +203,9 @@ namespace fonthook
 				return;
 			}
 
-			const float titleHeight = ReadTextHeight(
-				OverlayRuntime().state.prewarmTitle);
-			const float detailHeight = ReadTextHeight(
-				OverlayRuntime().state.prewarmDetail);
-			const float stageHeight = ReadTextHeight(
-				OverlayRuntime().state.prewarmStage);
-			const float percentHeight = ReadTextHeight(
-				OverlayRuntime().state.prewarmPercent);
-			const std::array<float, 6> signature = {
+			const std::array<float, 2> signature = {
 				rootWidth,
 				rootHeight,
-				titleHeight,
-				detailHeight,
-				stageHeight,
-				percentHeight,
 			};
 			bool changed = false;
 			for (size_t i = 0; i < signature.size(); ++i)
@@ -265,26 +228,21 @@ namespace fonthook
 				std::max(
 					kPrewarmMinimumPanelWidth,
 					rootWidth - 24.0f));
-			const float panelHeight = std::max(
-				190.0f,
-				20.0f + titleHeight
-					+ 6.0f + detailHeight
-					+ 18.0f + 16.0f
-					+ 10.0f + std::max(stageHeight, percentHeight)
-					+ 20.0f);
 			const float panelX = std::max(
 				12.0f, (rootWidth - panelWidth) * 0.5f);
 			const float panelY = std::max(
-				12.0f, (rootHeight - panelHeight) * 0.5f);
-			const float titleY = panelY + 20.0f;
-			const float detailY =
-				titleY + titleHeight + 6.0f;
-			const float trackX = panelX + 50.0f;
-			const float trackY =
-				detailY + detailHeight + 18.0f;
+				12.0f, (rootHeight - kPrewarmPanelHeight) * 0.5f);
+			const float labelWidth = std::min(
+				kPrewarmMaximumLabelWidth,
+				std::max(1.0f, panelWidth - 60.0f));
+			const float labelHeight = labelWidth / kPrewarmLabelAspectRatio;
+			const float labelX = panelX + (panelWidth - labelWidth) * 0.5f;
+			const float labelY = panelY + kPrewarmLabelTopPadding;
+			const float trackX = panelX + kPrewarmHorizontalPadding;
+			const float trackY = panelY + kPrewarmTrackOffsetY;
 			const float progressWidth =
-				std::max(220.0f, panelWidth - 100.0f);
-			const float stageY = trackY + 16.0f + 10.0f;
+				std::max(220.0f,
+					panelWidth - 2.0f * kPrewarmHorizontalPadding);
 
 			OverlayRuntime().state.prewarmPanel->SetValueFloat(
 				Tile::kTileValue_x, panelX, true);
@@ -293,19 +251,15 @@ namespace fonthook
 			OverlayRuntime().state.prewarmPanel->SetValueFloat(
 				Tile::kTileValue_width, panelWidth, true);
 			OverlayRuntime().state.prewarmPanel->SetValueFloat(
-				Tile::kTileValue_height, panelHeight, true);
-			OverlayRuntime().state.prewarmTitle->SetValueFloat(
-				Tile::kTileValue_x, panelX + 30.0f, true);
-			OverlayRuntime().state.prewarmTitle->SetValueFloat(
-				Tile::kTileValue_y, titleY, true);
-			OverlayRuntime().state.prewarmDetail->SetValueFloat(
-				Tile::kTileValue_x, panelX + 30.0f, true);
-			OverlayRuntime().state.prewarmDetail->SetValueFloat(
-				Tile::kTileValue_y, detailY, true);
-			OverlayRuntime().state.prewarmDetail->SetValueFloat(
-				Tile::kTileValue_wrapwidth,
-				std::max(1.0f, panelWidth - 60.0f),
-				true);
+				Tile::kTileValue_height, kPrewarmPanelHeight, true);
+			OverlayRuntime().state.prewarmLabel->SetValueFloat(
+				Tile::kTileValue_x, labelX, true);
+			OverlayRuntime().state.prewarmLabel->SetValueFloat(
+				Tile::kTileValue_y, labelY, true);
+			OverlayRuntime().state.prewarmLabel->SetValueFloat(
+				Tile::kTileValue_width, labelWidth, true);
+			OverlayRuntime().state.prewarmLabel->SetValueFloat(
+				Tile::kTileValue_height, labelHeight, true);
 			OverlayRuntime().state.prewarmTrack->SetValueFloat(
 				Tile::kTileValue_x, trackX, true);
 			OverlayRuntime().state.prewarmTrack->SetValueFloat(
@@ -316,20 +270,6 @@ namespace fonthook
 				Tile::kTileValue_x, trackX, true);
 			OverlayRuntime().state.prewarmFill->SetValueFloat(
 				Tile::kTileValue_y, trackY, true);
-			OverlayRuntime().state.prewarmStage->SetValueFloat(
-				Tile::kTileValue_x, trackX, true);
-			OverlayRuntime().state.prewarmStage->SetValueFloat(
-				Tile::kTileValue_y, stageY, true);
-			OverlayRuntime().state.prewarmStage->SetValueFloat(
-				Tile::kTileValue_wrapwidth,
-				std::max(1.0f, panelWidth - 200.0f),
-				true);
-			OverlayRuntime().state.prewarmPercent->SetValueFloat(
-				Tile::kTileValue_x,
-				panelX + panelWidth - 120.0f,
-				true);
-			OverlayRuntime().state.prewarmPercent->SetValueFloat(
-				Tile::kTileValue_y, stageY, true);
 			OverlayRuntime().state.prewarmProgressWidth = progressWidth;
 		}
 
@@ -339,17 +279,6 @@ namespace fonthook
 			if (!OverlayRuntime().nextPrewarmCommandSequence)
 				++OverlayRuntime().nextPrewarmCommandSequence;
 			return OverlayRuntime().nextPrewarmCommandSequence;
-		}
-
-		void CopyPrewarmCommandText(
-			std::array<wchar_t, kPrewarmProgressTextCapacity>& target,
-			std::wstring_view source)
-		{
-			target.fill(L'\0');
-			const size_t length = std::min(
-				source.size(), target.size() - 1u);
-			if (length)
-				std::copy_n(source.data(), length, target.data());
 		}
 
 		void RecordPrewarmOverlayCommandPublished(UInt32 sequence)
@@ -393,10 +322,7 @@ namespace fonthook
 				LogNativeLoadingMenuDiagnostic(diagnosticEvent);
 		}
 
-		UInt32 PublishPrewarmOverlayUpdate(
-			std::wstring_view detail,
-			std::wstring_view stage,
-			float progress)
+		UInt32 PublishPrewarmOverlayUpdate(float progress)
 		{
 			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
 			const UInt32 shutdownSequence =
@@ -407,8 +333,6 @@ namespace fonthook
 				return shutdownSequence;
 			}
 			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
-			CopyPrewarmCommandText(OverlayRuntime().prewarmCommand.detail, detail);
-			CopyPrewarmCommandText(OverlayRuntime().prewarmCommand.stage, stage);
 			OverlayRuntime().prewarmCommand.progress = std::clamp(progress, 0.0f, 1.0f);
 			OverlayRuntime().prewarmCommand.visible = true;
 			OverlayRuntime().prewarmCommand.ownerShutdown = false;
@@ -449,27 +373,6 @@ namespace fonthook
 			LogNativeLoadingMenuDiagnostic(visible
 				? "prewarm-command-published:show"
 				: "prewarm-command-published:hide");
-			return sequence;
-		}
-
-		UInt32 PublishPrewarmOverlayRefresh()
-		{
-			AcquireSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
-			const UInt32 shutdownSequence =
-				OverlayRuntime().prewarmOwnerShutdown.RequestedSequence();
-			if (shutdownSequence)
-			{
-				ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
-				return shutdownSequence;
-			}
-			const UInt32 sequence = NextPrewarmCommandSequenceLocked();
-			OverlayRuntime().prewarmCommand.refreshSequence = sequence;
-			OverlayRuntime().prewarmCommand.ownerShutdown = false;
-			OverlayRuntime().prewarmCommand.sequence = sequence;
-			ReleaseSRWLockExclusive(&OverlayRuntime().prewarmCommandLock);
-			OverlayRuntime().prewarmPublishedSequence.store(
-				sequence, std::memory_order_release);
-			RecordPrewarmOverlayCommandPublished(sequence);
 			return sequence;
 		}
 
@@ -576,25 +479,6 @@ namespace fonthook
 				LogNativeLoadingMenuDiagnostic("prewarm-overlay-visible");
 			}
 
-			SetText(OverlayRuntime().state.prewarmDetail, command.detail.data());
-			SetText(OverlayRuntime().state.prewarmStage, command.stage.data());
-			wchar_t percent[16] = {};
-			_snwprintf_s(percent, _countof(percent), _TRUNCATE, L"%u%%",
-				static_cast<UInt32>(std::lround(
-					std::clamp(command.progress, 0.0f, 1.0f) * 100.0f)));
-			SetText(OverlayRuntime().state.prewarmPercent, percent);
-
-			if (command.refreshSequence
-				&& command.refreshSequence != OverlayRuntime().prewarmAppliedRefreshSequence)
-			{
-				RebuildTextGeometry(OverlayRuntime().state.prewarmTitle);
-				RebuildTextGeometry(OverlayRuntime().state.prewarmDetail);
-				RebuildTextGeometry(OverlayRuntime().state.prewarmStage);
-				RebuildTextGeometry(OverlayRuntime().state.prewarmPercent);
-				OverlayRuntime().state.prewarmLayoutSignature.fill(0.0f);
-				OverlayRuntime().prewarmAppliedRefreshSequence = command.refreshSequence;
-			}
-
 			LayoutPrewarmOverlay();
 			OverlayRuntime().state.prewarmFill->SetValueFloat(
 				Tile::kTileValue_width,
@@ -624,7 +508,7 @@ namespace fonthook
 				expectedThread, currentThread, std::memory_order_acq_rel))
 			{
 				gLog.FormattedMessage(
-					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot fontRoute=freetype-native-no-precache",
+					"tnvse_native_overlay: prewarm progress consumer active thread=%u owner=LoadingMenuThread policy=queued-snapshot presentation=graphical-only",
 					currentThread);
 			}
 
@@ -647,7 +531,6 @@ namespace fonthook
 				bool detached = true;
 				try
 				{
-					ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
 					ApplyPrewarmOverlayHidden();
 				}
 				catch (const std::exception& error)
@@ -667,7 +550,6 @@ namespace fonthook
 				// pointers.  If detaching failed, the child remains owned by the
 				// engine and its normal LoadingMenu teardown reclaims it.
 				ResetPrewarmForParent(nullptr);
-				OverlayRuntime().prewarmAppliedRefreshSequence = 0;
 				OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
 				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
 				OverlayRuntime().prewarmConsumerDisabled.store(
@@ -697,33 +579,12 @@ namespace fonthook
 						: nullptr);
 				return;
 			}
-			if (command.visible && !IsPrewarmOverlayMakeNodeRouteInstalled())
-			{
-				// Without ownership of the real deferred TileText::MakeNode boundary,
-				// displaying this overlay could re-enter virtual PrecacheGeometry while
-				// LoadingMenu owns the renderer/UI locks. Keep the blocking prewarm
-				// functional and fail closed only for its optional progress UI.
-				OverlayRuntime().prewarmConsumerDisabled.store(
-					true, std::memory_order_release);
-				OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
-				CompletePrewarmOverlayCommand(
-					command.sequence,
-					"prewarm-command-consumed:makenode-route-unavailable");
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: prewarm progress disabled because TileText::MakeNode no-precache route is not the verified top-level owner; blocking font prewarm continues");
-				return;
-			}
-
 			try
 			{
 				// Cell Offset Generator keeps generation on workers and limits its
-				// foreground path to LoadingMenu progress presentation. This path
-				// additionally confines every Tile mutation to LoadingMenuThread and
-				// keeps synchronous FreeType presentation off renderer precache. The
-				// TileText::MakeNode hook independently scopes the deferred geometry
-				// call reached later from LoadingMenu::ShowChanges; both boundaries are
-				// required because RebuildTextGeometry only marks the node dirty here.
-				ScopedFreeTypeNoPrecacheRoute noPrecacheRoute;
+				// foreground path to LoadingMenu progress presentation. Every Tile
+				// mutation remains confined to LoadingMenuThread, while the component
+				// itself contains only TileImage nodes and never enters a font route.
 				bool applied = true;
 				if (command.visible)
 					applied = ApplyPrewarmOverlayVisible(command);

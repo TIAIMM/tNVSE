@@ -94,11 +94,8 @@ namespace fonthook::vectorfont
 					if (PrewarmRuntime().rebuildProgressTracked)
 					{
 						ReportPrewarmProgress(job,
-							std::min(PrewarmRuntime().session.queuedFonts,
-								PrewarmRuntime().session.finishedFonts + 1),
 							PrewarmRuntime().session.queuedFonts,
 							PrewarmRuntime().session.finishedFonts,
-							L"Loading validated font snapshot...",
 							1.0f, true);
 					}
 					FinishJob(job, "snapshot");
@@ -134,7 +131,6 @@ namespace fonthook::vectorfont
 					job.fontId, discarded ? "discarded" : "delete-failed");
 				PrewarmRuntime().session.generationJobs.push_back(std::move(job));
 			}
-			RefreshNativePrewarmOverlayTextGeometry();
 			RecordPrewarmStep(stepStarted);
 		}
 
@@ -183,11 +179,8 @@ namespace fonthook::vectorfont
 			{
 				ReportPrewarmProgress(
 					active.job,
-					std::min(PrewarmRuntime().session.queuedFonts,
-						PrewarmRuntime().session.finishedFonts + 1),
 					PrewarmRuntime().session.queuedFonts,
 					PrewarmRuntime().session.finishedFonts,
-					L"Reusing shared MTSDF double-byte atlas...",
 					0.0f, true);
 			}
 			bool sharedRoleReady = true;
@@ -345,11 +338,8 @@ namespace fonthook::vectorfont
 			// loading or displaying the Tile tree.
 			ReportPrewarmProgress(
 				PrewarmRuntime().session.activeFont->job,
-				std::min(PrewarmRuntime().session.queuedFonts,
-					PrewarmRuntime().session.finishedFonts + 1),
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.finishedFonts,
-				L"Preparing streamed glyph batches...",
 				0.0f, true);
 			TransitionPrewarmPhase(PrewarmPhase::GenerateBatch);
 		}
@@ -702,21 +692,8 @@ namespace fonthook::vectorfont
 
 			ReportPrewarmProgress(
 				active.job,
-				std::min(PrewarmRuntime().session.queuedFonts,
-					PrewarmRuntime().session.finishedFonts + 1),
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.finishedFonts,
-				retryMemoryBatch
-					? L"Retrying this batch after memory pressure..."
-					: metricsOnlyDoubleByte
-						? L"Indexing shared MTSDF double-byte metrics..."
-						: active.shaderSdf
-						? (UsesMtsdfDistanceField()
-							? L"Generating and caching MTSDF glyphs..."
-							: L"Generating and caching true-SDF glyphs...")
-						: active.aggressiveComposite
-							? L"Generating and caching BGRA composite glyphs..."
-							: L"Generating bounded fallback masks...",
 				0.0f, retryMemoryBatch);
 
 			if (active.failed || active.exhausted)
@@ -751,7 +728,6 @@ namespace fonthook::vectorfont
 				FinishJob(active.job, "cancelled");
 				++PrewarmRuntime().session.cancelledFonts;
 				++PrewarmRuntime().session.finishedFonts;
-				RefreshNativePrewarmOverlayTextGeometry();
 				PrewarmRuntime().session.activeFont.reset();
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::BeginFont);
@@ -789,7 +765,6 @@ namespace fonthook::vectorfont
 				PrewarmJob retryJob = std::move(active.job);
 				PrewarmRuntime().session.activeFont.reset();
 				PrewarmRuntime().session.generationJobs.push_front(std::move(retryJob));
-				RefreshNativePrewarmOverlayTextGeometry();
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::BeginFont);
 				return;
@@ -797,11 +772,8 @@ namespace fonthook::vectorfont
 
 			ReportPrewarmProgress(
 				active.job,
-				std::min(PrewarmRuntime().session.queuedFonts,
-					PrewarmRuntime().session.finishedFonts + 1),
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.finishedFonts,
-				L"Publishing, globally repacking, and loading atlas pages...",
 				0.81f, true);
 			bool finalized = false;
 			bool finalizationMemoryPressure = false;
@@ -905,10 +877,7 @@ namespace fonthook::vectorfont
 				PrewarmJob retryJob = std::move(active.job);
 				PrewarmRuntime().session.activeFont.reset();
 				PrewarmRuntime().session.restoreJobs.push_front(std::move(retryJob));
-				RefreshNativePrewarmOverlayTextGeometry();
 				ReportPrewarmTransactionProgress(
-					L"Font cache rebuild",
-					L"Retrying snapshot loading after memory pressure...",
 					PrewarmRuntime().rebuildProgress, true);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
@@ -935,10 +904,7 @@ namespace fonthook::vectorfont
 				PrewarmJob retryJob = std::move(active.job);
 				PrewarmRuntime().session.activeFont.reset();
 				PrewarmRuntime().session.restoreJobs.push_front(std::move(retryJob));
-				RefreshNativePrewarmOverlayTextGeometry();
 				ReportPrewarmTransactionProgress(
-					L"Font cache rebuild",
-					L"Retrying final cache validation...",
 					PrewarmRuntime().rebuildProgress, true);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
@@ -947,14 +913,11 @@ namespace fonthook::vectorfont
 
 			PrewarmRuntime().session.verifiedCodePageFonts.push_back(
 				active.job.fontId);
-			RefreshNativePrewarmOverlayTextGeometry();
 			ReportPrewarmProgress(
 				active.job,
-				std::min(PrewarmRuntime().session.queuedFonts,
-					PrewarmRuntime().session.finishedFonts + 1),
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.finishedFonts,
-				L"Font atlas committed...", 1.0f, true);
+				1.0f, true);
 			FinishJob(active.job, "complete");
 			++PrewarmRuntime().session.completedFonts;
 			++PrewarmRuntime().session.finishedFonts;
@@ -1016,7 +979,7 @@ namespace fonthook::vectorfont
 				PrewarmRuntime().session.everyConfiguredJobCompleted
 				&& PrewarmRuntime().session.everyConfiguredProfileVerified;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressReporting=%s presentation=loading-thread-queued runtimeDemandFallback=available",
+				"tnvse_freetype_font: incremental streamed prewarm end fonts=%u complete=%u streamFailed=%u cancelled=%u batches=%u peakBatchGlyphs=%u elapsedMs=%llu maxStepMs=%llu scanMs=%llu rasterMs=%llu streamMs=%llu memoryRetries=%u transactionRestarts=%u atlasOnlyTransaction=%s progressReporting=%s presentation=graphical-only delivery=loading-thread-queued runtimeDemandFallback=available",
 				PrewarmRuntime().session.queuedFonts,
 				PrewarmRuntime().session.completedFonts,
 				PrewarmRuntime().session.streamFailedFonts,
@@ -1046,10 +1009,7 @@ namespace fonthook::vectorfont
 					"incomplete-profile-validation");
 				return;
 			}
-			ReportPrewarmTransactionProgress(
-				L"Font cache rebuild complete",
-				L"All generated font caches are ready...",
-				1.0f, true);
+			ReportPrewarmTransactionProgress(1.0f, true);
 			TransitionPrewarmPhase(PrewarmPhase::Complete);
 		}
 	}

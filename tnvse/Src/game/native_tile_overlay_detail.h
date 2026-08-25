@@ -43,10 +43,14 @@ namespace fonthook::implementation::native_tile_overlay
 		constexpr float kImeMaximumWidth = 620.0f;
 		constexpr float kImeHorizontalPadding = 20.0f;
 		constexpr UInt32 kImeVisualBoundsLogLimit = 64;
-		constexpr float kPrewarmMinimumTextHeight = 24.0f;
 		constexpr float kPrewarmMaximumPanelWidth = 620.0f;
 		constexpr float kPrewarmMinimumPanelWidth = 320.0f;
-		constexpr size_t kPrewarmProgressTextCapacity = 160;
+		constexpr float kPrewarmPanelHeight = 120.0f;
+		constexpr float kPrewarmMaximumLabelWidth = 420.0f;
+		constexpr float kPrewarmLabelAspectRatio = 8.0f;
+		constexpr float kPrewarmLabelTopPadding = 12.0f;
+		constexpr float kPrewarmHorizontalPadding = 50.0f;
+		constexpr float kPrewarmTrackOffsetY = 82.0f;
 		constexpr UInt32 kTileReadFile = 0xA01B00;
 		constexpr UInt32 kTileRelease = 0x9FF690;
 		constexpr UInt32 kMenuSetMenuTile = 0xA1DC70;
@@ -97,11 +101,8 @@ namespace fonthook::implementation::native_tile_overlay
 
 		struct PrewarmOverlayCommand
 		{
-			std::array<wchar_t, kPrewarmProgressTextCapacity> detail = {};
-			std::array<wchar_t, kPrewarmProgressTextCapacity> stage = {};
 			float progress = 0.0f;
 			UInt32 sequence = 0;
-			UInt32 refreshSequence = 0;
 			bool visible = false;
 			bool ownerShutdown = false;
 		};
@@ -125,13 +126,10 @@ namespace fonthook::implementation::native_tile_overlay
 			Tile* prewarmRoot = nullptr;
 			Tile* prewarmShade = nullptr;
 			Tile* prewarmPanel = nullptr;
+			Tile* prewarmLabel = nullptr;
 			Tile* prewarmTrack = nullptr;
-			Tile* prewarmDetail = nullptr;
-			Tile* prewarmStage = nullptr;
 			Tile* prewarmFill = nullptr;
-			Tile* prewarmPercent = nullptr;
-			Tile* prewarmTitle = nullptr;
-			std::array<float, 6> prewarmLayoutSignature = {};
+			std::array<float, 2> prewarmLayoutSignature = {};
 			float prewarmProgressWidth = 520.0f;
 			bool prewarmLoadFailed = false;
 			bool prewarmParentUnavailableLogged = false;
@@ -241,7 +239,6 @@ namespace fonthook::implementation::native_tile_overlay
 		UInt32 nextPrewarmCommandSequence = 0;
 		std::atomic<UInt32> prewarmPublishedSequence{ 0 };
 		std::atomic<UInt32> prewarmConsumedSequence{ 0 };
-		UInt32 prewarmAppliedRefreshSequence = 0;
 		std::atomic<DWORD> prewarmConsumerThreadId{ 0 };
 		std::atomic_bool prewarmConsumerDisabled{ false };
 		OwnerThreadShutdownLatch prewarmOwnerShutdown;
@@ -298,8 +295,6 @@ namespace fonthook::implementation::native_tile_overlay
 	Tile* SynchronizeImeParent();
 	std::wstring BuildImeKey(
 		const std::vector<NativeTileOverlayLine>& lines);
-	float ReadTextHeight(Tile* tile);
-
 	void ClearPrewarmResolvedTiles();
 	void ResetPrewarmForParent(Tile* parent);
 	bool ResolvePrewarmTiles(Tile* root);
@@ -308,13 +303,8 @@ namespace fonthook::implementation::native_tile_overlay
 	bool EnsurePrewarmHost(Tile* parent);
 	void LayoutPrewarmOverlay();
 	UInt32 NextPrewarmCommandSequenceLocked();
-	void CopyPrewarmCommandText(
-		std::array<wchar_t, kPrewarmProgressTextCapacity>& target,
-		std::wstring_view source);
-	UInt32 PublishPrewarmOverlayUpdate(std::wstring_view detail,
-		std::wstring_view stage, float progress);
+	UInt32 PublishPrewarmOverlayUpdate(float progress);
 	UInt32 PublishPrewarmOverlayVisibility(bool visible);
-	UInt32 PublishPrewarmOverlayRefresh();
 	UInt32 PublishPrewarmOverlayOwnerShutdown();
 	bool IsPrewarmOverlayOwnerShutdownRequested();
 	void ApplyPrewarmOverlayHidden();

@@ -27,11 +27,7 @@ namespace fonthook
 	void HideNativeImeOverlay();
 
 	void ShowNativePrewarmOverlay();
-	void UpdateNativePrewarmOverlay(
-		std::wstring_view detail,
-		std::wstring_view stage,
-		float progress);
-	bool RefreshNativePrewarmOverlayTextGeometry(UInt32 timeoutMs = 0);
+	void UpdateNativePrewarmOverlay(float progress);
 	void HideNativePrewarmOverlay();
 	bool QuiesceNativePrewarmOverlay(UInt32 timeoutMs);
 	bool IsNativePrewarmOverlayActive();

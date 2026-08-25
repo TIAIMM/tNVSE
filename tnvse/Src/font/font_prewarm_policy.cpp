@@ -482,7 +482,7 @@ namespace fonthook::vectorfont
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			PrewarmRuntime().session.lastProgressUpdate = 0;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm progress tracking latched reason=%s policy=cache-write-transaction presentation=loading-thread-queued",
+				"tnvse_freetype_font: prewarm progress tracking latched reason=%s policy=cache-write-transaction presentation=graphical-only delivery=loading-thread-queued",
 				reason ? reason : "unknown");
 		}
 
@@ -493,17 +493,14 @@ namespace fonthook::vectorfont
 			PrewarmRuntime().rebuildProgressReportingStarted = true;
 			PrewarmRuntime().rebuildProgressOverlayVisible = true;
 			PrewarmRuntime().session.lastProgressUpdate = 0;
-			UpdateNativePrewarmOverlay(
-				L"Preparing configured fonts",
-				L"Preparing streamed glyph batches...",
-				PrewarmRuntime().rebuildProgress);
+			UpdateNativePrewarmOverlay(PrewarmRuntime().rebuildProgress);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm progress reporting started presentation=loading-thread-queued producerThread=%u",
+				"tnvse_freetype_font: prewarm progress reporting started presentation=graphical-only delivery=loading-thread-queued producerThread=%u",
 				GetCurrentThreadId());
 		}
 
-		void ReportPrewarmTransactionProgress(const wchar_t* detail,
-			const wchar_t* stage, float progress, bool force = false)
+		void ReportPrewarmTransactionProgress(
+			float progress, bool force = false)
 		{
 			ServiceFontPrewarmHostMessages();
 			if (!PrewarmRuntime().rebuildProgressTracked
@@ -521,33 +518,19 @@ namespace fonthook::vectorfont
 			}
 			PrewarmRuntime().session.lastProgressUpdate = now;
 			if (PrewarmRuntime().rebuildProgressOverlayVisible)
-			{
-				UpdateNativePrewarmOverlay(
-					detail ? detail : L"",
-					stage ? stage : L"Preparing font cache...",
-					progress);
-			}
+				UpdateNativePrewarmOverlay(progress);
 			if (force)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm progress percent=%u presentation=loading-thread-queued",
+					"tnvse_freetype_font: prewarm progress percent=%u presentation=graphical-only delivery=loading-thread-queued",
 					static_cast<UInt32>(std::lround(progress * 100.0f)));
 			}
 		}
 
-		void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontOrdinal,
-			UInt32 fontCount, UInt32 finishedFonts, const wchar_t* stage,
+		void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontCount,
+			UInt32 finishedFonts,
 			float minimumJobProgress = 0.0f, bool force = false)
 		{
-			wchar_t detail[160] = {};
-			const wchar_t* renderMode =
-				job.route == FontAtlasRoute::ShaderDistanceField
-					? (UsesMtsdfDistanceField() ? L"MTSDF" : L"true SDF")
-					: job.route == FontAtlasRoute::BakedArgbComposite
-						? L"BGRA composite" : L"ARGB fallback";
-			_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-				L"Font %u of %u  |  ID %u  |  %ls",
-				fontOrdinal, fontCount, job.fontId, renderMode);
 			const float jobProgress = std::max(minimumJobProgress,
 				GetPrewarmJobProgress(job)
 					* kPrewarmGlyphGenerationProgressShare);
@@ -555,8 +538,7 @@ namespace fonthook::vectorfont
 				? (static_cast<float>(finishedFonts)
 					+ std::clamp(jobProgress, 0.0f, 1.0f)) / fontCount
 				: 1.0f);
-			ReportPrewarmTransactionProgress(detail,
-				stage ? stage : L"Preparing glyphs...", overall, force);
+			ReportPrewarmTransactionProgress(overall, force);
 		}
 
 		void ReportAtlasPrewarmProgress(FontAtlasPrewarmProgressStage stage,
@@ -570,37 +552,23 @@ namespace fonthook::vectorfont
 			{
 				return;
 			}
-			wchar_t detail[160] = {};
-			const wchar_t* text = L"Finalizing shared font cache...";
 			float progress = 0.90f;
 			switch (stage)
 			{
 			case FontAtlasPrewarmProgressStage::PublishPhysicalGroup:
 				LatchRebuildProgress("physical-group-publish");
 				StartRebuildProgressReporting();
-				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-					L"Physical font atlas group %u", std::max<UInt32>(1, item));
-				text = L"Repacking shared font atlas group...";
 				progress = 0.91f;
 				break;
 			case FontAtlasPrewarmProgressStage::RestorePhysicalGroup:
-				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-					L"Loading shared atlas for %u fonts", total);
-				text = L"Loading consolidated font atlas textures...";
 				progress = 0.93f;
 				break;
 			case FontAtlasPrewarmProgressStage::PlanPhysicalPools:
-				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-					L"Evaluating %u physical atlas combinations", total);
-				text = L"Planning physical font texture pools...";
 				progress = 0.95f;
 				break;
 			case FontAtlasPrewarmProgressStage::PublishPhysicalPool:
 				LatchRebuildProgress("physical-pool-publish");
 				StartRebuildProgressReporting();
-				_snwprintf_s(detail, _countof(detail), _TRUNCATE,
-					L"Physical texture pool %u of %u", item, total);
-				text = L"Publishing and loading physical texture pool...";
 				progress = total
 					? 0.96f + 0.01f * static_cast<float>(item) / total
 					: 0.96f;
@@ -608,7 +576,7 @@ namespace fonthook::vectorfont
 			default:
 				return;
 			}
-			ReportPrewarmTransactionProgress(detail, text, progress, true);
+			ReportPrewarmTransactionProgress(progress, true);
 		}
 
 		void FinishJob(const PrewarmJob& job, const char* status)

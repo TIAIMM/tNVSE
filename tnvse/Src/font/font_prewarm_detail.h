@@ -257,11 +257,10 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		UInt32 parallelFloor, UInt32 completedGlyphs, ULONGLONG elapsedMs);
 	void LatchRebuildProgress(const char* reason);
 	void StartRebuildProgressReporting();
-	void ReportPrewarmTransactionProgress(const wchar_t* detail,
-		const wchar_t* progressText, float progress, bool force);
-	void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontOrdinal,
-		UInt32 fontCount, UInt32 finishedFonts, const wchar_t* stage,
-		float stageProgress, bool force);
+	void ReportPrewarmTransactionProgress(float progress, bool force);
+	void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontCount,
+		UInt32 finishedFonts,
+		float minimumJobProgress, bool force);
 	void ReportAtlasPrewarmProgress(FontAtlasPrewarmProgressStage stage,
 		UInt32 item, UInt32 total, void* context);
 	void FinishJob(const PrewarmJob& job, const char* status);

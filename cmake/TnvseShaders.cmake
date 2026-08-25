@@ -70,7 +70,8 @@ function(tnvse_add_shader_target output_variable)
   set(${output_variable} "${shader_outputs}" PARENT_SCOPE)
 endfunction()
 
-function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_xmls)
+function(tnvse_enable_live_deployment target plugin_path shader_outputs
+    overlay_xmls overlay_textures)
   if(NOT plugin_path)
     message(STATUS "TNVSE_PLUGIN_PATH is empty; live MO2 deployment is disabled.")
     return()
@@ -80,22 +81,27 @@ function(tnvse_enable_live_deployment target plugin_path shader_outputs overlay_
   get_filename_component(mod_root "${plugin_path}/../.." ABSOLUTE)
   set(shader_path "${mod_root}/Shaders/Loose")
   set(overlay_path "${mod_root}/Menus/prefabs/tNVSE")
+  set(overlay_texture_path "${mod_root}/Textures/Interface/tNVSE")
   message(STATUS "Live tNVSE DLL deployment: ${plugin_path}")
   message(STATUS "Live tNVSE shader deployment: ${shader_path}")
   message(STATUS "Live tNVSE native overlay deployment: ${overlay_path}")
+  message(STATUS "Live tNVSE native overlay texture deployment: ${overlay_texture_path}")
 
-  # Keep XML deployment independent from the DLL link. A plain XML edit must
-  # reach the live MO2 tree even when Visual Studio considers tnvse.dll
-  # otherwise up to date.
+  # Keep UI asset deployment independent from the DLL link. A plain XML or
+  # texture edit must reach the live MO2 tree even when Visual Studio considers
+  # tnvse.dll otherwise up to date.
   set(overlay_target "${target}_live_overlays")
   add_custom_target(${overlay_target}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_path}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${overlay_texture_path}"
     COMMAND "${CMAKE_COMMAND}" -E rm -f
       "${overlay_path}/NativeOverlays.xml"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       ${overlay_xmls} "${overlay_path}"
-    DEPENDS ${overlay_xmls}
-    COMMENT "Deploying tNVSE native Tile overlay XML"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      ${overlay_textures} "${overlay_texture_path}"
+    DEPENDS ${overlay_xmls} ${overlay_textures}
+    COMMENT "Deploying tNVSE native Tile overlay XML and textures"
     VERBATIM)
   set_target_properties(${overlay_target} PROPERTIES
     FOLDER "tNVSE/Deployment")

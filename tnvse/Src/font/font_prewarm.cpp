@@ -215,10 +215,7 @@ namespace fonthook::vectorfont
 			// profile validation, physical atlas publication, and cleanup. A cache-hit
 			// startup never latches or starts progress reporting, so it stays UI-free.
 			StartRebuildProgressReporting();
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Flushing generated glyph cache files...",
-				0.87f, true);
+			ReportPrewarmTransactionProgress(0.87f, true);
 			EndAtlasOnlyPrewarmPolicy();
 			FlushGlyphBitmapDiskCache();
 			ReleaseGlyphBitmapDiskCacheMappings();
@@ -229,10 +226,7 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupProfiles:
 		{
 			const ULONGLONG started = GetTickCount64();
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Validating sealed font profiles...",
-				0.89f, true);
+			ReportPrewarmTransactionProgress(0.89f, true);
 			CollectPrewarmProfileResults();
 			if (!PrewarmRuntime().session.everyConfiguredProfileVerified)
 			{
@@ -261,10 +255,7 @@ namespace fonthook::vectorfont
 			const FontAtlasPrewarmProgressReporter progressReporter = {
 				&ReportAtlasPrewarmProgress, nullptr
 			};
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Consolidating shared font atlas groups...",
-				0.90f, true);
+			ReportPrewarmTransactionProgress(0.90f, true);
 			ReleaseGlyphBitmapDiskCacheMappings();
 			PruneRetiredPrewarmAtlasGenerations();
 			EnforceCpuMemoryBudget("prewarm-physical-groups");
@@ -294,11 +285,6 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas group consolidation failed reason=unknown; retaining sealed per-font atlases");
 			}
-			if (!RefreshNativePrewarmOverlayTextGeometry(2000))
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm UI refresh acknowledgement timed out stage=physical-groups policy=retired-atlas-refcount-retention");
-			}
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-groups-after");
 			RecordPrewarmStep(started);
@@ -311,10 +297,7 @@ namespace fonthook::vectorfont
 			const FontAtlasPrewarmProgressReporter progressReporter = {
 				&ReportAtlasPrewarmProgress, nullptr
 			};
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Planning physical font texture pools...",
-				0.94f, true);
+			ReportPrewarmTransactionProgress(0.94f, true);
 			ReleaseGlyphBitmapDiskCacheMappings();
 			PruneRetiredPrewarmAtlasGenerations();
 			EnforceCpuMemoryBudget("prewarm-physical-pools");
@@ -344,21 +327,13 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_font: optional physical atlas pool consolidation failed reason=unknown; retaining sealed group/per-font atlases");
 			}
-			if (!RefreshNativePrewarmOverlayTextGeometry(2000))
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm UI refresh acknowledgement timed out stage=physical-pools policy=retired-atlas-refcount-retention");
-			}
 			PruneRetiredPrewarmAtlasGenerations();
 			ReportPrewarmProcessMemoryState("physical-pools-after");
 			gLog.FormattedMessage(
 				"tnvse_freetype_font: physical atlas consolidation groupV2=%s poolV3=%s",
 				PrewarmRuntime().session.physicalGroupsReady ? "complete" : "partial-fallback",
 				PrewarmRuntime().session.physicalPoolsReady ? "complete" : "partial-fallback");
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Shared physical font textures are ready...",
-				0.975f, true);
+			ReportPrewarmTransactionProgress(0.975f, true);
 			RecordPrewarmStep(started);
 			TransitionPrewarmPhase(PrewarmPhase::CleanupMasks);
 			break;
@@ -366,10 +341,7 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupMasks:
 		{
 			const ULONGLONG started = GetTickCount64();
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Cleaning temporary glyph mask data...",
-				0.98f, true);
+			ReportPrewarmTransactionProgress(0.98f, true);
 			if (PrewarmRuntime().session.everyConfiguredProfileVerified
 				&& GetPersistentFontCacheRoute()
 					!= FontAtlasRoute::ArgbFallback
@@ -386,10 +358,7 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupBudget:
 		{
 			const ULONGLONG started = GetTickCount64();
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Releasing temporary font cache memory...",
-				0.985f, true);
+			ReportPrewarmTransactionProgress(0.985f, true);
 			if (PrewarmRuntime().session.everyConfiguredProfileVerified)
 			{
 				SetBitmapCacheReducedAfterPrewarm(true);
@@ -409,10 +378,7 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupFiles:
 		{
 			const ULONGLONG started = GetTickCount64();
-			ReportPrewarmTransactionProgress(
-				L"Finalizing generated font cache",
-				L"Cleaning obsolete font cache files...",
-				0.995f, true);
+			ReportPrewarmTransactionProgress(0.995f, true);
 			if (g_bDeleteUnusedFreeTypeFontCache)
 			{
 				DeleteUnusedFreeTypeFontCacheFiles(

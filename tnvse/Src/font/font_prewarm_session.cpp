@@ -222,8 +222,6 @@ namespace fonthook::vectorfont
 			if (PrewarmRuntime().rebuildProgressTracked)
 			{
 				ReportPrewarmTransactionProgress(
-					L"Font cache rebuild",
-					L"Restarting pre-entry cache transaction...",
 					PrewarmRuntime().rebuildProgress, true);
 			}
 			PrewarmRuntime().session = {};
@@ -273,8 +271,6 @@ namespace fonthook::vectorfont
 				if (PrewarmRuntime().rebuildProgressTracked)
 				{
 					ReportPrewarmTransactionProgress(
-						L"Font cache rebuild",
-						L"Restarting pre-entry cache transaction...",
 						PrewarmRuntime().rebuildProgress, true);
 				}
 			}

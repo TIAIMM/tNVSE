@@ -18,7 +18,6 @@ namespace fonthook
 	FontHookInstallState InitFontHooks();
 	bool AreMultibyteFontHooksInstalled();
 	bool AreFreeTypeFontHooksInstalled();
-	bool IsPrewarmOverlayMakeNodeRouteInstalled();
 
 	Font* CallOriginalFontConstructor(
 		Font* font, int fontNum, char* filename, bool load);

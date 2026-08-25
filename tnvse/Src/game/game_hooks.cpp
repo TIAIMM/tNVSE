@@ -1215,25 +1215,6 @@ namespace fonthook
 			&& IsPublishedFontHookGraphCurrent();
 	}
 
-	bool IsPrewarmOverlayMakeNodeRouteInstalled()
-	{
-		if (!s_fontHookInstallState.freeType)
-			return false;
-		if (!hook_identity::IsAccessibleRegion(
-			kTileTextMakeNodeVTableEntry, sizeof(SIZE_T), false))
-		{
-			return false;
-		}
-		const SIZE_T adapterHandler =
-			reinterpret_cast<SIZE_T>(&TileTextMakeNodeHook);
-		return *reinterpret_cast<const SIZE_T*>(kTileTextMakeNodeVTableEntry)
-				== adapterHandler
-			&& s_tileTextMakeNode
-			&& reinterpret_cast<SIZE_T>(s_tileTextMakeNode) != adapterHandler
-			&& hook_identity::IsExecutableTarget(
-				reinterpret_cast<SIZE_T>(s_tileTextMakeNode));
-	}
-
 	bool IsFreeTypeEffectSuppressionActive()
 	{
 		return s_effectSuppressionDepth != 0;

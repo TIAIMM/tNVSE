@@ -180,7 +180,25 @@ endif()
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
-set_source_files_properties(${TNVSE_NATIVE_OVERLAY_XMLS} PROPERTIES
+set(TNVSE_NATIVE_OVERLAY_TEXTURES
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/Textures/Interface/tNVSE/font_prewarm_label.dds")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml"
+  _tnvse_prewarm_overlay_xml)
+foreach(_tnvse_forbidden_prewarm_tag text font string)
+  if(_tnvse_prewarm_overlay_xml MATCHES
+      "<[ \t\r\n]*${_tnvse_forbidden_prewarm_tag}([ \t\r\n>])")
+    message(FATAL_ERROR
+      "FontPrewarmOverlay.xml must remain TileImage-only; forbidden tag: ${_tnvse_forbidden_prewarm_tag}")
+  endif()
+endforeach()
+unset(_tnvse_forbidden_prewarm_tag)
+unset(_tnvse_prewarm_overlay_xml)
+set_source_files_properties(
+  ${TNVSE_NATIVE_OVERLAY_XMLS}
+  ${TNVSE_NATIVE_OVERLAY_TEXTURES}
+  PROPERTIES
   HEADER_FILE_ONLY TRUE
   VS_TOOL_OVERRIDE "None")
 
@@ -207,7 +225,8 @@ add_library(tnvse SHARED
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/exports.def"
   ${TNVSE_SOURCES}
   ${TNVSE_HEADERS}
-  ${TNVSE_NATIVE_OVERLAY_XMLS})
+  ${TNVSE_NATIVE_OVERLAY_XMLS}
+  ${TNVSE_NATIVE_OVERLAY_TEXTURES})
 
 source_group("Source Files" FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/dllmain.cpp"
@@ -218,6 +237,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/include"
   PREFIX "Bundled Headers"
   FILES ${TNVSE_BUNDLED_HEADERS})
 source_group("UI Overlays" FILES ${TNVSE_NATIVE_OVERLAY_XMLS})
+source_group("UI Overlay Textures" FILES ${TNVSE_NATIVE_OVERLAY_TEXTURES})
 
 target_include_directories(tnvse PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse"
@@ -312,7 +332,8 @@ endif()
 unset(_tnvse_plugin_path_from_env)
 unset(_tnvse_plugin_path_help)
 tnvse_enable_live_deployment(tnvse "${TNVSE_PLUGIN_PATH}"
-  "${TNVSE_SHADER_OUTPUTS}" "${TNVSE_NATIVE_OVERLAY_XMLS}")
+  "${TNVSE_SHADER_OUTPUTS}" "${TNVSE_NATIVE_OVERLAY_XMLS}"
+  "${TNVSE_NATIVE_OVERLAY_TEXTURES}")
 
 install(TARGETS tnvse RUNTIME DESTINATION "NVSE/plugins")
 install(FILES ${TNVSE_SHADER_OUTPUTS} DESTINATION "Shaders/Loose")
@@ -322,6 +343,8 @@ install(CODE [[
 ]])
 install(FILES ${TNVSE_NATIVE_OVERLAY_XMLS}
   DESTINATION "Menus/prefabs/tNVSE")
+install(FILES ${TNVSE_NATIVE_OVERLAY_TEXTURES}
+  DESTINATION "Textures/Interface/tNVSE")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/tnvse_fonts.xml"
   DESTINATION "NVSE/plugins")
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/fonts/"

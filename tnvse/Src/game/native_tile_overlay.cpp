@@ -288,57 +288,9 @@ namespace fonthook
 		PublishPrewarmOverlayVisibility(true);
 	}
 
-	void UpdateNativePrewarmOverlay(
-		std::wstring_view detail,
-		std::wstring_view stage,
-		float progress)
+	void UpdateNativePrewarmOverlay(float progress)
 	{
-		PublishPrewarmOverlayUpdate(detail, stage, progress);
-	}
-
-	bool RefreshNativePrewarmOverlayTextGeometry(UInt32 timeoutMs)
-	{
-		const UInt32 sequence = PublishPrewarmOverlayRefresh();
-		if (!timeoutMs
-			|| !HasVerifiedLoadingMenuUpdateHook()
-			|| (!OverlayRuntime().prewarmConsumerThreadId.load(std::memory_order_acquire)
-				&& !OverlayRuntime().prewarmReady.load(std::memory_order_acquire)))
-		{
-			if (timeoutMs && g_bEnableFreeTypeFontRenderingLog)
-			{
-				LogNativeLoadingMenuDiagnostic(
-					"prewarm-refresh-wait-skipped:no-reachable-consumer");
-			}
-			return true;
-		}
-
-		const ULONGLONG startedAt = GetTickCount64();
-		LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-begin");
-		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
-		while (OverlayRuntime().prewarmConsumedSequence.load(std::memory_order_acquire)
-			!= sequence)
-		{
-			if (GetTickCount64() >= deadline)
-			{
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: timed out synchronizing prewarm text refresh sequence=%u consumed=%u timeoutMs=%u policy=retain-referenced-retired-atlas",
-					sequence,
-					OverlayRuntime().prewarmConsumedSequence.load(
-						std::memory_order_acquire),
-						timeoutMs);
-				LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-timeout");
-				return false;
-			}
-			Sleep(1);
-		}
-		gLog.FormattedMessage(
-			"tnvse_native_overlay: synchronized prewarm text refresh sequence=%u consumed=%u waitMs=%llu",
-			sequence,
-			OverlayRuntime().prewarmConsumedSequence.load(
-				std::memory_order_acquire),
-			static_cast<unsigned long long>(GetTickCount64() - startedAt));
-		LogNativeLoadingMenuDiagnostic("prewarm-refresh-wait-complete");
-		return true;
+		PublishPrewarmOverlayUpdate(progress);
 	}
 
 	void HideNativePrewarmOverlay()
