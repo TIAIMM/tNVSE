@@ -268,42 +268,47 @@ namespace fonthook::vectorfont
 			}
 			incomingStorageBytes += roleStorageBytes;
 		}
-		size_t cacheBefore = 0;
-		size_t cacheAfter = 0;
 		DefaultPoolPublicationScope publicationScope(
 			g_bEnableFreeTypeDefaultPoolAtlas);
 		if (!publicationScope.Ready() || !publicationScope.IsCurrent())
 			return false;
 		RetiredAtlasReleaseList retiredReleases;
+		AtlasCacheTrimResult reservation;
 		{
 			// Reserve both byte roles as one transaction. Reserving roles
 			// independently can evict the just-restored single-byte role when a
 			// large double-byte profile approaches the configured soft budget.
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
-			cacheBefore = state.atlasCacheBytes;
-			TrimAtlasCacheForIncomingBytes(
+			reservation = TrimAtlasCacheForIncomingBytes(
 				state, incomingStorageBytes, retiredReleases);
-			cacheAfter = state.atlasCacheBytes;
 		}
 		retiredReleases.clear();
 		if (IsGpuAtlasCacheUnlimited())
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f cacheMiB=%.2f->%.2f budget=unlimited",
+				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f lruMiB=%.2f->%.2f fixedMiB=%.2f residentMiB=%.2f budget=unlimited policy=sealed-fixed-cost status=%s",
 				config.fontId, incomingStorageBytes / (1024.0 * 1024.0),
-				cacheBefore / (1024.0 * 1024.0),
-				cacheAfter / (1024.0 * 1024.0));
+				reservation.before.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.fixedSealedBytes / (1024.0 * 1024.0),
+				reservation.after.trackedResidentBytes / (1024.0 * 1024.0),
+				reservation.reachedTarget ? "ready" : "blocked");
 		}
 		else
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
+				"tnvse_freetype_font: atlas restore reservation font=%u incomingMiB=%.2f lruMiB=%.2f->%.2f fixedMiB=%.2f residentMiB=%.2f budgetMiB=%.2f policy=sealed-fixed-cost status=%s",
 				config.fontId, incomingStorageBytes / (1024.0 * 1024.0),
-				cacheBefore / (1024.0 * 1024.0),
-				cacheAfter / (1024.0 * 1024.0),
-				GetAtlasCacheLimit() / (1024.0 * 1024.0));
+				reservation.before.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.fixedSealedBytes / (1024.0 * 1024.0),
+				reservation.after.trackedResidentBytes / (1024.0 * 1024.0),
+				GetAtlasCacheLimit() / (1024.0 * 1024.0),
+				reservation.reachedTarget ? "ready" : "blocked");
 		}
+		if (!reservation.reachedTarget)
+			return false;
 
 		const bool singleByteReady = singleByteResident
 			|| LoadGlyphAtlasSnapshotRole(runtime,
@@ -368,45 +373,50 @@ namespace fonthook::vectorfont
 		size_t incomingStorageBytes = 0;
 		if (!InspectSnapshotRoleStorage(runtime, key, incomingStorageBytes))
 			return false;
-		size_t cacheBefore = 0;
-		size_t cacheAfter = 0;
 		DefaultPoolPublicationScope publicationScope(
 			g_bEnableFreeTypeDefaultPoolAtlas);
 		if (!publicationScope.Ready() || !publicationScope.IsCurrent())
 			return false;
 		RetiredAtlasReleaseList retiredReleases;
+		AtlasCacheTrimResult reservation;
 		{
 			AtlasState& state = State();
 			std::lock_guard<std::mutex> lock(state.atlasMutex);
-			cacheBefore = state.atlasCacheBytes;
-			TrimAtlasCacheForIncomingBytes(
+			reservation = TrimAtlasCacheForIncomingBytes(
 				state, incomingStorageBytes, retiredReleases);
-			cacheAfter = state.atlasCacheBytes;
 		}
 		retiredReleases.clear();
 		if (IsGpuAtlasCacheUnlimited())
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budget=unlimited",
+				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f lruMiB=%.2f->%.2f fixedMiB=%.2f residentMiB=%.2f budget=unlimited policy=sealed-fixed-cost status=%s",
 				GetRuntimeConfig(runtime).fontId,
 				byteClass == VectorFontByteClass::DoubleByte
 					? "doubleByte" : "singleByte",
 				incomingStorageBytes / (1024.0 * 1024.0),
-				cacheBefore / (1024.0 * 1024.0),
-				cacheAfter / (1024.0 * 1024.0));
+				reservation.before.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.fixedSealedBytes / (1024.0 * 1024.0),
+				reservation.after.trackedResidentBytes / (1024.0 * 1024.0),
+				reservation.reachedTarget ? "ready" : "blocked");
 		}
 		else
 		{
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f cacheMiB=%.2f->%.2f budgetMiB=%.2f",
+				"tnvse_freetype_font: shared atlas role restore reservation font=%u role=%s incomingMiB=%.2f lruMiB=%.2f->%.2f fixedMiB=%.2f residentMiB=%.2f budgetMiB=%.2f policy=sealed-fixed-cost status=%s",
 				GetRuntimeConfig(runtime).fontId,
 				byteClass == VectorFontByteClass::DoubleByte
 					? "doubleByte" : "singleByte",
 				incomingStorageBytes / (1024.0 * 1024.0),
-				cacheBefore / (1024.0 * 1024.0),
-				cacheAfter / (1024.0 * 1024.0),
-				GetAtlasCacheLimit() / (1024.0 * 1024.0));
+				reservation.before.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.evictableBytes / (1024.0 * 1024.0),
+				reservation.after.fixedSealedBytes / (1024.0 * 1024.0),
+				reservation.after.trackedResidentBytes / (1024.0 * 1024.0),
+				GetAtlasCacheLimit() / (1024.0 * 1024.0),
+				reservation.reachedTarget ? "ready" : "blocked");
 		}
+		if (!reservation.reachedTarget)
+			return false;
 		if (!LoadGlyphAtlasSnapshotRole(runtime, byteClass, rasterScale, false))
 			return false;
 		AtlasState& state = State();

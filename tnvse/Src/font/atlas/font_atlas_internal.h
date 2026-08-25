@@ -665,6 +665,28 @@ namespace fonthook::vectorfont
 	using RetiredAtlasReleaseList =
 		std::vector<std::shared_ptr<AtlasResource>>;
 
+	// GPU atlas budgeting applies only to recoverable LRU entries. Physical
+	// resources retained by a live sealed direct profile are reported as fixed
+	// cost, but are neither charged to that budget nor eligible for eviction.
+	struct AtlasBudgetUsage
+	{
+		size_t fixedSealedBytes = 0;
+		size_t evictableBytes = 0;
+		size_t trackedResidentBytes = 0;
+		size_t cacheResidentBytes = 0;
+		UInt32 fixedPhysicalPages = 0;
+		UInt32 evictablePhysicalPages = 0;
+	};
+
+	struct AtlasCacheTrimResult
+	{
+		AtlasBudgetUsage before;
+		AtlasBudgetUsage after;
+		size_t targetEvictableBytes = 0;
+		UInt32 evictedEntries = 0;
+		bool reachedTarget = true;
+	};
+
 	struct AtlasCacheKey
 	{
 		UInt64 atlasContentHash = 0;
@@ -1025,9 +1047,10 @@ namespace fonthook::vectorfont
 		const AtlasResource& resource);
 	void UnindexAtlasPage(AtlasState& state, const AtlasCacheKey& key);
 	AtlasProfileKey MakeAtlasProfileKey(const AtlasCacheKey& key);
-	void TrimAtlasCache(AtlasState& state,
+	AtlasCacheTrimResult TrimAtlasCache(AtlasState& state,
 		RetiredAtlasReleaseList& retiredReleases);
-	void TrimAtlasCacheForIncomingBytes(AtlasState& state, size_t incomingBytes,
+	AtlasCacheTrimResult TrimAtlasCacheForIncomingBytes(AtlasState& state,
+		size_t incomingBytes,
 		RetiredAtlasReleaseList& retiredReleases);
 	void CollectPrunableRetiredAtlasesLocked(
 		RetiredAtlasReleaseList& retiredReleases);

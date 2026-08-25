@@ -241,6 +241,52 @@ if(TNVSE_BUILD_TEXT_SAFETY_TESTS)
     COMMAND $<TARGET_FILE:tnvse_text_safety_tests>)
 endif()
 
+option(TNVSE_BUILD_FONT_ATLAS_BUDGET_LRU_TESTS
+  "Build the sealed-profile atlas budget LRU policy tests" OFF)
+if(TNVSE_BUILD_FONT_ATLAS_BUDGET_LRU_TESTS)
+  enable_testing()
+  add_executable(tnvse_font_atlas_budget_lru_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_atlas_budget_lru_tests.cpp")
+  target_compile_features(tnvse_font_atlas_budget_lru_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_font_atlas_budget_lru_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/atlas")
+  target_compile_options(tnvse_font_atlas_budget_lru_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_font_atlas_budget_lru_tests)
+  set_target_properties(tnvse_font_atlas_budget_lru_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME font_atlas_budget_lru
+    COMMAND $<TARGET_FILE:tnvse_font_atlas_budget_lru_tests>)
+endif()
+
+set(_tnvse_atlas_cache_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/atlas/font_atlas_cache.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${_tnvse_atlas_cache_source}")
+file(READ "${_tnvse_atlas_cache_source}" _tnvse_atlas_cache_contents)
+foreach(_tnvse_required_atlas_budget_pattern
+    "FindOldestAtlasBudgetVictim"
+    "IsSealedDirectProfileValid"
+    "policy=sealed-fixed-cost"
+    "result.after.evictableBytes > targetEvictableBytes")
+  string(FIND "${_tnvse_atlas_cache_contents}"
+    "${_tnvse_required_atlas_budget_pattern}" _tnvse_atlas_budget_offset)
+  if(_tnvse_atlas_budget_offset EQUAL -1)
+    message(FATAL_ERROR
+      "Sealed-profile atlas budget gate failed: ${_tnvse_required_atlas_budget_pattern}")
+  endif()
+endforeach()
+string(FIND "${_tnvse_atlas_cache_contents}"
+  "while (state.atlasCacheBytes >" _tnvse_old_atlas_budget_loop)
+if(NOT _tnvse_old_atlas_budget_loop EQUAL -1)
+  message(FATAL_ERROR
+    "Atlas budget LRU must not charge live sealed fixed cost through atlasCacheBytes")
+endif()
+unset(_tnvse_old_atlas_budget_loop)
+unset(_tnvse_atlas_budget_offset)
+unset(_tnvse_required_atlas_budget_pattern)
+unset(_tnvse_atlas_cache_contents)
+unset(_tnvse_atlas_cache_source)
+
 set(TNVSE_NATIVE_OVERLAY_XMLS
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/ImeOverlay.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/Menus/prefabs/tNVSE/FontPrewarmOverlay.xml")

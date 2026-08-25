@@ -1,5 +1,7 @@
 #include "font_atlas_internal.h"
 
+#include "font_atlas_budget_lru_policy.h"
+#include "font_atlas_direct_internal.h"
 #include "font_atlas_nvtf_compat.h"
 #include "font_atlas_resource_internal.h"
 
@@ -20,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 
 namespace fonthook::vectorfont
@@ -504,50 +507,274 @@ namespace fonthook::vectorfont
 				RefreshAtlasProfileCpuMemory(profile);
 		}
 
-		void TrimAtlasCacheToTarget(AtlasState& state, size_t targetBytes,
+		namespace
+		{
+			struct LiveSealedAtlasProtection
+			{
+				std::vector<std::shared_ptr<const SealedDirectFontProfile>> profiles;
+				std::vector<std::shared_ptr<AtlasResource>> resources;
+				std::unordered_set<AtlasResource*> exactResources;
+				std::unordered_set<const void*> physicalResources;
+				std::unordered_set<const DirectAtlasGlyphTable*> tables;
+				std::unordered_set<AtlasProfileKey, AtlasProfileKeyHash> profileKeys;
+				size_t fixedBytes = 0;
+			};
+
+			size_t SaturatingAddSize(size_t left, size_t right)
+			{
+				return right <= std::numeric_limits<size_t>::max() - left
+					? left + right : std::numeric_limits<size_t>::max();
+			}
+
+			const void* GetAtlasPhysicalBudgetIdentity(
+				const AtlasResource& resource)
+			{
+				if (!resource.property || resource.resetPending)
+					return nullptr;
+				NiTexture* texture = GetAtlasTexture(resource);
+				if (!texture)
+					return nullptr;
+				if (resource.backend != AtlasBackend::DefaultPool)
+					return texture;
+				NiDX9TextureData* data = texture->GetDX9RendererData();
+				return data ? data->GetD3DTexture() : nullptr;
+			}
+
+			void ProtectLiveSealedAtlasResource(
+				const std::shared_ptr<AtlasResource>& resource,
+				LiveSealedAtlasProtection& protection)
+			{
+				if (!resource
+					|| !protection.exactResources.insert(resource.get()).second)
+				{
+					return;
+				}
+				protection.resources.push_back(resource);
+				const void* physical =
+					GetAtlasPhysicalBudgetIdentity(*resource);
+				if (!physical
+					|| !protection.physicalResources.insert(physical).second)
+				{
+					return;
+				}
+				protection.fixedBytes = SaturatingAddSize(
+					protection.fixedBytes,
+					GetAtlasStorageBytes(resource->width, resource->height,
+						resource->pixelMode, resource->mipLevels));
+			}
+
+			LiveSealedAtlasProtection CollectLiveSealedAtlasProtectionLocked(
+				AtlasState& state)
+			{
+				LiveSealedAtlasProtection result;
+				for (auto profile = state.sealedDirectProfiles.begin();
+					profile != state.sealedDirectProfiles.end();)
+				{
+					std::shared_ptr<const SealedDirectFontProfile> sealed =
+						profile->second.lock();
+					if (!sealed)
+					{
+						profile = state.sealedDirectProfiles.erase(profile);
+						continue;
+					}
+					++profile;
+					if (!implementation::font_atlas_direct::
+						IsSealedDirectProfileValid(*sealed))
+					{
+						continue;
+					}
+					result.profiles.push_back(sealed);
+					for (const auto& table : sealed->tables)
+					{
+						if (table)
+							result.tables.insert(table.get());
+					}
+					for (const auto& resource : sealed->atlases)
+						ProtectLiveSealedAtlasResource(resource, result);
+					for (const auto& owners : sealed->tableAtlasOwners)
+					{
+						for (const auto& resource : owners)
+							ProtectLiveSealedAtlasResource(resource, result);
+					}
+				}
+
+				// If the mutable profile index still publishes one of these tables,
+				// removing any indexed page would revoke its shared validity token.
+				// Protect the complete profile key as a second, corruption-tolerant
+				// guard in addition to exact/physical resource identity.
+				for (const auto& [profileKey, profile] : state.atlasProfiles)
+				{
+					if (profile.directGlyphs
+						&& result.tables.find(profile.directGlyphs.get())
+							!= result.tables.end())
+					{
+						result.profileKeys.insert(profileKey);
+					}
+				}
+				for (const auto& [key, entry] : state.atlasCache)
+				{
+					if (result.profileKeys.find(MakeAtlasProfileKey(key))
+							!= result.profileKeys.end())
+					{
+						ProtectLiveSealedAtlasResource(
+							entry.resource, result);
+					}
+				}
+				return result;
+			}
+
+			bool IsProtectedByLiveSealedProfile(const AtlasCacheKey& key,
+				const AtlasCacheEntry& entry,
+				const LiveSealedAtlasProtection& protection)
+			{
+				if (protection.profileKeys.find(MakeAtlasProfileKey(key))
+					!= protection.profileKeys.end())
+				{
+					return true;
+				}
+				if (!entry.resource)
+					return false;
+				if (protection.exactResources.find(entry.resource.get())
+					!= protection.exactResources.end())
+				{
+					return true;
+				}
+				const void* physical =
+					GetAtlasPhysicalBudgetIdentity(*entry.resource);
+				return physical && protection.physicalResources.find(physical)
+					!= protection.physicalResources.end();
+			}
+
+			AtlasBudgetUsage MeasureAtlasBudgetUsageLocked(
+				const AtlasState& state,
+				const LiveSealedAtlasProtection& protection)
+			{
+				AtlasBudgetUsage usage;
+				usage.cacheResidentBytes = state.atlasCacheBytes;
+				usage.fixedSealedBytes = protection.fixedBytes;
+				std::unordered_set<const void*> measuredFixed =
+					protection.physicalResources;
+				for (const auto& [key, entry] : state.atlasCache)
+				{
+					if (!entry.bytes)
+						continue;
+					if (!IsProtectedByLiveSealedProfile(
+							key, entry, protection))
+					{
+						usage.evictableBytes = SaturatingAddSize(
+							usage.evictableBytes, entry.bytes);
+						++usage.evictablePhysicalPages;
+						continue;
+					}
+
+					// Normally this physical allocation was already measured through
+					// the sealed owners. Include an indexed fallback as fixed cost if a
+					// damaged owner list is only recoverable through the profile key.
+					const void* physical = entry.resource
+						? GetAtlasPhysicalBudgetIdentity(*entry.resource) : nullptr;
+					if (physical && measuredFixed.insert(physical).second)
+					{
+						usage.fixedSealedBytes = SaturatingAddSize(
+							usage.fixedSealedBytes, entry.bytes);
+					}
+				}
+				usage.fixedPhysicalPages = static_cast<UInt32>(std::min<size_t>(
+					measuredFixed.size(), std::numeric_limits<UInt32>::max()));
+				usage.trackedResidentBytes = SaturatingAddSize(
+					usage.fixedSealedBytes, usage.evictableBytes);
+				return usage;
+			}
+		}
+
+		AtlasCacheTrimResult TrimAtlasCacheToTarget(AtlasState& state,
+			size_t targetEvictableBytes,
 			RetiredAtlasReleaseList& retiredReleases)
 		{
-			while (state.atlasCacheBytes > targetBytes && !state.atlasLru.empty())
+			LiveSealedAtlasProtection protection =
+				CollectLiveSealedAtlasProtectionLocked(state);
+			AtlasCacheTrimResult result;
+			result.targetEvictableBytes = targetEvictableBytes;
+			result.before = MeasureAtlasBudgetUsageLocked(state, protection);
+			result.after = result.before;
+			while (result.after.evictableBytes > targetEvictableBytes
+				&& !state.atlasLru.empty())
 			{
-				const AtlasCacheKey key = state.atlasLru.back();
-				auto it = state.atlasCache.find(key);
-				if (it != state.atlasCache.end())
+				auto victim = FindOldestAtlasBudgetVictim(
+					state.atlasLru.rbegin(), state.atlasLru.rend(),
+					[&](const AtlasCacheKey& key) -> AtlasCacheEntry*
+					{
+						const auto entry = state.atlasCache.find(key);
+						return entry != state.atlasCache.end()
+							? &entry->second : nullptr;
+					},
+					[&](const AtlasCacheKey& key, const AtlasCacheEntry& entry)
+					{
+						return IsProtectedByLiveSealedProfile(
+							key, entry, protection);
+					});
+				if (victim == state.atlasLru.rend())
+					break;
+
+				const auto lru = std::prev(victim.base());
+				const AtlasCacheKey key = *lru;
+				auto entry = state.atlasCache.find(key);
+				if (entry != state.atlasCache.end())
 				{
-					RetireDefaultGeneration(*it->second.resource);
+					if (entry->second.resource)
+						RetireDefaultGeneration(*entry->second.resource);
 					UnindexAtlasPage(state, key);
-					state.atlasCacheBytes -= it->second.bytes;
-					state.atlasCache.erase(it);
+					state.atlasCacheBytes = entry->second.bytes
+						<= state.atlasCacheBytes
+						? state.atlasCacheBytes - entry->second.bytes : 0;
+					state.atlasCache.erase(entry);
+					++result.evictedEntries;
 					RefreshAtlasCacheGpuAccountingLocked(state);
 				}
-				state.atlasLru.pop_back();
+				state.atlasLru.erase(lru);
+				result.after = MeasureAtlasBudgetUsageLocked(state, protection);
 			}
+			result.reachedTarget =
+				result.after.evictableBytes <= targetEvictableBytes;
 			CollectPrunableRetiredAtlasesLocked(retiredReleases);
+			// The protection snapshot can transiently become the last owner if a
+			// runtime profile is released concurrently. Transfer every atlas owner
+			// to the caller's lock-external release list before local profiles drop
+			// their references; Gamebryo/D3D destruction must not run under
+			// atlasMutex.
+			for (auto& resource : protection.resources)
+				retiredReleases.push_back(std::move(resource));
+			return result;
 		}
 
-		void TrimAtlasCache(AtlasState& state,
+		AtlasCacheTrimResult TrimAtlasCache(AtlasState& state,
 			RetiredAtlasReleaseList& retiredReleases)
 		{
-			if (IsGpuAtlasCacheUnlimited())
+			const size_t target = IsGpuAtlasCacheUnlimited()
+				? std::numeric_limits<size_t>::max() : GetAtlasCacheLimit();
+			AtlasCacheTrimResult result = TrimAtlasCacheToTarget(
+				state, target, retiredReleases);
+			if (!result.reachedTarget)
 			{
-				CollectPrunableRetiredAtlasesLocked(retiredReleases);
-				return;
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: atlas LRU trim incomplete policy=sealed-fixed-cost targetMiB=%.2f lruMiB=%.2f->%.2f fixedMiB=%.2f fixedPages=%u evictedEntries=%u",
+					result.targetEvictableBytes / (1024.0 * 1024.0),
+					result.before.evictableBytes / (1024.0 * 1024.0),
+					result.after.evictableBytes / (1024.0 * 1024.0),
+					result.after.fixedSealedBytes / (1024.0 * 1024.0),
+					result.after.fixedPhysicalPages,
+					result.evictedEntries);
 			}
-			TrimAtlasCacheToTarget(
-				state, GetAtlasCacheLimit(), retiredReleases);
+			return result;
 		}
 
-		void TrimAtlasCacheForIncomingBytes(AtlasState& state,
+		AtlasCacheTrimResult TrimAtlasCacheForIncomingBytes(AtlasState& state,
 			size_t incomingBytes, RetiredAtlasReleaseList& retiredReleases)
 		{
-			if (IsGpuAtlasCacheUnlimited())
-			{
-				CollectPrunableRetiredAtlasesLocked(retiredReleases);
-				return;
-			}
-			const size_t limit = GetAtlasCacheLimit();
-			TrimAtlasCacheToTarget(state,
-				incomingBytes < limit ? limit - incomingBytes : 0,
-				retiredReleases);
+			const size_t limit = IsGpuAtlasCacheUnlimited()
+				? std::numeric_limits<size_t>::max() : GetAtlasCacheLimit();
+			const size_t target = limit == std::numeric_limits<size_t>::max()
+				? limit : (incomingBytes < limit ? limit - incomingBytes : 0);
+			return TrimAtlasCacheToTarget(state, target, retiredReleases);
 		}
 
 		bool PlaceBitmap(AtlasResource& resource, const GlyphBitmap& bitmap, AtlasRect& rect)
