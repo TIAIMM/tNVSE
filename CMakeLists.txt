@@ -107,6 +107,50 @@ if(TNVSE_BUILD_DICTIONARY_TRANSLATION_GUARD_TESTS)
     COMMAND $<TARGET_FILE:tnvse_dictionary_translation_guard_tests>)
 endif()
 
+option(TNVSE_BUILD_MENU_SEARCH_OWNER_STATE_TESTS
+  "Build the deterministic Stewie MenuSearch owner-state tests" OFF)
+if(TNVSE_BUILD_MENU_SEARCH_OWNER_STATE_TESTS)
+  set(_tnvse_menu_search_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input/multibyte_input_menu_search.cpp")
+  file(READ "${_tnvse_menu_search_source}" _tnvse_menu_search_contents)
+  foreach(_tnvse_forbidden_menu_search_state IN ITEMS
+      "keyboardActive"
+      "stateSyncWasActive"
+      "kStewieMenuSearchSync_Toggle")
+    string(FIND "${_tnvse_menu_search_contents}"
+      "${_tnvse_forbidden_menu_search_state}" _tnvse_forbidden_offset)
+    if(NOT _tnvse_forbidden_offset EQUAL -1)
+      message(FATAL_ERROR
+        "MenuSearch absolute-owner-state gate failed: ${_tnvse_forbidden_menu_search_state}")
+    endif()
+  endforeach()
+  string(FIND "${_tnvse_menu_search_contents}"
+    "if (s_menuSearchAdaptersInstalled && !needsActiveMaintenance)"
+    _tnvse_inactive_fast_path_offset)
+  if(_tnvse_inactive_fast_path_offset EQUAL -1)
+    message(FATAL_ERROR
+      "MenuSearch inactive-discovery fast path was removed")
+  endif()
+  unset(_tnvse_inactive_fast_path_offset)
+  unset(_tnvse_forbidden_offset)
+  unset(_tnvse_forbidden_menu_search_state)
+  unset(_tnvse_menu_search_contents)
+  unset(_tnvse_menu_search_source)
+
+  enable_testing()
+  add_executable(tnvse_menu_search_owner_state_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/menu_search_owner_state_tests.cpp")
+  target_compile_features(tnvse_menu_search_owner_state_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_menu_search_owner_state_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input")
+  target_compile_options(tnvse_menu_search_owner_state_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_menu_search_owner_state_tests)
+  set_target_properties(tnvse_menu_search_owner_state_tests PROPERTIES
+    FOLDER "tNVSE/Tests")
+  add_test(NAME menu_search_owner_state
+    COMMAND $<TARGET_FILE:tnvse_menu_search_owner_state_tests>)
+endif()
+
 option(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS
   "Build the deterministic renderer reset recovery state tests" OFF)
 if(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS)
