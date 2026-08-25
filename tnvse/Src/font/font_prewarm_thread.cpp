@@ -346,6 +346,15 @@ namespace fonthook::vectorfont
 		void FontPrewarmWorkerMain(UInt64 runToken)
 		{
 			PrewarmCoordinatorState& coordinator = PrewarmCoordinator();
+			PrewarmRuntime().presentationRunToken = runToken;
+			PrewarmRuntime().rebuildProgressTracked = false;
+			PrewarmRuntime().rebuildProgressReportingStarted = false;
+			PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+			PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+			PrewarmRuntime().rebuildProgressPresentationClosed = false;
+			PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+			PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
+			PrewarmRuntime().rebuildProgress = 0.0f;
 			SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 			coordinator.runControl.Beat(runToken);
 			gLog.FormattedMessage(
@@ -353,9 +362,9 @@ namespace fonthook::vectorfont
 				static_cast<unsigned long>(GetCurrentThreadId()),
 				static_cast<unsigned long long>(runToken));
 
+			bool workerFailed = false;
 			for (;;)
 			{
-				bool failed = false;
 				{
 					std::unique_lock<std::mutex> lock(coordinator.mutex);
 					const bool ready = coordinator.condition.wait_for(lock,
@@ -401,7 +410,7 @@ namespace fonthook::vectorfont
 					coordinator.condition.notify_all();
 					if (status == FontPrewarmPumpStatus::Failed)
 					{
-						failed = true;
+						workerFailed = true;
 						break;
 					}
 					if (status == FontPrewarmPumpStatus::Active)
@@ -421,7 +430,8 @@ namespace fonthook::vectorfont
 					break;
 				}
 				if (IsFontPrewarmStopRequested()
-					|| coordinator.runControl.StopRequested(runToken) || failed)
+					|| coordinator.runControl.StopRequested(runToken)
+					|| workerFailed)
 					break;
 			}
 
@@ -440,6 +450,15 @@ namespace fonthook::vectorfont
 				static_cast<unsigned long>(GetCurrentThreadId()),
 				static_cast<unsigned long long>(runToken),
 				IsFontPrewarmStopRequested() ? 1u : 0u);
+			if (workerFailed)
+				CloseRebuildProgressReporting(
+					PrewarmOverlayCloseReason::Failed);
+			else if (IsFontPrewarmStopRequested()
+				|| coordinator.runControl.StopRequested(runToken))
+			{
+				CloseRebuildProgressReporting(
+					PrewarmOverlayCloseReason::Cancelled);
+			}
 			coordinator.runControl.MarkExited(runToken);
 			coordinator.condition.notify_all();
 		}
@@ -818,7 +837,12 @@ namespace fonthook::vectorfont
 				{
 					quitRequested = PumpPrewarmBarrierWindowMessages(quitCode);
 					if (quitRequested)
+					{
+						CloseNativePrewarmOverlay(
+							runToken,
+							PrewarmOverlayCloseReason::Cancelled);
 						RequestFontPrewarmStop();
+					}
 				}
 				ServiceFontPrewarmMainThread();
 
@@ -884,6 +908,9 @@ namespace fonthook::vectorfont
 				if (watchdogReason != PrewarmWatchdogReason::None)
 				{
 					status = FontPrewarmPumpStatus::Failed;
+					CloseNativePrewarmOverlay(
+						runToken,
+						PrewarmOverlayCloseReason::Watchdog);
 					gLog.FormattedMessage(
 						"tnvse_freetype_font: DeferredInit pre-entry prewarm watchdog fired run=%llu reason=%s elapsedMs=%llu stalledMs=%llu heartbeat=%llu policy=cancel-rollback-runtime-demand",
 						static_cast<unsigned long long>(runToken),
@@ -938,6 +965,8 @@ namespace fonthook::vectorfont
 				PrewarmWatchdogReasonName(watchdogReason),
 				workerReaped ? 1u : 0u,
 				status == FontPrewarmPumpStatus::Failed ? 1u : 0u);
+			LogNativePrewarmOverlayBarrierState(
+				runToken, "loading-barrier-end");
 			return status;
 		}
 

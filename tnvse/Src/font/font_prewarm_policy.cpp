@@ -478,107 +478,183 @@ namespace fonthook::vectorfont
 				return;
 			PrewarmRuntime().rebuildProgressTracked = true;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
-			PrewarmRuntime().rebuildProgressOverlayVisible = false;
+			PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+			PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+			PrewarmRuntime().rebuildProgressPresentationClosed = false;
+			PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+			PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			PrewarmRuntime().session.lastProgressUpdate = 0;
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm progress tracking latched reason=%s policy=cache-write-transaction presentation=graphical-only delivery=loading-thread-queued",
+				"tnvse_freetype_font: prewarm progress tracking latched reason=%s policy=cache-write-transaction presentation=graphical-only generation-only=1",
 				reason ? reason : "unknown");
 		}
 
 		void StartRebuildProgressReporting()
 		{
-			if (!PrewarmRuntime().rebuildProgressTracked || PrewarmRuntime().rebuildProgressReportingStarted)
+			PrewarmRuntimeState& state = PrewarmRuntime();
+			if (!state.rebuildProgressTracked
+				|| state.rebuildProgressPresentationClosed
+				|| !state.presentationRunToken)
+			{
 				return;
-			PrewarmRuntime().rebuildProgressReportingStarted = true;
-			PrewarmRuntime().rebuildProgressOverlayVisible = true;
-			PrewarmRuntime().session.lastProgressUpdate = 0;
-			UpdateNativePrewarmOverlay(PrewarmRuntime().rebuildProgress);
+			}
+
+			if (state.rebuildProgressReportingStarted)
+			{
+				if (!state.rebuildProgressPresentationSuspended)
+					return;
+				if (state.rebuildProgressNeedsBaselineReset)
+				{
+					state.rebuildProgressBaselineFinishedFonts =
+						state.session.finishedFonts;
+					state.rebuildProgressGenerationFontCount = std::max<UInt32>(
+						1, state.session.queuedFonts - std::min(
+							state.session.queuedFonts, state.session.finishedFonts));
+				}
+				state.rebuildProgressPresentationSuspended = false;
+				state.rebuildProgressNeedsBaselineReset = false;
+				state.session.lastProgressUpdate = 0;
+				PublishNativePrewarmOverlayProgress(
+					state.presentationRunToken, state.rebuildProgress);
+				return;
+			}
+
+			state.rebuildProgressReportingStarted = true;
+			state.rebuildProgressPresentationSuspended = false;
+			state.rebuildProgressNeedsBaselineReset = false;
+			state.rebuildProgressBaselineFinishedFonts =
+				state.session.finishedFonts;
+			state.rebuildProgressGenerationFontCount = std::max<UInt32>(
+				1, state.session.queuedFonts - std::min(
+					state.session.queuedFonts, state.session.finishedFonts));
+			state.rebuildProgress = 0.0f;
+			state.session.lastProgressUpdate = 0;
+			PublishNativePrewarmOverlayProgress(
+				state.presentationRunToken, 0.0f);
 			gLog.FormattedMessage(
-				"tnvse_freetype_font: prewarm progress reporting started presentation=graphical-only delivery=loading-thread-queued producerThread=%u",
-				GetCurrentThreadId());
+				"tnvse_freetype_font: prewarm progress reporting started run=%llu presentation=graphical-only scope=generation-only delivery=latest-state-mailbox producerThread=%u generationFonts=%u",
+				static_cast<unsigned long long>(state.presentationRunToken),
+				GetCurrentThreadId(),
+				state.rebuildProgressGenerationFontCount);
+		}
+
+		void SuspendRebuildProgressReporting(bool resetGenerationBaseline)
+		{
+			PrewarmRuntimeState& state = PrewarmRuntime();
+			if (!state.rebuildProgressReportingStarted
+				|| state.rebuildProgressPresentationClosed
+				|| state.rebuildProgressPresentationSuspended
+				|| !state.presentationRunToken)
+			{
+				return;
+			}
+			state.rebuildProgressPresentationSuspended = true;
+			state.rebuildProgressNeedsBaselineReset =
+				state.rebuildProgressNeedsBaselineReset || resetGenerationBaseline;
+			SuspendNativePrewarmOverlay(state.presentationRunToken);
+		}
+
+		void CloseRebuildProgressReporting(
+			PrewarmOverlayCloseReason reason)
+		{
+			PrewarmRuntimeState& state = PrewarmRuntime();
+			if (!state.rebuildProgressReportingStarted
+				|| state.rebuildProgressPresentationClosed
+				|| !state.presentationRunToken)
+			{
+				return;
+			}
+			if (reason == PrewarmOverlayCloseReason::Completed)
+			{
+				state.rebuildProgressPresentationSuspended = false;
+				ReportPrewarmTransactionProgress(1.0f, true);
+			}
+			CloseNativePrewarmOverlay(state.presentationRunToken, reason);
+			state.rebuildProgressPresentationClosed = true;
+			state.rebuildProgressPresentationSuspended = false;
+			state.rebuildProgressNeedsBaselineReset = false;
 		}
 
 		void ReportPrewarmTransactionProgress(
 			float progress, bool force = false)
 		{
 			ServiceFontPrewarmHostMessages();
-			if (!PrewarmRuntime().rebuildProgressTracked
-				|| !PrewarmRuntime().rebuildProgressReportingStarted)
+			PrewarmRuntimeState& state = PrewarmRuntime();
+			if (!state.rebuildProgressTracked
+				|| !state.rebuildProgressReportingStarted
+				|| state.rebuildProgressPresentationClosed)
+			{
 				return;
-			progress = std::max(PrewarmRuntime().rebuildProgress,
+			}
+			progress = std::max(state.rebuildProgress,
 				std::clamp(progress, 0.0f, 1.0f));
-			PrewarmRuntime().rebuildProgress = progress;
+			state.rebuildProgress = progress;
 			const ULONGLONG now = GetTickCount64();
-			if (!force && PrewarmRuntime().session.lastProgressUpdate
-				&& now - PrewarmRuntime().session.lastProgressUpdate
+			if (!force && state.session.lastProgressUpdate
+				&& now - state.session.lastProgressUpdate
 					< kMinimumProgressUpdateIntervalMs)
 			{
 				return;
 			}
-			PrewarmRuntime().session.lastProgressUpdate = now;
-			if (PrewarmRuntime().rebuildProgressOverlayVisible)
-				UpdateNativePrewarmOverlay(progress);
+			state.session.lastProgressUpdate = now;
+			if (!state.rebuildProgressPresentationSuspended)
+			{
+				PublishNativePrewarmOverlayProgress(
+					state.presentationRunToken, progress);
+			}
 			if (force)
 			{
 				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm progress percent=%u presentation=graphical-only delivery=loading-thread-queued",
+					"tnvse_freetype_font: prewarm generation progress percent=%u presentation=graphical-only delivery=latest-state-mailbox",
 					static_cast<UInt32>(std::lround(progress * 100.0f)));
 			}
 		}
 
-		void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontCount,
+		void ReportPrewarmProgress(const PrewarmJob& job, UInt32,
 			UInt32 finishedFonts,
 			float minimumJobProgress = 0.0f, bool force = false)
 		{
-			const float jobProgress = std::max(minimumJobProgress,
-				GetPrewarmJobProgress(job)
-					* kPrewarmGlyphGenerationProgressShare);
-			const float overall = kPrewarmFontWorkProgressShare * (fontCount
-				? (static_cast<float>(finishedFonts)
-					+ std::clamp(jobProgress, 0.0f, 1.0f)) / fontCount
-				: 1.0f);
+			const PrewarmRuntimeState& state = PrewarmRuntime();
+			const UInt32 baseline = state.rebuildProgressBaselineFinishedFonts;
+			const UInt32 completed = finishedFonts >= baseline
+				? finishedFonts - baseline : 0;
+			const float jobProgress = std::max(
+				minimumJobProgress, GetPrewarmJobProgress(job));
+			const float overall = state.rebuildProgressGenerationFontCount
+				? (static_cast<float>(completed)
+					+ std::clamp(jobProgress, 0.0f, 1.0f))
+					/ state.rebuildProgressGenerationFontCount
+				: 1.0f;
 			ReportPrewarmTransactionProgress(overall, force);
 		}
 
 		void ReportAtlasPrewarmProgress(FontAtlasPrewarmProgressStage stage,
 			UInt32 item, UInt32 total, void*)
 		{
-			const bool cacheWriteBoundary =
-				stage == FontAtlasPrewarmProgressStage::PublishPhysicalGroup
-				|| stage == FontAtlasPrewarmProgressStage::PublishPhysicalPool;
-			if (!cacheWriteBoundary
-				&& !PrewarmRuntime().rebuildProgressReportingStarted)
-			{
-				return;
-			}
-			float progress = 0.90f;
+			const char* stageName = nullptr;
 			switch (stage)
 			{
 			case FontAtlasPrewarmProgressStage::PublishPhysicalGroup:
-				LatchRebuildProgress("physical-group-publish");
-				StartRebuildProgressReporting();
-				progress = 0.91f;
+				stageName = "publish-physical-group";
 				break;
 			case FontAtlasPrewarmProgressStage::RestorePhysicalGroup:
-				progress = 0.93f;
+				stageName = "restore-physical-group";
 				break;
 			case FontAtlasPrewarmProgressStage::PlanPhysicalPools:
-				progress = 0.95f;
+				stageName = "plan-physical-pools";
 				break;
 			case FontAtlasPrewarmProgressStage::PublishPhysicalPool:
-				LatchRebuildProgress("physical-pool-publish");
-				StartRebuildProgressReporting();
-				progress = total
-					? 0.96f + 0.01f * static_cast<float>(item) / total
-					: 0.96f;
+				stageName = "publish-physical-pool";
 				break;
 			default:
 				return;
 			}
-			ReportPrewarmTransactionProgress(progress, true);
+			gLog.FormattedMessage(
+				"tnvse_freetype_font: atlas prewarm stage=%s item=%u total=%u presentation=none generation-window-closed=%u",
+				stageName, item, total,
+				PrewarmRuntime().rebuildProgressPresentationClosed ? 1u : 0u);
 		}
-
 		void FinishJob(const PrewarmJob& job, const char* status)
 		{
 			gLog.FormattedMessage(

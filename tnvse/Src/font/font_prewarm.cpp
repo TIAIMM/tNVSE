@@ -169,7 +169,11 @@ namespace fonthook::vectorfont
 					PrewarmRuntime().transactionRestartPending = false;
 					PrewarmRuntime().rebuildProgressTracked = false;
 					PrewarmRuntime().rebuildProgressReportingStarted = false;
-					PrewarmRuntime().rebuildProgressOverlayVisible = false;
+					PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+					PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+					PrewarmRuntime().rebuildProgressPresentationClosed = false;
+					PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+					PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 					PrewarmRuntime().rebuildProgress = 0.0f;
 					return FontPrewarmPumpStatus::Idle;
 				}
@@ -211,11 +215,8 @@ namespace fonthook::vectorfont
 		case PrewarmPhase::CleanupFlush:
 		{
 			const ULONGLONG started = GetTickCount64();
-			// A cache-writing cold transaction remains visibly active through final
-			// profile validation, physical atlas publication, and cleanup. A cache-hit
-			// startup never latches or starts progress reporting, so it stays UI-free.
-			StartRebuildProgressReporting();
-			ReportPrewarmTransactionProgress(0.87f, true);
+			// Generation has already closed its optional presentation. Cache flush,
+			// validation and physical atlas work deliberately remain UI-free.
 			EndAtlasOnlyPrewarmPolicy();
 			FlushGlyphBitmapDiskCache();
 			ReleaseGlyphBitmapDiskCacheMappings();
@@ -394,15 +395,17 @@ namespace fonthook::vectorfont
 			break;
 		}
 		case PrewarmPhase::Complete:
-			if (!QuiesceNativePrewarmOverlay(2000))
-			{
-				gLog.FormattedMessage(
-					"tnvse_freetype_font: prewarm progress final hide acknowledgement timed out; LoadingMenu owns remaining Tile teardown");
-			}
+			LogNativePrewarmOverlayBarrierState(
+				PrewarmRuntime().presentationRunToken,
+				"prewarm-complete");
 			PruneRetiredPrewarmAtlasGenerations();
 			PrewarmRuntime().rebuildProgressTracked = false;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
-			PrewarmRuntime().rebuildProgressOverlayVisible = false;
+			PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+			PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+			PrewarmRuntime().rebuildProgressPresentationClosed = false;
+			PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+			PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			ReleaseFontPrewarmEmergencyAddressSpace();
 			PrewarmRuntime().configuredFontsPrewarmed = true;
@@ -528,10 +531,18 @@ namespace fonthook::vectorfont
 		PrewarmRuntime().prewarmActive.store(false, std::memory_order_release);
 		PrewarmRuntime().prewarmWorkerThreadId.store(
 			0, std::memory_order_release);
-		HideNativePrewarmOverlay();
+		CloseRebuildProgressReporting(
+			PrewarmOverlayCloseReason::Shutdown);
+		LogNativePrewarmOverlayBarrierState(
+			PrewarmRuntime().presentationRunToken,
+			"prewarm-shutdown");
 		PrewarmRuntime().rebuildProgressTracked = false;
 		PrewarmRuntime().rebuildProgressReportingStarted = false;
-		PrewarmRuntime().rebuildProgressOverlayVisible = false;
+		PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+		PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+		PrewarmRuntime().rebuildProgressPresentationClosed = false;
+		PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+		PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 		PrewarmRuntime().rebuildProgress = 0.0f;
 	}
 }

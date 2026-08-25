@@ -399,7 +399,7 @@ bool NVSEPlugin_Load(const NVSEInterface* nvse)
 	TryRegisterShaderLoaderListener();
 
 	if (g_bEnableFreeTypeFontRendering)
-		fonthook::InstallNativePrewarmOverlayLoadingThreadHook();
+		fonthook::InstallNativePrewarmOverlayLoadingMenuUpdateHook();
 
 	if (g_bChangeJIPBigGunDesc)
 	{

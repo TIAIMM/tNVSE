@@ -107,21 +107,23 @@ if(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS)
     COMMAND $<TARGET_FILE:tnvse_renderer_reset_recovery_tests>)
 endif()
 
-option(TNVSE_BUILD_OWNER_THREAD_SHUTDOWN_TESTS
-  "Build the deterministic owner-thread shutdown latch tests" OFF)
-if(TNVSE_BUILD_OWNER_THREAD_SHUTDOWN_TESTS)
+option(TNVSE_BUILD_PREWARM_OVERLAY_MAILBOX_TESTS
+  "Build the deterministic prewarm overlay mailbox/owner-state tests" OFF)
+if(TNVSE_BUILD_PREWARM_OVERLAY_MAILBOX_TESTS)
   enable_testing()
-  add_executable(tnvse_owner_thread_shutdown_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/owner_thread_shutdown_latch_tests.cpp")
-  target_compile_features(tnvse_owner_thread_shutdown_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_owner_thread_shutdown_tests PRIVATE
+  add_executable(tnvse_prewarm_overlay_mailbox_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/prewarm_overlay_mailbox_tests.cpp")
+  target_compile_features(tnvse_prewarm_overlay_mailbox_tests PRIVATE cxx_std_20)
+  target_include_directories(tnvse_prewarm_overlay_mailbox_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game")
-  target_compile_options(tnvse_owner_thread_shutdown_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_owner_thread_shutdown_tests)
-  set_target_properties(tnvse_owner_thread_shutdown_tests PROPERTIES
+  target_compile_definitions(tnvse_prewarm_overlay_mailbox_tests PRIVATE
+    NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_compile_options(tnvse_prewarm_overlay_mailbox_tests PRIVATE /utf-8)
+  tnvse_apply_msvc_defaults(tnvse_prewarm_overlay_mailbox_tests)
+  set_target_properties(tnvse_prewarm_overlay_mailbox_tests PROPERTIES
     FOLDER "tNVSE/Tests")
-  add_test(NAME owner_thread_shutdown
-    COMMAND $<TARGET_FILE:tnvse_owner_thread_shutdown_tests>)
+  add_test(NAME prewarm_overlay_mailbox
+    COMMAND $<TARGET_FILE:tnvse_prewarm_overlay_mailbox_tests>)
 endif()
 
 option(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS
@@ -193,8 +195,56 @@ foreach(_tnvse_forbidden_prewarm_tag text font string)
       "FontPrewarmOverlay.xml must remain TileImage-only; forbidden tag: ${_tnvse_forbidden_prewarm_tag}")
   endif()
 endforeach()
+if(NOT _tnvse_prewarm_overlay_xml MATCHES
+    "<_tnvse_prewarm_progress>[ \t\r\n]*0[ \t\r\n]*</_tnvse_prewarm_progress>")
+  message(FATAL_ERROR
+    "FontPrewarmOverlay.xml must define root _tnvse_prewarm_progress=0")
+endif()
+if(NOT _tnvse_prewarm_overlay_xml MATCHES
+    "<mul[ \t\r\n]+src=\"parent\"[ \t\r\n]+trait=\"_tnvse_prewarm_progress\"")
+  message(FATAL_ERROR
+    "FontPrewarmOverlay.xml fill width must be driven by the root progress trait")
+endif()
 unset(_tnvse_forbidden_prewarm_tag)
 unset(_tnvse_prewarm_overlay_xml)
+set(_tnvse_prewarm_overlay_cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_prewarm.cpp")
+set(_tnvse_loading_menu_hooks_cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game/native_tile_overlay_hooks.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${_tnvse_prewarm_overlay_cpp}"
+  "${_tnvse_loading_menu_hooks_cpp}")
+file(READ "${_tnvse_prewarm_overlay_cpp}" _tnvse_prewarm_overlay_source)
+file(READ "${_tnvse_loading_menu_hooks_cpp}" _tnvse_loading_menu_hooks_source)
+foreach(_tnvse_forbidden_overlay_pattern
+    "Sleep[ \t\r\n]*\\("
+    "ReleaseAndDestroyAttachedRoot[ \t\r\n]*\\("
+    "SetText[ \t\r\n]*\\("
+    "RebuildTextGeometry[ \t\r\n]*\\("
+    "ScopedFreeTypeNoPrecacheRoute")
+  if(_tnvse_prewarm_overlay_source MATCHES
+      "${_tnvse_forbidden_overlay_pattern}")
+    message(FATAL_ERROR
+      "Prewarm overlay owner path contains forbidden operation: ${_tnvse_forbidden_overlay_pattern}")
+  endif()
+endforeach()
+foreach(_tnvse_removed_loading_menu_symbol
+    "LoadingMenuShowChangesHook"
+    "kLoadingMenuThreadShowChangesCallSite"
+    "TryEnterCriticalSection"
+    "OwnerThreadShutdownLatch")
+  if(_tnvse_loading_menu_hooks_source MATCHES
+      "${_tnvse_removed_loading_menu_symbol}")
+    message(FATAL_ERROR
+      "Removed LoadingMenu wrapper/lock remains in hook implementation: ${_tnvse_removed_loading_menu_symbol}")
+  endif()
+endforeach()
+unset(_tnvse_forbidden_overlay_pattern)
+unset(_tnvse_removed_loading_menu_symbol)
+unset(_tnvse_prewarm_overlay_source)
+unset(_tnvse_loading_menu_hooks_source)
+unset(_tnvse_prewarm_overlay_cpp)
+unset(_tnvse_loading_menu_hooks_cpp)
 set_source_files_properties(
   ${TNVSE_NATIVE_OVERLAY_XMLS}
   ${TNVSE_NATIVE_OVERLAY_TEXTURES}

@@ -36,8 +36,6 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		// authoritative ceiling.
 		constexpr ULONGLONG kTargetPrewarmBatchMs = 1000;
 		constexpr ULONGLONG kMinimumProgressUpdateIntervalMs = 100;
-		constexpr float kPrewarmFontWorkProgressShare = 0.86f;
-		constexpr float kPrewarmGlyphGenerationProgressShare = 0.80f;
 		constexpr size_t kMinimumPrewarmBatchBytes = 1u * 1024u * 1024u;
 		constexpr size_t kMaximumPrewarmBatchBytes = 24u * 1024u * 1024u;
 		constexpr size_t kPrewarmPerGlyphMetadataBytes = 512u;
@@ -224,9 +222,14 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		bool terminalPrewarmFailure = false;
 		std::atomic_bool prewarmActive{ false };
 		std::atomic<DWORD> prewarmWorkerThreadId{ 0 };
+		UInt64 presentationRunToken = 0;
 		bool rebuildProgressTracked = false;
 		bool rebuildProgressReportingStarted = false;
-		bool rebuildProgressOverlayVisible = false;
+		bool rebuildProgressPresentationSuspended = false;
+		bool rebuildProgressNeedsBaselineReset = false;
+		bool rebuildProgressPresentationClosed = false;
+		UInt32 rebuildProgressBaselineFinishedFonts = 0;
+		UInt32 rebuildProgressGenerationFontCount = 0;
 		float rebuildProgress = 0.0f;
 	};
 
@@ -257,6 +260,9 @@ namespace fonthook::vectorfont::implementation::font_prewarm
 		UInt32 parallelFloor, UInt32 completedGlyphs, ULONGLONG elapsedMs);
 	void LatchRebuildProgress(const char* reason);
 	void StartRebuildProgressReporting();
+	void SuspendRebuildProgressReporting(bool resetGenerationBaseline);
+	void CloseRebuildProgressReporting(
+		PrewarmOverlayCloseReason reason);
 	void ReportPrewarmTransactionProgress(float progress, bool force);
 	void ReportPrewarmProgress(const PrewarmJob& job, UInt32 fontCount,
 		UInt32 finishedFonts,

@@ -44,11 +44,6 @@ namespace fonthook
 		return OverlayRuntime().imeHostGeneration.load(std::memory_order_acquire);
 	}
 
-	bool IsNativePrewarmOverlayHostReady()
-	{
-		return OverlayRuntime().prewarmReady.load(std::memory_order_acquire);
-	}
-
 	void UpdateNativeImeOverlay(
 		const std::vector<NativeTileOverlayLine>& lines,
 		bool forceTextGeometryRefresh)
@@ -56,7 +51,7 @@ namespace fonthook
 		if (!IsNativeImeOverlayHostReady())
 			EnsureNativeImeOverlayHost();
 		if (!IsNativeImeOverlayHostReady()
-			|| OverlayRuntime().prewarmActive.load(std::memory_order_acquire))
+			|| IsNativePrewarmOverlayPresentationRequested())
 		{
 			HideNativeImeOverlay();
 			return;
@@ -283,122 +278,9 @@ namespace fonthook
 		OverlayRuntime().state.imeVisibleLineCount = 0;
 	}
 
-	void ShowNativePrewarmOverlay()
-	{
-		PublishPrewarmOverlayVisibility(true);
-	}
-
-	void UpdateNativePrewarmOverlay(float progress)
-	{
-		PublishPrewarmOverlayUpdate(progress);
-	}
-
-	void HideNativePrewarmOverlay()
-	{
-		PublishPrewarmOverlayVisibility(false);
-	}
-
-	bool QuiesceNativePrewarmOverlay(UInt32 timeoutMs)
-	{
-		const UInt32 sequence = PublishPrewarmOverlayVisibility(false);
-		if (!HasVerifiedLoadingMenuUpdateHook()
-			|| (!OverlayRuntime().prewarmConsumerThreadId.load(std::memory_order_acquire)
-				&& !OverlayRuntime().prewarmReady.load(std::memory_order_acquire)))
-		{
-			if (timeoutMs && g_bEnableFreeTypeFontRenderingLog)
-			{
-				LogNativeLoadingMenuDiagnostic(
-					"prewarm-quiesce-wait-skipped:no-reachable-consumer");
-			}
-			return true;
-		}
-
-		const ULONGLONG startedAt = GetTickCount64();
-		LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-begin");
-		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
-		while (OverlayRuntime().prewarmConsumedSequence.load(std::memory_order_acquire)
-			!= sequence)
-		{
-			if (GetTickCount64() >= deadline)
-			{
-				gLog.FormattedMessage(
-					"tnvse_native_overlay: timed out quiescing prewarm progress sequence=%u consumed=%u timeoutMs=%u policy=skip-atlas-publication",
-					sequence,
-					OverlayRuntime().prewarmConsumedSequence.load(
-						std::memory_order_acquire),
-						timeoutMs);
-				LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-timeout");
-				return false;
-			}
-			Sleep(1);
-		}
-		gLog.FormattedMessage(
-			"tnvse_native_overlay: quiesced prewarm progress sequence=%u consumed=%u waitMs=%llu",
-			sequence,
-			OverlayRuntime().prewarmConsumedSequence.load(
-				std::memory_order_acquire),
-			static_cast<unsigned long long>(GetTickCount64() - startedAt));
-		LogNativeLoadingMenuDiagnostic("prewarm-quiesce-wait-complete");
-		return true;
-	}
-
-	bool IsNativePrewarmOverlayActive()
-	{
-		return OverlayRuntime().prewarmActive.load(std::memory_order_acquire);
-	}
-
 	void ShutdownNativeTileOverlayHost()
 	{
-		// NVSE dispatches exit messages synchronously on the game thread without
-		// first joining LoadingMenuThread.  Publish owner-thread teardown and wait
-		// only for a bounded acknowledgement; never clear its raw Tile pointers here.
-		const UInt32 prewarmShutdownSequence =
-			PublishPrewarmOverlayOwnerShutdown();
 		OverlayRuntime().imeReady.store(false, std::memory_order_release);
-		OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
-		OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
-
-		constexpr UInt32 kOwnerShutdownTimeoutMs = 500;
-		const DWORD ownerThread = OverlayRuntime().prewarmConsumerThreadId.load(
-			std::memory_order_acquire);
-		const bool ownerReachable = HasVerifiedLoadingMenuUpdateHook()
-			&& (ownerThread
-				|| OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight());
-		bool ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
-			prewarmShutdownSequence);
-		if (!ownerQuiesced && ownerThread == GetCurrentThreadId())
-		{
-			ConsumeNativePrewarmOverlayCommand();
-			ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
-				prewarmShutdownSequence);
-		}
-		if (!ownerQuiesced && ownerReachable)
-		{
-			const ULONGLONG deadline =
-				GetTickCount64() + kOwnerShutdownTimeoutMs;
-			while (!OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
-				prewarmShutdownSequence)
-				&& GetTickCount64() < deadline)
-			{
-				Sleep(1);
-			}
-			ownerQuiesced = OverlayRuntime().prewarmOwnerShutdown.IsQuiesced(
-				prewarmShutdownSequence);
-		}
-		if (!ownerQuiesced
-			&& (ownerThread
-				|| OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight()))
-		{
-			gLog.FormattedMessage(
-				"tnvse_native_overlay: owner-thread prewarm shutdown acknowledgement unavailable sequence=%u ownerThread=%u inFlight=%u timeoutMs=%u policy=retain-owner-state-no-cross-thread-clear",
-				prewarmShutdownSequence, ownerThread,
-				OverlayRuntime().prewarmOwnerShutdown.OwnerWorkInFlight(),
-				kOwnerShutdownTimeoutMs);
-			LogNativeLoadingMenuDiagnostic(
-				"prewarm-owner-shutdown-wait-timeout");
-		}
-		OverlayRuntime().prewarmReady.store(false, std::memory_order_release);
-		OverlayRuntime().prewarmActive.store(false, std::memory_order_release);
 		InterfaceManager* manager = InterfaceManager::GetSingleton();
 		Tile* currentImeParent =
 			manager ? manager->pMenuRoot : nullptr;
@@ -411,8 +293,6 @@ namespace fonthook
 				"tNVSE_IME");
 		}
 		ResetImeForParent(nullptr);
-		LogNativeLoadingMenuDiagnostic(ownerQuiesced
-			? "native-overlay-shutdown-complete"
-			: "native-overlay-shutdown-retained-owner-state");
+		LogNativeLoadingMenuDiagnostic("native-overlay-shutdown-complete");
 	}
 }

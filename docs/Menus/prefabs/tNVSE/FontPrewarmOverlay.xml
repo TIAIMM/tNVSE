@@ -8,6 +8,7 @@
 	<width> <copy src="screen" trait="width" /> </width>
 	<height> <copy src="screen" trait="height" /> </height>
 	<depth> 0 </depth>
+	<_tnvse_prewarm_progress> 0 </_tnvse_prewarm_progress>
 
 	<image name="tNVSE_Prewarm_Shade">
 		<filename> Interface\Shared\Background\solid_black.dds </filename>
@@ -104,7 +105,10 @@
 		<target> &false; </target>
 		<x> <copy src="sibling(tNVSE_Prewarm_Track)" trait="x" /> </x>
 		<y> <copy src="sibling(tNVSE_Prewarm_Track)" trait="y" /> </y>
-		<width> 0 </width>
+		<width>
+			<copy src="sibling(tNVSE_Prewarm_Track)" trait="width" />
+			<mul src="parent" trait="_tnvse_prewarm_progress" />
+		</width>
 		<height> <copy src="sibling(tNVSE_Prewarm_Track)" trait="height" /> </height>
 		<red> 98 </red>
 		<green> 166 </green>

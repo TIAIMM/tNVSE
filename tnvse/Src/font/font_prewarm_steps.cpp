@@ -13,6 +13,11 @@ namespace fonthook::vectorfont
 			{
 				SortPrewarmJobsByDependencies(
 					PrewarmRuntime().session.generationJobs);
+				if (PrewarmRuntime().session.generationJobs.empty())
+				{
+					CloseRebuildProgressReporting(
+						PrewarmOverlayCloseReason::Completed);
+				}
 				TransitionPrewarmPhase(PrewarmRuntime().session.generationJobs.empty()
 					? PrewarmPhase::CleanupFlush
 					: PrewarmPhase::BeginFont);
@@ -138,6 +143,8 @@ namespace fonthook::vectorfont
 		{
 			if (PrewarmRuntime().session.generationJobs.empty())
 			{
+				CloseRebuildProgressReporting(
+					PrewarmOverlayCloseReason::Completed);
 				TransitionPrewarmPhase(PrewarmPhase::CleanupFlush);
 				return;
 			}
@@ -879,6 +886,7 @@ namespace fonthook::vectorfont
 				PrewarmRuntime().session.restoreJobs.push_front(std::move(retryJob));
 				ReportPrewarmTransactionProgress(
 					PrewarmRuntime().rebuildProgress, true);
+				SuspendRebuildProgressReporting(false);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 				return;
@@ -906,6 +914,7 @@ namespace fonthook::vectorfont
 				PrewarmRuntime().session.restoreJobs.push_front(std::move(retryJob));
 				ReportPrewarmTransactionProgress(
 					PrewarmRuntime().rebuildProgress, true);
+				SuspendRebuildProgressReporting(false);
 				RecordPrewarmStep(stepStarted);
 				TransitionPrewarmPhase(PrewarmPhase::RestoreSnapshots);
 				return;

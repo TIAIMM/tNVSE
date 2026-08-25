@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ITypes.h"
+#include "prewarm_overlay_mailbox.h"
 
 #include <string>
 #include <string_view>
@@ -8,6 +9,9 @@
 
 namespace fonthook
 {
+	using PrewarmOverlayCloseReason =
+		implementation::native_tile_overlay::PrewarmOverlayCloseReason;
+
 	struct NativeTileOverlayLine
 	{
 		std::wstring text;
@@ -15,9 +19,8 @@ namespace fonthook
 	};
 
 	bool EnsureNativeImeOverlayHost();
-	bool InstallNativePrewarmOverlayLoadingThreadHook();
+	bool InstallNativePrewarmOverlayLoadingMenuUpdateHook();
 	bool IsNativeImeOverlayHostReady();
-	bool IsNativePrewarmOverlayHostReady();
 	bool IsNativeImeOverlayVisible();
 	UInt32 GetNativeImeOverlayHostGeneration();
 
@@ -26,16 +29,17 @@ namespace fonthook
 		bool forceTextGeometryRefresh = false);
 	void HideNativeImeOverlay();
 
-	void ShowNativePrewarmOverlay();
-	void UpdateNativePrewarmOverlay(float progress);
-	void HideNativePrewarmOverlay();
-	bool QuiesceNativePrewarmOverlay(UInt32 timeoutMs);
-	bool IsNativePrewarmOverlayActive();
+	void PublishNativePrewarmOverlayProgress(
+		UInt64 runToken, float progress);
+	void SuspendNativePrewarmOverlay(UInt64 runToken);
+	void CloseNativePrewarmOverlay(
+		UInt64 runToken, PrewarmOverlayCloseReason reason);
+	bool IsNativePrewarmOverlayPresentationRequested();
+	void LogNativePrewarmOverlayBarrierState(
+		UInt64 runToken, const char* barrier);
 
-	// Emits one correlated snapshot of the LoadingMenu owner thread, hook phase,
-	// renderer hand-off, and queued prewarm overlay state. The periodic pump is
-	// intentionally rate-limited and becomes verbose only when the existing
-	// FreeType rendering log option is enabled.
+	// LoadingMenu text diagnostics are independent of the graphical prewarm
+	// mailbox. They continue to cover vanilla and third-party TileText paths.
 	void LogNativeLoadingMenuDiagnostic(const char* event);
 	void PumpNativeLoadingMenuDiagnostics();
 	void BeginNativeLoadingMenuTextGeometryDiagnostic(

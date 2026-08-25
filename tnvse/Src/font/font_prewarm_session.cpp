@@ -179,16 +179,17 @@ namespace fonthook::vectorfont
 				0, std::memory_order_release);
 			try
 			{
-				if (!QuiesceNativePrewarmOverlay(2000))
-				{
-					gLog.FormattedMessage(
-						"tnvse_freetype_font: terminal prewarm failure overlay hide acknowledgement timed out; LoadingMenu owns remaining Tile teardown");
-				}
+				CloseRebuildProgressReporting(
+					PrewarmOverlayCloseReason::Failed);
 			}
 			catch (...) {}
 			PrewarmRuntime().rebuildProgressTracked = false;
 			PrewarmRuntime().rebuildProgressReportingStarted = false;
-			PrewarmRuntime().rebuildProgressOverlayVisible = false;
+			PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+			PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+			PrewarmRuntime().rebuildProgressPresentationClosed = true;
+			PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+			PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 			PrewarmRuntime().rebuildProgress = 0.0f;
 			try
 			{
@@ -223,6 +224,7 @@ namespace fonthook::vectorfont
 			{
 				ReportPrewarmTransactionProgress(
 					PrewarmRuntime().rebuildProgress, true);
+				SuspendRebuildProgressReporting(true);
 			}
 			PrewarmRuntime().session = {};
 			PrewarmRuntime().jobs.clear();
@@ -384,7 +386,11 @@ namespace fonthook::vectorfont
 					EndAtlasOnlyPrewarmPolicy();
 					PrewarmRuntime().rebuildProgressTracked = false;
 					PrewarmRuntime().rebuildProgressReportingStarted = false;
-					PrewarmRuntime().rebuildProgressOverlayVisible = false;
+					PrewarmRuntime().rebuildProgressPresentationSuspended = false;
+					PrewarmRuntime().rebuildProgressNeedsBaselineReset = false;
+					PrewarmRuntime().rebuildProgressPresentationClosed = false;
+					PrewarmRuntime().rebuildProgressBaselineFinishedFonts = 0;
+					PrewarmRuntime().rebuildProgressGenerationFontCount = 0;
 					PrewarmRuntime().rebuildProgress = 0.0f;
 					TransitionPrewarmPhase(PrewarmPhase::Idle);
 				}

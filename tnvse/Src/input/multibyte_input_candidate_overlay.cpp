@@ -89,7 +89,7 @@ namespace fonthook
 		{
 			return g_bMultibyteInputCompositionPreview
 				&& IsNativeImeOverlayHostReady()
-				&& !IsNativePrewarmOverlayActive();
+				&& !IsNativePrewarmOverlayPresentationRequested();
 		}
 
 		void HideCandidateOverlay()
@@ -135,7 +135,7 @@ namespace fonthook
 				state.overlayRefreshPending = true;
 
 			if (!g_bMultibyteInputCompositionPreview
-				|| IsNativePrewarmOverlayActive()
+				|| IsNativePrewarmOverlayPresentationRequested()
 				|| !IsCandidateOverlayRendererAvailable()
 				|| !state.candidate.imeOpen)
 			{
