@@ -941,6 +941,13 @@ namespace fonthook::vectorfont
 		{
 			if (beforeReset)
 			{
+				ShaderState().resetSequence.fetch_add(
+					1u, std::memory_order_acq_rel);
+				ShaderState().resetPhaseEnteredAt.store(
+					GetTickCount64(), std::memory_order_release);
+				ShaderState().resetPhase.store(
+					NativeRendererResetDiagnosticPhase::ReleasingResources,
+					std::memory_order_release);
 				ShaderState().resetLifecycle.Begin();
 				const UInt32 deviceEpoch = ShaderState().deviceEpoch.fetch_add(
 					1u, std::memory_order_acq_rel) + 1u;
@@ -958,15 +965,30 @@ namespace fonthook::vectorfont
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: generation-invalidated reason=device-reset generation=%u deviceEpoch=%u phase=release; dynamic VB/IB ring released",
 					current ? current->id : 0, deviceEpoch);
+				ShaderState().resetPhaseEnteredAt.store(
+					GetTickCount64(), std::memory_order_release);
+				ShaderState().resetPhase.store(
+					NativeRendererResetDiagnosticPhase::AwaitingDeviceReset,
+					std::memory_order_release);
 				return true;
 			}
 
+			ShaderState().resetPhaseEnteredAt.store(
+				GetTickCount64(), std::memory_order_release);
+			ShaderState().resetPhase.store(
+				NativeRendererResetDiagnosticPhase::RebuildingResources,
+				std::memory_order_release);
 			ShaderState().resetLifecycle.Complete();
 			if (!InitializeNativeFontRenderer(true, true))
 			{
 				gLog.FormattedMessage(
 					"tnvse_freetype_native: initialization unavailable reason=device-reset phase=rebuild; no complete native generation available");
 			}
+			ShaderState().resetPhaseEnteredAt.store(
+				GetTickCount64(), std::memory_order_release);
+			ShaderState().resetPhase.store(
+				NativeRendererResetDiagnosticPhase::Complete,
+				std::memory_order_release);
 			return true;
 		}
 	}

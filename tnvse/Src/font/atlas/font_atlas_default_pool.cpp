@@ -177,9 +177,6 @@ namespace fonthook::vectorfont
 
 		bool DefaultPoolResetCallback(bool beforeReset, void*)
 		{
-			LogNativeLoadingMenuDiagnostic(beforeReset
-				? "d3d-reset-callback:before-enter"
-				: "d3d-reset-callback:after-enter");
 			AtlasState& state = State();
 			UInt32 waitedPublications = 0;
 			UInt64 deviceEpoch = 0;
@@ -376,9 +373,6 @@ namespace fonthook::vectorfont
 			}
 			retiredReleases.clear();
 			LeaveDefaultPoolResetBarrier(beforeReset);
-			LogNativeLoadingMenuDiagnostic(beforeReset
-				? "d3d-reset-callback:before-complete"
-				: "d3d-reset-callback:after-complete");
 			if (logResetTiming)
 			{
 				const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(

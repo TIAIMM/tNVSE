@@ -1129,6 +1129,25 @@ namespace fonthook::vectorfont
 		UInt32 rasterScaleMilliActual = 0;
 	};
 
+	struct DirectProfileFailureLogDecision
+	{
+		bool shouldLog = false;
+		bool stateChanged = false;
+		UInt64 occurrences = 0;
+		UInt64 suppressedSinceLog = 0;
+		UInt64 previousOccurrences = 0;
+		UInt64 previousSuppressed = 0;
+	};
+
+	struct DirectProfileFailureRecovery
+	{
+		bool recovered = false;
+		UInt64 signature = 0;
+		UInt64 occurrences = 0;
+		UInt64 suppressed = 0;
+		ULONGLONG startedAt = 0;
+	};
+
 	extern std::unordered_map<UInt32, FontConfig> g_configs;
 
 	const FontConfig* FindConfig(UInt32 auiFontId);
@@ -1166,6 +1185,12 @@ namespace fonthook::vectorfont
 	const FontConfig& GetRuntimeConfig(const RuntimeFont& arRuntime);
 	bool HasRuntimePublishedSealedDirectProfile(
 		const RuntimeFont& arRuntime) noexcept;
+	DirectProfileFailureLogDecision RecordRuntimeDirectProfileFailure(
+		RuntimeFont& arRuntime, UInt64 auiSignature,
+		DirectProfileAcquireStatus aeStatus,
+		ULONGLONG auiNow) noexcept;
+	DirectProfileFailureRecovery ConsumeRuntimeDirectProfileFailureRecovery(
+		RuntimeFont& arRuntime, bool abAllowRasterScaleMismatch) noexcept;
 	UInt64 GetRuntimeDirectLayoutIdentity(const RuntimeFont& arRuntime);
 	UInt64 GetRuntimeDirectRoleLayoutIdentity(RuntimeFont& arRuntime,
 		VectorFontByteClass aeByteClass);

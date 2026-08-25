@@ -119,6 +119,81 @@ namespace fonthook::implementation::native_tile_overlay
 		LoadingTextMakeNode,
 	};
 
+	enum class LoadingTransitionKind : UInt32
+	{
+		None = 0,
+		SaveLoad,
+		FastTravel,
+		NonSaveLoading,
+	};
+
+	enum class LoadingTransitionTerminalReason : UInt32
+	{
+		None = 0,
+		SavePostLoad,
+		LoadingMenuClosed,
+		Superseded,
+		Shutdown,
+	};
+
+	enum class LoadingMenuUpdateDiagnosticPhase : UInt32
+	{
+		Idle = 0,
+		Predecessor,
+		PrewarmCommand,
+	};
+
+	struct LoadingTransitionDiagnosticState
+	{
+		std::atomic_bool runtimeArmed{ false };
+		std::atomic_bool inactiveBaselineObserved{ false };
+		std::atomic_bool captureEnabled{ false };
+		std::atomic<UInt64> nextTraceId{ 0 };
+		std::atomic<UInt64> activeTraceId{ 0 };
+		std::atomic<UInt64> eventSequence{ 0 };
+		std::atomic<LoadingTransitionKind> kind{
+			LoadingTransitionKind::None
+		};
+		std::atomic<ULONGLONG> startedAt{ 0 };
+		std::atomic<ULONGLONG> terminalRequestedAt{ 0 };
+		std::atomic<ULONGLONG> observationStartedAt{ 0 };
+		std::atomic<LoadingTransitionTerminalReason> terminalReason{
+			LoadingTransitionTerminalReason::None
+		};
+		std::atomic<UInt32> terminalSucceeded{ 0 };
+		std::atomic<ULONGLONG> nextSnapshotAt{ 0 };
+		std::atomic<ULONGLONG> lastLoadingThreadStaleLogAt{ 0 };
+
+		std::atomic<UInt64> mainLoopSequence{ 0 };
+		std::atomic<ULONGLONG> lastMainLoopAt{ 0 };
+		std::atomic<UInt32> mainThreadId{ 0 };
+		std::atomic<NativeLoadingMainThreadStage> mainThreadStage{
+			NativeLoadingMainThreadStage::Idle
+		};
+
+		std::atomic<UInt64> loadingUpdateEnterSequence{ 0 };
+		std::atomic<UInt64> loadingUpdateExitSequence{ 0 };
+		std::atomic<ULONGLONG> lastLoadingUpdateEnterAt{ 0 };
+		std::atomic<ULONGLONG> lastLoadingUpdateExitAt{ 0 };
+		std::atomic<UInt32> lastLoadingUpdateDurationUs{ 0 };
+		std::atomic<UInt32> loadingUpdateInFlight{ 0 };
+		std::atomic<UInt32> loadingThreadId{ 0 };
+		std::atomic<LoadingMenuUpdateDiagnosticPhase> loadingUpdatePhase{
+			LoadingMenuUpdateDiagnosticPhase::Idle
+		};
+
+		std::atomic<UInt32> loadingMenuActive{ 0 };
+		std::atomic<UInt32> loadingMenuObserved{ 0 };
+		std::atomic<UInt32> saveReadObserved{ 0 };
+		std::atomic<UInt32> savePostLoadObserved{ 0 };
+		std::atomic<UInt32> savePathHash{ 0 };
+		std::atomic<SIZE_T> fastTravelRef{ 0 };
+		std::atomic<SIZE_T> destinationRef{ 0 };
+		std::atomic<UInt32> fastTravelFormId{ 0 };
+		std::atomic<UInt32> destinationFormId{ 0 };
+		std::atomic<UInt32> movingIntoNewSpace{ 0 };
+	};
+
 	struct LoadingMenuDiagnosticState
 	{
 		std::atomic<UInt64> traceId{ 0 };
@@ -145,6 +220,7 @@ namespace fonthook::implementation::native_tile_overlay
 	{
 		NativeTileOverlayState state;
 		LoadingMenuDiagnosticState loadingMenuDiagnostics;
+		LoadingTransitionDiagnosticState loadingTransitionDiagnostics;
 		std::atomic_bool imeReady{ false };
 		std::atomic<UInt32> imeHostGeneration{ 1 };
 		PrewarmOverlayMailbox prewarmMailbox;

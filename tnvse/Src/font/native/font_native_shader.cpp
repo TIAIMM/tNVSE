@@ -51,6 +51,26 @@ namespace fonthook::vectorfont
 	}
 	}
 
+	NativeRendererResetDiagnosticSnapshot
+		GetNativeRendererResetDiagnosticSnapshot() noexcept
+	{
+		NativeRendererResetDiagnosticSnapshot snapshot;
+		snapshot.resetSequence = ShaderState().resetSequence.load(
+			std::memory_order_acquire);
+		snapshot.phase = ShaderState().resetPhase.load(
+			std::memory_order_acquire);
+		snapshot.phaseEnteredAt = ShaderState().resetPhaseEnteredAt.load(
+			std::memory_order_acquire);
+		snapshot.deviceEpoch = ShaderState().deviceEpoch.load(
+			std::memory_order_acquire);
+		snapshot.generation = ShaderState().publishedGenerationId.load(
+			std::memory_order_acquire);
+		snapshot.inProgress = ShaderState().resetLifecycle.InProgress();
+		snapshot.recoveryPending =
+			ShaderState().resetLifecycle.RecoveryPending();
+		return snapshot;
+	}
+
 	bool DeferInterruptedNativeFontRendererResetRecovery(const char* reason)
 	{
 		// Retail NiDX9Renderer::Reset (0xE736B0) returns immediately when any
@@ -152,6 +172,8 @@ namespace fonthook::vectorfont
 
 		candidate->id = ShaderState().nextGeneration++;
 		ShaderState().processGenerations.push_back(candidate);
+		ShaderState().publishedGenerationId.store(
+			candidate->id, std::memory_order_release);
 		ShaderState().publishedGeneration.store(candidate, std::memory_order_release);
 		NotifyNativeFontCommandExternalMutation(
 			NativeFontCommandFallback::Generation);
@@ -184,6 +206,16 @@ namespace fonthook::vectorfont
 		// foreign callback aborted the chain before our after phase was reached.
 		const auto recovery =
 			ShaderState().resetLifecycle.ClaimForMainLoop();
+		const bool recoveryRequested = recovery.orphanedBefore
+			|| recovery.recoveryPending;
+		if (recoveryRequested)
+		{
+			ShaderState().resetPhaseEnteredAt.store(
+				GetTickCount64(), std::memory_order_release);
+			ShaderState().resetPhase.store(
+				NativeRendererResetDiagnosticPhase::RebuildingResources,
+				std::memory_order_release);
+		}
 		if (recovery.orphanedBefore)
 		{
 			NativeShaderGeneration* interrupted =
@@ -203,6 +235,14 @@ namespace fonthook::vectorfont
 			InitializeNativeFontRenderer(
 				recovery.recoveryPending || deviceChanged,
 				recovery.recoveryPending);
+		if (recoveryRequested)
+		{
+			ShaderState().resetPhaseEnteredAt.store(
+				GetTickCount64(), std::memory_order_release);
+			ShaderState().resetPhase.store(
+				NativeRendererResetDiagnosticPhase::Complete,
+				std::memory_order_release);
+		}
 	}
 
 	void HandleNativeFontShaderLoaderMessage(UInt32 messageType)

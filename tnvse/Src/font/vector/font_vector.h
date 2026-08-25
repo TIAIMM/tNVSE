@@ -76,6 +76,63 @@ namespace fonthook
 			RasterScaleMismatch,
 		};
 
+		struct DirectProfileDiagnosticSnapshot
+		{
+			UInt64 totalFailures = 0;
+			UInt64 totalSuppressed = 0;
+			UInt64 totalRecoveries = 0;
+			ULONGLONG lastFailureAt = 0;
+			ULONGLONG lastRecoveryAt = 0;
+			UInt64 activeFailureSignature = 0;
+			UInt32 lastFontId = 0;
+			DirectProfileAcquireStatus lastStatus =
+				DirectProfileAcquireStatus::NotAttempted;
+		};
+
+		enum class DefaultPoolResetDiagnosticPhase : UInt32
+		{
+			Idle = 0,
+			WaitingForPublications,
+			ReleasingResources,
+			AwaitingDeviceReset,
+			RebuildingResources,
+			Cancelled,
+			Shutdown,
+		};
+
+		enum class NativeRendererResetDiagnosticPhase : UInt32
+		{
+			Idle = 0,
+			ReleasingResources,
+			AwaitingDeviceReset,
+			RebuildingResources,
+			Complete,
+		};
+
+		struct DefaultPoolAtlasDiagnosticSnapshot
+		{
+			UInt64 resetSequence = 0;
+			DefaultPoolResetDiagnosticPhase phase =
+				DefaultPoolResetDiagnosticPhase::Idle;
+			ULONGLONG phaseEnteredAt = 0;
+			UInt64 deviceEpoch = 0;
+			UInt32 activePublications = 0;
+			bool resetInProgress = false;
+			bool maintenancePending = false;
+		};
+
+		struct NativeRendererResetDiagnosticSnapshot
+		{
+			UInt64 resetSequence = 0;
+			NativeRendererResetDiagnosticPhase phase =
+				NativeRendererResetDiagnosticPhase::Idle;
+			ULONGLONG phaseEnteredAt = 0;
+			UInt32 deviceEpoch = 0;
+			UInt32 generation = 0;
+			bool inProgress = false;
+			bool recoveryPending = false;
+		};
+
 		inline constexpr UInt8 kDirectProfileFailureEpoch = 1u << 0;
 		inline constexpr UInt8 kDirectProfileFailureLayoutIdentity = 1u << 1;
 		inline constexpr UInt8 kDirectProfileFailureCodePage = 1u << 2;
@@ -231,6 +288,13 @@ namespace fonthook
 		FreeTypeLongTextTrace* GetActiveFreeTypeLongTextTrace() noexcept;
 		const char* DirectProfileAcquireStatusName(
 			DirectProfileAcquireStatus aeStatus) noexcept;
+		DirectProfileDiagnosticSnapshot
+			GetDirectProfileDiagnosticSnapshot() noexcept;
+		DefaultPoolAtlasDiagnosticSnapshot
+			GetDefaultPoolAtlasDiagnosticSnapshot(
+				bool abIncludeMaintenance = true) noexcept;
+		NativeRendererResetDiagnosticSnapshot
+			GetNativeRendererResetDiagnosticSnapshot() noexcept;
 		const char* PreparedTextSidecarReasonName(
 			PreparedTextSidecarReason aeReason) noexcept;
 		const char* VectorTextBuildRouteName(

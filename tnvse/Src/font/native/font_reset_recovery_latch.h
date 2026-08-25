@@ -56,6 +56,11 @@ namespace fonthook::vectorfont::implementation
 			return m_inProgress.load(std::memory_order_acquire);
 		}
 
+		bool RecoveryPending() const noexcept
+		{
+			return m_recoveryPending.load(std::memory_order_acquire);
+		}
+
 	private:
 		std::atomic<bool> m_inProgress{ false };
 		std::atomic<bool> m_recoveryPending{ false };

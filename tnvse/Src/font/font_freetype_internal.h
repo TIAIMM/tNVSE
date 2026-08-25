@@ -564,6 +564,17 @@ namespace fonthook::vectorfont
 		std::atomic<std::shared_ptr<const SealedDirectFontProfile>>
 			sealedDirectProfile;
 		std::atomic<UInt64> sealedDirectProfilePublicationEpoch{ 1 };
+		// Diagnostic-only failure coalescing. The direct-profile acquire path may
+		// be reached hundreds of times per frame after one invalidation; retain the
+		// state transition and aggregate counts without synchronously logging every
+		// probe from render and LoadingMenu threads.
+		std::atomic<UInt64> directProfileFailureSignature{ 0 };
+		std::atomic<UInt32> directProfileFailureStatus{
+			static_cast<UInt32>(DirectProfileAcquireStatus::NotAttempted)
+		};
+		std::atomic<UInt64> directProfileFailureOccurrences{ 0 };
+		std::atomic<UInt64> directProfileFailureSuppressed{ 0 };
+		std::atomic<ULONGLONG> directProfileFailureStartedAt{ 0 };
 	};
 
 	static_assert(sizeof(PersistentFontHashRecord) == 68);

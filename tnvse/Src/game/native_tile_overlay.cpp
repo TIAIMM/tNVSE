@@ -280,6 +280,7 @@ namespace fonthook
 
 	void ShutdownNativeTileOverlayHost()
 	{
+		ShutdownNativeLoadingTransitionDiagnostics();
 		OverlayRuntime().imeReady.store(false, std::memory_order_release);
 		InterfaceManager* manager = InterfaceManager::GetSingleton();
 		Tile* currentImeParent =

@@ -18,6 +18,16 @@ namespace fonthook
 		bool highlighted = false;
 	};
 
+	enum class NativeLoadingMainThreadStage : UInt32
+	{
+		Idle = 0,
+		LoadingDiagnostics,
+		PrepareConfiguredFonts,
+		NativeRendererMaintenance,
+		DefaultPoolAtlasMaintenance,
+		PerformanceReporting,
+	};
+
 	bool EnsureNativeImeOverlayHost();
 	bool InstallNativePrewarmOverlayLoadingMenuUpdateHook();
 	bool IsNativeImeOverlayHostReady();
@@ -40,8 +50,15 @@ namespace fonthook
 
 	// LoadingMenu text diagnostics are independent of the graphical prewarm
 	// mailbox. They continue to cover vanilla and third-party TileText paths.
+	void ArmNativeLoadingTransitionDiagnostics();
+	void HandleNativeLoadingTransitionMessage(
+		UInt32 messageType, const void* data, UInt32 dataLength);
+	void SetNativeLoadingMainThreadDiagnosticStage(
+		NativeLoadingMainThreadStage stage) noexcept;
+	UInt64 GetNativeLoadingTransitionTraceId() noexcept;
+	void ShutdownNativeLoadingTransitionDiagnostics();
 	void LogNativeLoadingMenuDiagnostic(const char* event);
-	void PumpNativeLoadingMenuDiagnostics();
+	bool PumpNativeLoadingMenuDiagnostics();
 	void BeginNativeLoadingMenuTextGeometryDiagnostic(
 		const void* tile, const char* tileName, float fontTrait);
 	void EndNativeLoadingMenuTextGeometryDiagnostic(

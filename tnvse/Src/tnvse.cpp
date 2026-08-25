@@ -238,6 +238,15 @@ namespace
 // ReSharper disable once CppParameterMayBeConstPtrOrRef
 void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 {
+	if (g_msg && g_msg->sender
+		&& std::strcmp(g_msg->sender, "NVSE") == 0
+		&& (g_msg->type == NVSEMessagingInterface::kMessage_PreLoadGame
+		|| g_msg->type == NVSEMessagingInterface::kMessage_LoadGame
+		|| g_msg->type == NVSEMessagingInterface::kMessage_PostLoadGame))
+	{
+		fonthook::HandleNativeLoadingTransitionMessage(
+			g_msg->type, g_msg->data, g_msg->dataLen);
+	}
 	if (g_msg && g_msg->sender && std::strcmp(g_msg->sender, "Shader Loader") == 0)
 	{
 		if (fonthook::AreFreeTypeFontHooksInstalled())
@@ -265,19 +274,48 @@ void MessageHandler(NVSEMessagingInterface::Message* const g_msg)
 			PrepareConfiguredGameFonts();
 			fonthook::RunFreeTypeFontPrewarmLoadingBarrier();
 		}
+		fonthook::ArmNativeLoadingTransitionDiagnostics();
 	}
 	if (g_msg && g_msg->type == NVSEMessagingInterface::kMessage_MainGameLoop)
 	{
-		// This remains active even when optional prewarm UI is disabled. It samples
-		// only atomics/raw singleton pointers and reports a LoadingMenu hook phase
-		// that has remained in flight, which is essential for non-crashing hangs.
-		fonthook::PumpNativeLoadingMenuDiagnostics();
+		// This remains active even when optional prewarm UI is disabled. The idle
+		// path samples LoadingMenu only every fourth frame; detailed stage writes are
+		// enabled only for an observed loading transition.
+		const bool loadingDiagnosticsActive =
+			fonthook::PumpNativeLoadingMenuDiagnostics();
 		if (fonthook::AreFreeTypeFontHooksInstalled())
 		{
+			if (loadingDiagnosticsActive)
+			{
+				fonthook::SetNativeLoadingMainThreadDiagnosticStage(
+					fonthook::NativeLoadingMainThreadStage::PrepareConfiguredFonts);
+			}
 			PrepareConfiguredGameFonts();
+			if (loadingDiagnosticsActive)
+			{
+				fonthook::SetNativeLoadingMainThreadDiagnosticStage(
+					fonthook::NativeLoadingMainThreadStage::
+						NativeRendererMaintenance);
+			}
 			fonthook::HandleFreeTypeNativeRendererMainLoop();
+			if (loadingDiagnosticsActive)
+			{
+				fonthook::SetNativeLoadingMainThreadDiagnosticStage(
+					fonthook::NativeLoadingMainThreadStage::
+						DefaultPoolAtlasMaintenance);
+			}
 			fonthook::HandleFreeTypeDefaultPoolAtlasMainLoop();
+			if (loadingDiagnosticsActive)
+			{
+				fonthook::SetNativeLoadingMainThreadDiagnosticStage(
+					fonthook::NativeLoadingMainThreadStage::PerformanceReporting);
+			}
 			fonthook::PumpFreeTypeFontPerformance();
+		}
+		if (loadingDiagnosticsActive)
+		{
+			fonthook::SetNativeLoadingMainThreadDiagnosticStage(
+				fonthook::NativeLoadingMainThreadStage::Idle);
 		}
 	}
 	if (g_msg && (g_msg->type == NVSEMessagingInterface::kMessage_ExitGame

@@ -1438,6 +1438,90 @@ namespace fonthook::vectorfont
 		return *runtime.config;
 	}
 
+	DirectProfileFailureLogDecision RecordRuntimeDirectProfileFailure(
+		RuntimeFont& runtime, UInt64 signature,
+		DirectProfileAcquireStatus status, ULONGLONG now) noexcept
+	{
+		DirectProfileFailureLogDecision decision;
+		runtime.directProfileFailureStatus.store(
+			static_cast<UInt32>(status), std::memory_order_release);
+		const UInt64 previousSignature =
+			runtime.directProfileFailureSignature.exchange(
+				signature, std::memory_order_acq_rel);
+		decision.stateChanged = previousSignature != signature;
+		if (decision.stateChanged)
+		{
+			decision.occurrences = 1u;
+			decision.previousOccurrences =
+				runtime.directProfileFailureOccurrences.exchange(
+					1u, std::memory_order_acq_rel);
+			decision.previousSuppressed =
+				runtime.directProfileFailureSuppressed.exchange(
+					0u, std::memory_order_acq_rel);
+			runtime.directProfileFailureStartedAt.store(
+				now, std::memory_order_release);
+			decision.shouldLog = true;
+			return decision;
+		}
+
+		decision.occurrences =
+			runtime.directProfileFailureOccurrences.fetch_add(
+				1u, std::memory_order_relaxed) + 1u;
+		decision.shouldLog = decision.occurrences == 10u
+			|| decision.occurrences == 100u
+			|| decision.occurrences == 1000u
+			|| (decision.occurrences >= 10000u
+				&& decision.occurrences % 10000u == 0u);
+		if (decision.shouldLog)
+		{
+			decision.suppressedSinceLog =
+				runtime.directProfileFailureSuppressed.exchange(
+					0u, std::memory_order_acq_rel);
+		}
+		else
+		{
+			runtime.directProfileFailureSuppressed.fetch_add(
+				1u, std::memory_order_relaxed);
+		}
+		return decision;
+	}
+
+	DirectProfileFailureRecovery ConsumeRuntimeDirectProfileFailureRecovery(
+		RuntimeFont& runtime, bool allowRasterScaleMismatch) noexcept
+	{
+		DirectProfileFailureRecovery recovery;
+		if (!runtime.directProfileFailureSignature.load(
+				std::memory_order_acquire))
+		{
+			return recovery;
+		}
+		const DirectProfileAcquireStatus status =
+			static_cast<DirectProfileAcquireStatus>(
+				runtime.directProfileFailureStatus.load(
+					std::memory_order_acquire));
+		if (!allowRasterScaleMismatch
+			&& status == DirectProfileAcquireStatus::RasterScaleMismatch)
+		{
+			return recovery;
+		}
+		recovery.signature = runtime.directProfileFailureSignature.exchange(
+			0u, std::memory_order_acq_rel);
+		if (!recovery.signature)
+			return recovery;
+		recovery.occurrences =
+			runtime.directProfileFailureOccurrences.exchange(
+				0u, std::memory_order_acq_rel);
+		recovery.suppressed = runtime.directProfileFailureSuppressed.exchange(
+			0u, std::memory_order_acq_rel);
+		recovery.startedAt = runtime.directProfileFailureStartedAt.exchange(
+			0u, std::memory_order_acq_rel);
+		runtime.directProfileFailureStatus.store(
+			static_cast<UInt32>(DirectProfileAcquireStatus::NotAttempted),
+			std::memory_order_release);
+		recovery.recovered = true;
+		return recovery;
+	}
+
 	bool HasRuntimePublishedSealedDirectProfile(
 		const RuntimeFont& runtime) noexcept
 	{

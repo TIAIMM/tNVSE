@@ -428,10 +428,16 @@ namespace fonthook::vectorfont::implementation::font_native_shader
 	struct NativeShaderRuntimeState
 	{
 		std::atomic<NativeShaderGeneration*> publishedGeneration{ nullptr };
+		std::atomic<UInt32> publishedGenerationId{ 0 };
 		std::mutex initializationMutex;
 		std::vector<NativeShaderGeneration*> processGenerations;
 		UInt32 nextGeneration = 1;
 		std::atomic<UInt32> deviceEpoch{ 1 };
+		std::atomic<UInt64> resetSequence{ 0 };
+		std::atomic<NativeRendererResetDiagnosticPhase> resetPhase{
+			NativeRendererResetDiagnosticPhase::Idle
+		};
+		std::atomic<ULONGLONG> resetPhaseEnteredAt{ 0 };
 		DWORD lastInitializationAttempt = 0;
 		std::atomic<bool> invalidVtableLogged{ false };
 		RendererResetRecoveryLatch resetLifecycle;

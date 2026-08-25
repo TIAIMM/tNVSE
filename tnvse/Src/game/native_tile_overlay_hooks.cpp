@@ -1,5 +1,9 @@
 #include "native_tile_overlay_detail.h"
 
+#include "PlayerCharacter.hpp"
+#include "nvse/PluginAPI.h"
+
+#include <cstdint>
 #include <cstring>
 
 namespace fonthook
@@ -21,6 +25,10 @@ namespace fonthook
 		constexpr ULONGLONG kLoadingMenuVerboseSlowThresholdMs = 100;
 		constexpr ULONGLONG kLoadingMenuForcedSlowThresholdMs = 1000;
 		constexpr ULONGLONG kLoadingMenuSlowLogIntervalMs = 2000;
+		constexpr ULONGLONG kLoadingTransitionPostTerminalObservationMs = 10000;
+		constexpr ULONGLONG kLoadingTransitionMainLoopStaleMs = 2000;
+		constexpr ULONGLONG kLoadingTransitionStaleLogIntervalMs = 10000;
+		constexpr UInt32 kLoadingMenuIdlePollMask = 3;
 
 		struct LoadingMenuEngineSnapshot
 		{
@@ -97,6 +105,121 @@ namespace fonthook
 				? "loading-text-makenode" : "idle";
 		}
 
+		const char* LoadingTransitionKindName(
+			LoadingTransitionKind kind) noexcept
+		{
+			switch (kind)
+			{
+			case LoadingTransitionKind::SaveLoad:
+				return "save-load";
+			case LoadingTransitionKind::FastTravel:
+				return "fast-travel";
+			case LoadingTransitionKind::NonSaveLoading:
+				return "non-save-loading";
+			default:
+				return "none";
+			}
+		}
+
+		const char* LoadingTransitionTerminalReasonName(
+			LoadingTransitionTerminalReason reason) noexcept
+		{
+			switch (reason)
+			{
+			case LoadingTransitionTerminalReason::SavePostLoad:
+				return "save-postload";
+			case LoadingTransitionTerminalReason::LoadingMenuClosed:
+				return "loading-menu-closed";
+			case LoadingTransitionTerminalReason::Superseded:
+				return "superseded";
+			case LoadingTransitionTerminalReason::Shutdown:
+				return "shutdown";
+			default:
+				return "none";
+			}
+		}
+
+		const char* LoadingMenuUpdateDiagnosticPhaseName(
+			LoadingMenuUpdateDiagnosticPhase phase) noexcept
+		{
+			switch (phase)
+			{
+			case LoadingMenuUpdateDiagnosticPhase::Predecessor:
+				return "predecessor";
+			case LoadingMenuUpdateDiagnosticPhase::PrewarmCommand:
+				return "prewarm-command";
+			default:
+				return "idle";
+			}
+		}
+
+		const char* NativeLoadingMainThreadStageName(
+			NativeLoadingMainThreadStage stage) noexcept
+		{
+			switch (stage)
+			{
+			case NativeLoadingMainThreadStage::LoadingDiagnostics:
+				return "loading-diagnostics";
+			case NativeLoadingMainThreadStage::PrepareConfiguredFonts:
+				return "prepare-fonts";
+			case NativeLoadingMainThreadStage::NativeRendererMaintenance:
+				return "native-renderer";
+			case NativeLoadingMainThreadStage::DefaultPoolAtlasMaintenance:
+				return "default-pool-atlas";
+			case NativeLoadingMainThreadStage::PerformanceReporting:
+				return "performance";
+			default:
+				return "idle";
+			}
+		}
+
+		const char* DefaultPoolResetDiagnosticPhaseName(
+			vectorfont::DefaultPoolResetDiagnosticPhase phase) noexcept
+		{
+			switch (phase)
+			{
+			case vectorfont::DefaultPoolResetDiagnosticPhase::
+				WaitingForPublications:
+				return "wait-publications";
+			case vectorfont::DefaultPoolResetDiagnosticPhase::
+				ReleasingResources:
+				return "release-resources";
+			case vectorfont::DefaultPoolResetDiagnosticPhase::
+				AwaitingDeviceReset:
+				return "await-device-reset";
+			case vectorfont::DefaultPoolResetDiagnosticPhase::
+				RebuildingResources:
+				return "rebuild-resources";
+			case vectorfont::DefaultPoolResetDiagnosticPhase::Cancelled:
+				return "cancelled";
+			case vectorfont::DefaultPoolResetDiagnosticPhase::Shutdown:
+				return "shutdown";
+			default:
+				return "idle";
+			}
+		}
+
+		const char* NativeRendererResetDiagnosticPhaseName(
+			vectorfont::NativeRendererResetDiagnosticPhase phase) noexcept
+		{
+			switch (phase)
+			{
+			case vectorfont::NativeRendererResetDiagnosticPhase::
+				ReleasingResources:
+				return "release-resources";
+			case vectorfont::NativeRendererResetDiagnosticPhase::
+				AwaitingDeviceReset:
+				return "await-device-reset";
+			case vectorfont::NativeRendererResetDiagnosticPhase::
+				RebuildingResources:
+				return "rebuild-resources";
+			case vectorfont::NativeRendererResetDiagnosticPhase::Complete:
+				return "complete";
+			default:
+				return "idle";
+			}
+		}
+
 		UInt32 HashLoadingMenuTileName(const char* value) noexcept
 		{
 			UInt32 hash = 2166136261u;
@@ -128,6 +251,8 @@ namespace fonthook
 			NativeTileOverlayRuntimeState& runtime = OverlayRuntime();
 			LoadingMenuDiagnosticState& diagnostics =
 				runtime.loadingMenuDiagnostics;
+			LoadingTransitionDiagnosticState& transition =
+				runtime.loadingTransitionDiagnostics;
 			const ULONGLONG now = GetTickCount64();
 			const LoadingMenuEngineSnapshot engine =
 				CaptureLoadingMenuEngineSnapshot();
@@ -137,24 +262,110 @@ namespace fonthook
 				runtime.prewarmMailbox.PublishedSequence();
 			const UInt32 consumed =
 				runtime.prewarmMailbox.ConsumedSequence();
+			const UInt64 eventSequence = transition.eventSequence.fetch_add(
+				1u, std::memory_order_relaxed) + 1u;
+			const UInt64 transitionId = transition.activeTraceId.load(
+				std::memory_order_acquire);
+			const ULONGLONG transitionStartedAt = transition.startedAt.load(
+				std::memory_order_acquire);
+			const ULONGLONG terminalAt = transition.terminalRequestedAt.load(
+				std::memory_order_acquire);
+			const ULONGLONG observationAt = transition.observationStartedAt.load(
+				std::memory_order_acquire);
+			const vectorfont::DirectProfileDiagnosticSnapshot profile =
+				vectorfont::GetDirectProfileDiagnosticSnapshot();
+			const vectorfont::DefaultPoolAtlasDiagnosticSnapshot defaultPool =
+				vectorfont::GetDefaultPoolAtlasDiagnosticSnapshot();
+			const vectorfont::NativeRendererResetDiagnosticSnapshot nativeReset =
+				vectorfont::GetNativeRendererResetDiagnosticSnapshot();
 
 			gLog.FormattedMessage(
-				"tnvse_loading_menu_diag: event=%s trace=%llu thread=%u phase=%s phaseAgeMs=%llu menu=%p root=%p loadingThread=%p interface=%p pause=%u shutdown=%u text={calls:%llu,inFlight:%u,tile:%p,nameHash:%08X,fontBits:%08X,lastUs:%u,produced:%u} prewarm={published:%u,consumed:%u,pending:%u,run:%llu,command:%u,action:%u,presentation:graphical-only,progress:%.3f,requested:%u}",
+				"tnvse_hang_trace: event=%s eventSeq=%llu transition=%llu kind=%s transitionAgeMs=%llu terminal=%s terminalAgeMs=%llu observationAgeMs=%llu terminalSuccess=%u thread=%u main={seq:%llu,thread:%u,stage:%s,lastAgeMs:%llu} loading={active:%u,observed:%u,enter:%llu,exit:%llu,inFlight:%u,phase:%s,thread:%u,lastEnterAgeMs:%llu,lastExitAgeMs:%llu,lastUs:%u,menu:%p,root:%p,loadingThread:%p,interface:%p,pause:%u,shutdown:%u} save={read:%u,post:%u,pathHash:%08X} travel={fastRef:%p,destRef:%p,fastForm:%08X,destForm:%08X,moving:%u} d3d={defaultReset:%llu,defaultPhase:%s,defaultAgeMs:%llu,epoch:%llu,publications:%u,inProgress:%u,maintenance:%u,nativeReset:%llu,nativePhase:%s,nativeAgeMs:%llu,nativeEpoch:%u,generation:%u,nativeInProgress:%u,recovery:%u} profile={failures:%llu,suppressed:%llu,recoveries:%llu,lastFont:%u,lastStatus:%s,lastAgeMs:%llu,active:%016llX} text={trace:%llu,phase:%s,phaseAgeMs:%llu,calls:%llu,inFlight:%u,tile:%p,nameHash:%08X,fontBits:%08X,lastUs:%u,produced:%u} prewarm={published:%u,consumed:%u,pending:%u,run:%llu,command:%u,action:%u,presentation:graphical-only,progress:%.3f,requested:%u}",
 				event ? event : "unspecified",
+				static_cast<unsigned long long>(eventSequence),
+				static_cast<unsigned long long>(transitionId),
+				LoadingTransitionKindName(transition.kind.load(
+					std::memory_order_acquire)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, transitionStartedAt)),
+				LoadingTransitionTerminalReasonName(
+					transition.terminalReason.load(std::memory_order_acquire)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now, terminalAt)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now, observationAt)),
+				transition.terminalSucceeded.load(std::memory_order_acquire),
+				GetCurrentThreadId(),
+				static_cast<unsigned long long>(
+					transition.mainLoopSequence.load(std::memory_order_acquire)),
+				transition.mainThreadId.load(std::memory_order_acquire),
+				NativeLoadingMainThreadStageName(
+					transition.mainThreadStage.load(std::memory_order_acquire)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastMainLoopAt.load(std::memory_order_acquire))),
+				transition.loadingMenuActive.load(std::memory_order_acquire),
+				transition.loadingMenuObserved.load(std::memory_order_acquire),
+				static_cast<unsigned long long>(
+					transition.loadingUpdateEnterSequence.load(
+						std::memory_order_acquire)),
+				static_cast<unsigned long long>(
+					transition.loadingUpdateExitSequence.load(
+						std::memory_order_acquire)),
+				transition.loadingUpdateInFlight.load(std::memory_order_acquire),
+				LoadingMenuUpdateDiagnosticPhaseName(
+					transition.loadingUpdatePhase.load(std::memory_order_acquire)),
+				transition.loadingThreadId.load(std::memory_order_acquire),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastLoadingUpdateEnterAt.load(
+						std::memory_order_acquire))),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastLoadingUpdateExitAt.load(
+						std::memory_order_acquire))),
+				transition.lastLoadingUpdateDurationUs.load(
+					std::memory_order_acquire),
+				engine.loadingMenu,
+				reinterpret_cast<void*>(diagnostics.observedLoadingMenuRoot.load(
+					std::memory_order_acquire)),
+				engine.loadingThread, engine.interfaceManager,
+				static_cast<UInt32>(engine.pauseRequested),
+				static_cast<UInt32>(engine.shutdownRequested),
+				transition.saveReadObserved.load(std::memory_order_acquire),
+				transition.savePostLoadObserved.load(std::memory_order_acquire),
+				transition.savePathHash.load(std::memory_order_acquire),
+				reinterpret_cast<void*>(transition.fastTravelRef.load(
+					std::memory_order_acquire)),
+				reinterpret_cast<void*>(transition.destinationRef.load(
+					std::memory_order_acquire)),
+				transition.fastTravelFormId.load(std::memory_order_acquire),
+				transition.destinationFormId.load(std::memory_order_acquire),
+				transition.movingIntoNewSpace.load(std::memory_order_acquire),
+				static_cast<unsigned long long>(defaultPool.resetSequence),
+				DefaultPoolResetDiagnosticPhaseName(defaultPool.phase),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, defaultPool.phaseEnteredAt)),
+				static_cast<unsigned long long>(defaultPool.deviceEpoch),
+				defaultPool.activePublications,
+				defaultPool.resetInProgress ? 1u : 0u,
+				defaultPool.maintenancePending ? 1u : 0u,
+				static_cast<unsigned long long>(nativeReset.resetSequence),
+				NativeRendererResetDiagnosticPhaseName(nativeReset.phase),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, nativeReset.phaseEnteredAt)),
+				nativeReset.deviceEpoch, nativeReset.generation,
+				nativeReset.inProgress ? 1u : 0u,
+				nativeReset.recoveryPending ? 1u : 0u,
+				static_cast<unsigned long long>(profile.totalFailures),
+				static_cast<unsigned long long>(profile.totalSuppressed),
+				static_cast<unsigned long long>(profile.totalRecoveries),
+				profile.lastFontId,
+				vectorfont::DirectProfileAcquireStatusName(profile.lastStatus),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, profile.lastFailureAt)),
+				static_cast<unsigned long long>(profile.activeFailureSignature),
 				static_cast<unsigned long long>(diagnostics.traceId.load(
 					std::memory_order_acquire)),
-				GetCurrentThreadId(),
 				LoadingMenuDiagnosticPhaseName(diagnostics.phase.load(
 					std::memory_order_acquire)),
 				static_cast<unsigned long long>(LoadingMenuAgeMs(
 					now, diagnostics.phaseEnteredAt.load(std::memory_order_acquire))),
-				engine.loadingMenu,
-				reinterpret_cast<void*>(diagnostics.observedLoadingMenuRoot.load(
-					std::memory_order_acquire)),
-				engine.loadingThread,
-				engine.interfaceManager,
-				static_cast<UInt32>(engine.pauseRequested),
-				static_cast<UInt32>(engine.shutdownRequested),
 				static_cast<unsigned long long>(
 					diagnostics.loadingTextMakeNodeCalls.load(
 						std::memory_order_acquire)),
@@ -177,6 +388,314 @@ namespace fonthook
 				runtime.prewarmMailbox.IsPresentationRequested() ? 1u : 0u);
 		}
 
+		// LoadingMenu runs on its own engine thread. If it is the only thread still
+		// advancing during a black screen, emit a deliberately compact marker that
+		// reads atomics only. In particular, do not query engine singletons, take the
+		// prewarm mailbox lock, or touch renderer objects from this thread.
+		void LogLoadingThreadDiagnosticMarker(const char* event,
+			ULONGLONG now)
+		{
+			LoadingTransitionDiagnosticState& transition =
+				OverlayRuntime().loadingTransitionDiagnostics;
+			const vectorfont::DefaultPoolAtlasDiagnosticSnapshot defaultPool =
+				vectorfont::GetDefaultPoolAtlasDiagnosticSnapshot(false);
+			vectorfont::NativeRendererResetDiagnosticSnapshot nativeReset;
+			if (g_bEnableFreeTypeNativeAtlas)
+			{
+				nativeReset =
+					vectorfont::GetNativeRendererResetDiagnosticSnapshot();
+			}
+			const vectorfont::DirectProfileDiagnosticSnapshot profile =
+				vectorfont::GetDirectProfileDiagnosticSnapshot();
+			gLog.FormattedMessage(
+				"tnvse_hang_marker: event=%s transition=%llu kind=%s thread=%u main={seq:%llu,thread:%u,stage:%s,lastAgeMs:%llu} loading={enter:%llu,exit:%llu,inFlight:%u,phase:%s,lastEnterAgeMs:%llu,lastExitAgeMs:%llu,lastUs:%u} d3d={defaultReset:%llu,defaultPhase:%s,defaultAgeMs:%llu,publications:%u,inProgress:%u,nativeReset:%llu,nativePhase:%s,nativeAgeMs:%llu,nativeInProgress:%u,recovery:%u} profile={failures:%llu,suppressed:%llu,lastFont:%u,lastStatus:%s,lastAgeMs:%llu}",
+				event ? event : "unspecified",
+				static_cast<unsigned long long>(transition.activeTraceId.load(
+					std::memory_order_acquire)),
+				LoadingTransitionKindName(transition.kind.load(
+					std::memory_order_acquire)),
+				GetCurrentThreadId(),
+				static_cast<unsigned long long>(transition.mainLoopSequence.load(
+					std::memory_order_acquire)),
+				transition.mainThreadId.load(std::memory_order_acquire),
+				NativeLoadingMainThreadStageName(
+					transition.mainThreadStage.load(std::memory_order_acquire)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastMainLoopAt.load(std::memory_order_acquire))),
+				static_cast<unsigned long long>(
+					transition.loadingUpdateEnterSequence.load(
+						std::memory_order_acquire)),
+				static_cast<unsigned long long>(
+					transition.loadingUpdateExitSequence.load(
+						std::memory_order_acquire)),
+				transition.loadingUpdateInFlight.load(std::memory_order_acquire),
+				LoadingMenuUpdateDiagnosticPhaseName(
+					transition.loadingUpdatePhase.load(std::memory_order_acquire)),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastLoadingUpdateEnterAt.load(
+						std::memory_order_acquire))),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(now,
+					transition.lastLoadingUpdateExitAt.load(
+						std::memory_order_acquire))),
+				transition.lastLoadingUpdateDurationUs.load(
+					std::memory_order_acquire),
+				static_cast<unsigned long long>(defaultPool.resetSequence),
+				DefaultPoolResetDiagnosticPhaseName(defaultPool.phase),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, defaultPool.phaseEnteredAt)),
+				defaultPool.activePublications,
+				defaultPool.resetInProgress ? 1u : 0u,
+				static_cast<unsigned long long>(nativeReset.resetSequence),
+				NativeRendererResetDiagnosticPhaseName(nativeReset.phase),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, nativeReset.phaseEnteredAt)),
+				nativeReset.inProgress ? 1u : 0u,
+				nativeReset.recoveryPending ? 1u : 0u,
+				static_cast<unsigned long long>(profile.totalFailures),
+				static_cast<unsigned long long>(profile.totalSuppressed),
+				profile.lastFontId,
+				vectorfont::DirectProfileAcquireStatusName(profile.lastStatus),
+				static_cast<unsigned long long>(LoadingMenuAgeMs(
+					now, profile.lastFailureAt)));
+		}
+
+		UInt32 HashLoadingTransitionData(
+			const void* data, UInt32 dataLength) noexcept
+		{
+			UInt32 hash = 2166136261u;
+			if (!data || !dataLength)
+				return 0;
+			const unsigned char* bytes = static_cast<const unsigned char*>(data);
+			const size_t maximum = std::min<size_t>(dataLength, 1024u);
+			for (size_t index = 0; index < maximum && bytes[index]; ++index)
+			{
+				hash ^= bytes[index];
+				hash *= 16777619u;
+			}
+			return hash;
+		}
+
+		UInt32 ReadLoadingTransitionFormId(const TESObjectREFR* reference) noexcept
+		{
+			if (!reference || !hook_identity::IsAccessibleRegion(
+					reinterpret_cast<SIZE_T>(reference), sizeof(TESForm), false))
+			{
+				return 0;
+			}
+			return reference->GetFormID();
+		}
+
+		bool CaptureLoadingTransitionTravelState(
+			LoadingTransitionDiagnosticState& transition) noexcept
+		{
+			PlayerCharacter* player = PlayerCharacter::GetSingleton();
+			PlayerCharacter::PositionRequest* request =
+				player ? player->pPositionRequest : nullptr;
+			if (!request || !hook_identity::IsAccessibleRegion(
+					reinterpret_cast<SIZE_T>(request), sizeof(*request), false))
+			{
+				transition.movingIntoNewSpace.store(
+					player && player->bIsPlayerMovingIntoNewSpace ? 1u : 0u,
+					std::memory_order_release);
+				return false;
+			}
+
+			TESObjectREFR* fastTravel = request->pFastTravelRef;
+			TESObjectREFR* destination = request->pDestRef;
+			transition.fastTravelRef.store(
+				reinterpret_cast<SIZE_T>(fastTravel), std::memory_order_release);
+			transition.destinationRef.store(
+				reinterpret_cast<SIZE_T>(destination), std::memory_order_release);
+			transition.fastTravelFormId.store(
+				ReadLoadingTransitionFormId(fastTravel), std::memory_order_release);
+			transition.destinationFormId.store(
+				ReadLoadingTransitionFormId(destination), std::memory_order_release);
+			transition.movingIntoNewSpace.store(
+				player && player->bIsPlayerMovingIntoNewSpace ? 1u : 0u,
+				std::memory_order_release);
+			return fastTravel != nullptr;
+		}
+
+		bool HasFastTravelRequestOnMainThread() noexcept
+		{
+			PlayerCharacter* player = PlayerCharacter::GetSingleton();
+			PlayerCharacter::PositionRequest* request =
+				player ? player->pPositionRequest : nullptr;
+			return request && request->pFastTravelRef;
+		}
+
+		void ResetLoadingTransitionPerRunState(
+			LoadingTransitionDiagnosticState& transition,
+			ULONGLONG now) noexcept
+		{
+			transition.terminalRequestedAt.store(0, std::memory_order_release);
+			transition.observationStartedAt.store(0, std::memory_order_release);
+			transition.terminalReason.store(
+				LoadingTransitionTerminalReason::None,
+				std::memory_order_release);
+			transition.terminalSucceeded.store(0, std::memory_order_release);
+			transition.nextSnapshotAt.store(now + 1000u,
+				std::memory_order_release);
+			transition.lastLoadingThreadStaleLogAt.store(
+				0, std::memory_order_release);
+			transition.mainLoopSequence.store(0, std::memory_order_release);
+			transition.lastMainLoopAt.store(now, std::memory_order_release);
+			transition.mainThreadId.store(
+				GetCurrentThreadId(), std::memory_order_release);
+			transition.mainThreadStage.store(
+				NativeLoadingMainThreadStage::LoadingDiagnostics,
+				std::memory_order_release);
+			transition.loadingUpdateEnterSequence.store(
+				0, std::memory_order_release);
+			transition.loadingUpdateExitSequence.store(
+				0, std::memory_order_release);
+			transition.lastLoadingUpdateEnterAt.store(
+				0, std::memory_order_release);
+			transition.lastLoadingUpdateExitAt.store(
+				0, std::memory_order_release);
+			transition.lastLoadingUpdateDurationUs.store(
+				0, std::memory_order_release);
+			transition.loadingUpdateInFlight.store(
+				0, std::memory_order_release);
+			transition.loadingThreadId.store(0, std::memory_order_release);
+			transition.loadingUpdatePhase.store(
+				LoadingMenuUpdateDiagnosticPhase::Idle,
+				std::memory_order_release);
+			transition.loadingMenuObserved.store(0, std::memory_order_release);
+			transition.saveReadObserved.store(0, std::memory_order_release);
+			transition.savePostLoadObserved.store(0, std::memory_order_release);
+			transition.fastTravelRef.store(0, std::memory_order_release);
+			transition.destinationRef.store(0, std::memory_order_release);
+			transition.fastTravelFormId.store(0, std::memory_order_release);
+			transition.destinationFormId.store(0, std::memory_order_release);
+			transition.movingIntoNewSpace.store(0, std::memory_order_release);
+		}
+
+		void FinishLoadingTransition(const char* event,
+			LoadingTransitionTerminalReason reason,
+			bool succeeded)
+		{
+			LoadingTransitionDiagnosticState& transition =
+				OverlayRuntime().loadingTransitionDiagnostics;
+			if (!transition.activeTraceId.load(std::memory_order_acquire))
+				return;
+			transition.terminalReason.store(reason, std::memory_order_release);
+			transition.terminalSucceeded.store(
+				succeeded ? 1u : 0u, std::memory_order_release);
+			LogLoadingMenuDiagnosticSnapshot(event);
+			transition.captureEnabled.store(false, std::memory_order_release);
+			transition.activeTraceId.store(0, std::memory_order_release);
+			transition.kind.store(
+				LoadingTransitionKind::None, std::memory_order_release);
+			transition.startedAt.store(0, std::memory_order_release);
+			transition.terminalRequestedAt.store(0, std::memory_order_release);
+			transition.observationStartedAt.store(0, std::memory_order_release);
+			transition.terminalReason.store(
+				LoadingTransitionTerminalReason::None,
+				std::memory_order_release);
+			transition.terminalSucceeded.store(0, std::memory_order_release);
+			transition.nextSnapshotAt.store(0, std::memory_order_release);
+			transition.loadingMenuObserved.store(0, std::memory_order_release);
+			transition.saveReadObserved.store(0, std::memory_order_release);
+			transition.savePostLoadObserved.store(0, std::memory_order_release);
+			transition.savePathHash.store(0, std::memory_order_release);
+			transition.fastTravelRef.store(0, std::memory_order_release);
+			transition.destinationRef.store(0, std::memory_order_release);
+			transition.fastTravelFormId.store(0, std::memory_order_release);
+			transition.destinationFormId.store(0, std::memory_order_release);
+			transition.movingIntoNewSpace.store(0, std::memory_order_release);
+			transition.mainThreadStage.store(
+				NativeLoadingMainThreadStage::Idle,
+				std::memory_order_release);
+		}
+
+		void BeginLoadingTransition(LoadingTransitionKind kind,
+			UInt32 savePathHash, bool loadingMenuActive)
+		{
+			LoadingTransitionDiagnosticState& transition =
+				OverlayRuntime().loadingTransitionDiagnostics;
+			if (transition.activeTraceId.load(std::memory_order_acquire))
+			{
+				FinishLoadingTransition("transition-superseded",
+					LoadingTransitionTerminalReason::Superseded, false);
+			}
+
+			const ULONGLONG now = GetTickCount64();
+			ResetLoadingTransitionPerRunState(transition, now);
+			const UInt64 traceId = transition.nextTraceId.fetch_add(
+				1u, std::memory_order_acq_rel) + 1u;
+			transition.activeTraceId.store(traceId, std::memory_order_release);
+			transition.kind.store(kind, std::memory_order_release);
+			transition.startedAt.store(now, std::memory_order_release);
+			transition.savePathHash.store(savePathHash,
+				std::memory_order_release);
+			transition.loadingMenuActive.store(
+				loadingMenuActive ? 1u : 0u, std::memory_order_release);
+			const bool fastTravel = kind != LoadingTransitionKind::SaveLoad
+				&& CaptureLoadingTransitionTravelState(transition);
+			if (kind != LoadingTransitionKind::SaveLoad)
+			{
+				transition.kind.store((kind == LoadingTransitionKind::FastTravel
+					|| fastTravel)
+					? LoadingTransitionKind::FastTravel
+					: LoadingTransitionKind::NonSaveLoading,
+					std::memory_order_release);
+			}
+			transition.captureEnabled.store(true, std::memory_order_release);
+			LogLoadingMenuDiagnosticSnapshot("transition-begin");
+		}
+
+		void RequestLoadingTransitionTerminal(
+			LoadingTransitionTerminalReason reason, bool succeeded,
+			const char* event)
+		{
+			LoadingTransitionDiagnosticState& transition =
+				OverlayRuntime().loadingTransitionDiagnostics;
+			if (!transition.activeTraceId.load(std::memory_order_acquire))
+				return;
+			ULONGLONG expected = 0;
+			const ULONGLONG now = GetTickCount64();
+			transition.terminalRequestedAt.compare_exchange_strong(
+				expected, now, std::memory_order_acq_rel,
+				std::memory_order_acquire);
+			if (reason == LoadingTransitionTerminalReason::LoadingMenuClosed)
+			{
+				ULONGLONG observationExpected = 0;
+				transition.observationStartedAt.compare_exchange_strong(
+					observationExpected, now, std::memory_order_acq_rel,
+					std::memory_order_acquire);
+			}
+			transition.terminalReason.store(reason, std::memory_order_release);
+			transition.terminalSucceeded.store(
+				succeeded ? 1u : 0u, std::memory_order_release);
+			if (event)
+				LogLoadingMenuDiagnosticSnapshot(event);
+		}
+
+		void AdvanceLoadingTransitionSnapshotDeadline(
+			LoadingTransitionDiagnosticState& transition,
+			ULONGLONG now) noexcept
+		{
+			const ULONGLONG startedAt = transition.startedAt.load(
+				std::memory_order_acquire);
+			const ULONGLONG age = LoadingMenuAgeMs(now, startedAt);
+			ULONGLONG nextAge = 0;
+			if (age < 3000u)
+				nextAge = 3000u;
+			else if (age < 10000u)
+				nextAge = 10000u;
+			else if (age < 30000u)
+				nextAge = 30000u;
+			else
+			{
+				transition.nextSnapshotAt.store(
+					now + 30000u, std::memory_order_release);
+				return;
+			}
+			transition.nextSnapshotAt.store(
+				startedAt + nextAge, std::memory_order_release);
+		}
+
 		bool IsLoadingMenuThreadPauseOrShutdownRequested() noexcept
 		{
 			const UInt8* loadingThread =
@@ -197,6 +716,39 @@ namespace fonthook
 
 		void __fastcall LoadingMenuUpdateHook(void* loadingMenu, void*)
 		{
+			LoadingTransitionDiagnosticState& transition =
+				OverlayRuntime().loadingTransitionDiagnostics;
+			const bool captureRequested = g_bEnableFreeTypeFontRenderingLog
+				&& transition.captureEnabled.load(std::memory_order_acquire);
+			const UInt64 capturedTraceId = captureRequested
+				? transition.activeTraceId.load(std::memory_order_acquire) : 0;
+			const bool capture = captureRequested && capturedTraceId != 0;
+			ULONGLONG updateStartedAt = 0;
+			if (capture)
+			{
+				updateStartedAt = GetTickCount64();
+				transition.loadingThreadId.store(
+					GetCurrentThreadId(), std::memory_order_release);
+				transition.lastLoadingUpdateEnterAt.store(
+					updateStartedAt, std::memory_order_release);
+				transition.loadingUpdateEnterSequence.fetch_add(
+					1u, std::memory_order_relaxed);
+				transition.loadingUpdatePhase.store(
+					LoadingMenuUpdateDiagnosticPhase::Predecessor,
+					std::memory_order_release);
+				transition.loadingUpdateInFlight.store(
+					1u, std::memory_order_release);
+				LoadingMenuDiagnosticState& diagnostics =
+					OverlayRuntime().loadingMenuDiagnostics;
+				diagnostics.observedLoadingMenu.store(
+					reinterpret_cast<SIZE_T>(loadingMenu),
+					std::memory_order_release);
+				Menu* menu = static_cast<Menu*>(loadingMenu);
+				diagnostics.observedLoadingMenuRoot.store(
+					menu ? reinterpret_cast<SIZE_T>(menu->pRootTile) : 0,
+					std::memory_order_release);
+			}
+
 			// Preserve the complete predecessor chain and vanilla behavior first.
 			// ThreadProc invokes vanilla presentation immediately after this call.
 			LoadingMenuUpdateFn predecessor =
@@ -204,7 +756,78 @@ namespace fonthook
 			if (predecessor)
 				predecessor(loadingMenu);
 			else
+			{
+				if (capture)
+				{
+					transition.loadingUpdatePhase.store(
+						LoadingMenuUpdateDiagnosticPhase::Idle,
+						std::memory_order_release);
+					transition.loadingUpdateInFlight.store(
+						0u, std::memory_order_release);
+				}
 				return;
+			}
+
+			const UInt64 activeTraceAfterPredecessor =
+				transition.activeTraceId.load(std::memory_order_acquire);
+			const bool sameTraceAfterPredecessor = capture
+				&& transition.captureEnabled.load(std::memory_order_acquire)
+				&& activeTraceAfterPredecessor == capturedTraceId;
+			if (sameTraceAfterPredecessor)
+			{
+				const ULONGLONG completedAt = GetTickCount64();
+				const UInt32 durationUs = LoadingMenuDurationUs(
+					updateStartedAt, completedAt);
+				transition.lastLoadingUpdateDurationUs.store(
+					durationUs, std::memory_order_release);
+				transition.lastLoadingUpdateExitAt.store(
+					completedAt, std::memory_order_release);
+				transition.loadingUpdateExitSequence.fetch_add(
+					1u, std::memory_order_relaxed);
+				transition.loadingUpdatePhase.store(
+					LoadingMenuUpdateDiagnosticPhase::Idle,
+					std::memory_order_release);
+				transition.loadingUpdateInFlight.store(
+					0u, std::memory_order_release);
+
+				static std::atomic<ULONGLONG> lastSlowUpdateLogAt{ 0 };
+				const ULONGLONG durationMs = LoadingMenuAgeMs(
+					completedAt, updateStartedAt);
+				if ((durationMs >= kLoadingMenuForcedSlowThresholdMs
+						|| (g_bEnableFreeTypeFontRenderingLog
+							&& durationMs >= kLoadingMenuVerboseSlowThresholdMs))
+					&& ClaimLoadingMenuLogInterval(lastSlowUpdateLogAt,
+						completedAt, kLoadingMenuSlowLogIntervalMs))
+				{
+					LogLoadingThreadDiagnosticMarker(
+						"slow-call:loading-update-predecessor", completedAt);
+				}
+
+				const ULONGLONG mainLoopAt = transition.lastMainLoopAt.load(
+					std::memory_order_acquire);
+				if (g_bEnableFreeTypeFontRenderingLog && mainLoopAt
+					&& LoadingMenuAgeMs(completedAt, mainLoopAt)
+						>= kLoadingTransitionMainLoopStaleMs
+					&& ClaimLoadingMenuLogInterval(
+						transition.lastLoadingThreadStaleLogAt,
+						completedAt, kLoadingTransitionStaleLogIntervalMs))
+				{
+					LogLoadingThreadDiagnosticMarker(
+						"stall:main-loop-stale-observed-by-loading-thread",
+						completedAt);
+				}
+			}
+			else if (capture && activeTraceAfterPredecessor == 0)
+			{
+				// The traced transition ended while the predecessor was running. Do
+				// not write its exit data into a newer trace, but clear the orphaned
+				// in-flight marker when no successor trace exists.
+				transition.loadingUpdatePhase.store(
+					LoadingMenuUpdateDiagnosticPhase::Idle,
+					std::memory_order_release);
+				transition.loadingUpdateInFlight.store(
+					0u, std::memory_order_release);
+			}
 
 			PrewarmOverlayMailbox& mailbox = OverlayRuntime().prewarmMailbox;
 			if (!mailbox.HasPending())
@@ -212,8 +835,30 @@ namespace fonthook
 			if (IsLoadingMenuThreadPauseOrShutdownRequested())
 				return;
 
+			const bool capturePrewarmCommand = capture
+				&& transition.captureEnabled.load(std::memory_order_acquire)
+				&& transition.activeTraceId.load(std::memory_order_acquire)
+					== capturedTraceId;
+			if (capturePrewarmCommand)
+			{
+				transition.loadingUpdatePhase.store(
+					LoadingMenuUpdateDiagnosticPhase::PrewarmCommand,
+					std::memory_order_release);
+				transition.loadingUpdateInFlight.store(
+					1u, std::memory_order_release);
+			}
 			ConsumeNativePrewarmOverlayCommand(
 				static_cast<Menu*>(loadingMenu));
+			if (capturePrewarmCommand
+				&& transition.activeTraceId.load(std::memory_order_acquire)
+					== capturedTraceId)
+			{
+				transition.loadingUpdatePhase.store(
+					LoadingMenuUpdateDiagnosticPhase::Idle,
+					std::memory_order_release);
+				transition.loadingUpdateInFlight.store(
+					0u, std::memory_order_release);
+			}
 		}
 
 		bool IsVerifiedLoadingMenuUpdateHook()
@@ -535,15 +1180,268 @@ namespace fonthook
 
 	}
 
+	void ArmNativeLoadingTransitionDiagnostics()
+	{
+		LoadingTransitionDiagnosticState& transition =
+			OverlayRuntime().loadingTransitionDiagnostics;
+		if (!g_bEnableFreeTypeFontRenderingLog)
+		{
+			transition.runtimeArmed.store(false, std::memory_order_release);
+			return;
+		}
+		transition.inactiveBaselineObserved.store(
+			false, std::memory_order_release);
+		transition.runtimeArmed.store(true, std::memory_order_release);
+		gLog.FormattedMessage(
+			"tnvse_hang_trace: diagnostics armed policy=existing-hooks-atomics-only idleLoadingMenuPollFrames=%u postTerminalObservationMs=%llu noShowChangesHook=1 noMonitorThread=1",
+			kLoadingMenuIdlePollMask + 1u,
+			static_cast<unsigned long long>(
+				kLoadingTransitionPostTerminalObservationMs));
+	}
+
+	void HandleNativeLoadingTransitionMessage(
+		UInt32 messageType, const void* data, UInt32 dataLength)
+	{
+		LoadingTransitionDiagnosticState& transition =
+			OverlayRuntime().loadingTransitionDiagnostics;
+		if (!transition.runtimeArmed.load(std::memory_order_acquire))
+			return;
+		switch (messageType)
+		{
+		case NVSEMessagingInterface::kMessage_PreLoadGame:
+			BeginLoadingTransition(LoadingTransitionKind::SaveLoad,
+				HashLoadingTransitionData(data, dataLength),
+				transition.loadingMenuActive.load(
+					std::memory_order_acquire) != 0);
+			break;
+		case NVSEMessagingInterface::kMessage_LoadGame:
+			if (transition.activeTraceId.load(std::memory_order_acquire)
+				&& transition.kind.load(std::memory_order_acquire)
+					== LoadingTransitionKind::SaveLoad)
+			{
+				transition.saveReadObserved.store(1u, std::memory_order_release);
+				LogLoadingMenuDiagnosticSnapshot("save-read-complete");
+			}
+			break;
+		case NVSEMessagingInterface::kMessage_PostLoadGame:
+			if (transition.activeTraceId.load(std::memory_order_acquire)
+				&& transition.kind.load(std::memory_order_acquire)
+					== LoadingTransitionKind::SaveLoad)
+			{
+				const bool succeeded =
+					reinterpret_cast<std::uintptr_t>(data) != 0;
+				transition.savePostLoadObserved.store(
+					1u, std::memory_order_release);
+				RequestLoadingTransitionTerminal(
+					LoadingTransitionTerminalReason::SavePostLoad,
+					succeeded, "save-postload-returned");
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	void SetNativeLoadingMainThreadDiagnosticStage(
+		NativeLoadingMainThreadStage stage) noexcept
+	{
+		OverlayRuntime().loadingTransitionDiagnostics.mainThreadStage.store(
+			stage, std::memory_order_release);
+	}
+
+	UInt64 GetNativeLoadingTransitionTraceId() noexcept
+	{
+		return OverlayRuntime().loadingTransitionDiagnostics.activeTraceId.load(
+			std::memory_order_acquire);
+	}
+
+	void ShutdownNativeLoadingTransitionDiagnostics()
+	{
+		LoadingTransitionDiagnosticState& transition =
+			OverlayRuntime().loadingTransitionDiagnostics;
+		if (transition.activeTraceId.load(std::memory_order_acquire))
+		{
+			FinishLoadingTransition("transition-shutdown",
+				LoadingTransitionTerminalReason::Shutdown, false);
+		}
+		transition.runtimeArmed.store(false, std::memory_order_release);
+		transition.inactiveBaselineObserved.store(
+			false, std::memory_order_release);
+	}
+
 	void LogNativeLoadingMenuDiagnostic(const char* event)
 	{
 		LogLoadingMenuDiagnosticSnapshot(event);
 	}
 
-	void PumpNativeLoadingMenuDiagnostics()
+	bool PumpNativeLoadingMenuDiagnostics()
 	{
-		// The prewarm Update hook has no heartbeat or per-frame diagnostics.
-		// LoadingMenu text diagnostics are completed synchronously by MakeNode.
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return false;
+		LoadingTransitionDiagnosticState& transition =
+			OverlayRuntime().loadingTransitionDiagnostics;
+		static UInt32 idlePollSequence = 0;
+		bool capture = transition.captureEnabled.load(std::memory_order_acquire);
+		const bool armed = transition.runtimeArmed.load(
+			std::memory_order_acquire);
+		const bool shouldPollLoadingMenu = capture
+			|| (armed && ((++idlePollSequence & kLoadingMenuIdlePollMask) == 0));
+		bool loadingMenuActive = transition.loadingMenuActive.load(
+			std::memory_order_acquire) != 0;
+		bool loadingMenuChanged = false;
+		if (shouldPollLoadingMenu)
+		{
+			const bool hasInactiveBaseline =
+				transition.inactiveBaselineObserved.load(
+					std::memory_order_acquire);
+			if (!capture && armed && hasInactiveBaseline
+				&& HasFastTravelRequestOnMainThread())
+			{
+				// Arm before querying the menu so a stall in the first transition
+				// frame is still correlated with the fast-travel request.
+				BeginLoadingTransition(
+					LoadingTransitionKind::FastTravel, 0, loadingMenuActive);
+				capture = true;
+			}
+			if (capture)
+			{
+				transition.mainThreadStage.store(
+					NativeLoadingMainThreadStage::LoadingDiagnostics,
+					std::memory_order_release);
+			}
+			InterfaceManager* manager = InterfaceManager::GetSingleton();
+			const bool observedActive = manager
+				&& InterfaceManager::IsMenuActive(Loading);
+			const bool previous = transition.loadingMenuActive.exchange(
+				observedActive ? 1u : 0u,
+				std::memory_order_acq_rel) != 0;
+			loadingMenuActive = observedActive;
+			loadingMenuChanged = previous != observedActive;
+			if (armed && !observedActive)
+			{
+				transition.inactiveBaselineObserved.store(
+					true, std::memory_order_release);
+			}
+			if (!capture && armed && hasInactiveBaseline && observedActive)
+			{
+				BeginLoadingTransition(
+					LoadingTransitionKind::NonSaveLoading, 0, true);
+				capture = true;
+			}
+		}
+
+		if (!capture)
+			return false;
+
+		const ULONGLONG now = GetTickCount64();
+		transition.mainThreadId.store(
+			GetCurrentThreadId(), std::memory_order_release);
+		transition.lastMainLoopAt.store(now, std::memory_order_release);
+		transition.mainLoopSequence.fetch_add(
+			1u, std::memory_order_relaxed);
+		if (loadingMenuActive)
+		{
+			transition.loadingMenuObserved.store(1u, std::memory_order_release);
+		}
+		const char* lifecycleEvent = nullptr;
+		const LoadingTransitionKind kindBeforeTravelProbe = transition.kind.load(
+			std::memory_order_acquire);
+		const bool fastTravelObserved =
+			kindBeforeTravelProbe == LoadingTransitionKind::NonSaveLoading
+			&& HasFastTravelRequestOnMainThread()
+			&& CaptureLoadingTransitionTravelState(transition);
+		if (fastTravelObserved
+			&& kindBeforeTravelProbe == LoadingTransitionKind::NonSaveLoading)
+		{
+			transition.kind.store(
+				LoadingTransitionKind::FastTravel,
+				std::memory_order_release);
+			lifecycleEvent = "transition-classified-fast-travel";
+		}
+
+		const LoadingTransitionKind kind = transition.kind.load(
+			std::memory_order_acquire);
+		LoadingTransitionTerminalReason terminalReason =
+			transition.terminalReason.load(std::memory_order_acquire);
+		if (loadingMenuActive
+			&& terminalReason
+				== LoadingTransitionTerminalReason::LoadingMenuClosed)
+		{
+			transition.terminalRequestedAt.store(0, std::memory_order_release);
+			transition.observationStartedAt.store(0, std::memory_order_release);
+			transition.terminalReason.store(
+				LoadingTransitionTerminalReason::None,
+				std::memory_order_release);
+			transition.terminalSucceeded.store(0, std::memory_order_release);
+			terminalReason = LoadingTransitionTerminalReason::None;
+			lifecycleEvent = "loading-menu-reopened";
+		}
+		else if (!loadingMenuActive
+			&& kind != LoadingTransitionKind::SaveLoad
+			&& transition.loadingMenuObserved.load(std::memory_order_acquire)
+			&& !transition.terminalRequestedAt.load(
+				std::memory_order_acquire))
+		{
+			RequestLoadingTransitionTerminal(
+				LoadingTransitionTerminalReason::LoadingMenuClosed,
+				true, nullptr);
+			terminalReason = LoadingTransitionTerminalReason::LoadingMenuClosed;
+			lifecycleEvent = "post-loading-observation-begin";
+		}
+
+		if (kind == LoadingTransitionKind::SaveLoad
+			&& terminalReason == LoadingTransitionTerminalReason::SavePostLoad)
+		{
+			if (loadingMenuActive)
+			{
+				if (transition.observationStartedAt.exchange(
+						0, std::memory_order_acq_rel))
+				{
+					lifecycleEvent = "save-loading-menu-reopened";
+				}
+			}
+			else
+			{
+				ULONGLONG expected = 0;
+				if (transition.observationStartedAt.compare_exchange_strong(
+						expected, now, std::memory_order_acq_rel,
+						std::memory_order_acquire))
+				{
+					lifecycleEvent = "save-loading-menu-settled";
+				}
+			}
+		}
+
+		if (!lifecycleEvent && loadingMenuChanged)
+		{
+			lifecycleEvent = loadingMenuActive
+				? "loading-menu-visible" : "loading-menu-hidden";
+		}
+		if (lifecycleEvent)
+			LogLoadingMenuDiagnosticSnapshot(lifecycleEvent);
+
+		const ULONGLONG nextSnapshotAt = transition.nextSnapshotAt.load(
+			std::memory_order_acquire);
+		if (nextSnapshotAt && now >= nextSnapshotAt)
+		{
+			LogLoadingMenuDiagnosticSnapshot(
+				transition.terminalRequestedAt.load(std::memory_order_acquire)
+					? "post-terminal-heartbeat"
+					: "transition-heartbeat");
+			AdvanceLoadingTransitionSnapshotDeadline(transition, now);
+		}
+
+		const ULONGLONG observationAt = transition.observationStartedAt.load(
+			std::memory_order_acquire);
+		if (observationAt && LoadingMenuAgeMs(now, observationAt)
+			>= kLoadingTransitionPostTerminalObservationMs)
+		{
+			FinishLoadingTransition("transition-observation-complete",
+				transition.terminalReason.load(std::memory_order_acquire),
+				transition.terminalSucceeded.load(
+					std::memory_order_acquire) != 0);
+		}
+		return transition.captureEnabled.load(std::memory_order_acquire);
 	}
 
 	void BeginNativeLoadingMenuTextGeometryDiagnostic(

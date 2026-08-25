@@ -3,6 +3,7 @@
 #include "encoding.h"
 #include "globals.h"
 #include "load_config.h"
+#include "native_tile_overlay.h"
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,72 @@ namespace fonthook::vectorfont
 {
 	namespace implementation::font_atlas_direct {}
 	using namespace implementation::font_atlas_direct;
+
+	namespace implementation::font_atlas_direct
+	{
+		std::atomic<UInt64> s_directProfileFailureTotal{ 0 };
+		std::atomic<UInt64> s_directProfileFailureSuppressedTotal{ 0 };
+		std::atomic<UInt64> s_directProfileRecoveryTotal{ 0 };
+		std::atomic<ULONGLONG> s_directProfileLastFailureAt{ 0 };
+		std::atomic<ULONGLONG> s_directProfileLastRecoveryAt{ 0 };
+		std::atomic<UInt64> s_directProfileActiveFailureSignature{ 0 };
+		std::atomic<UInt32> s_directProfileLastFontId{ 0 };
+		std::atomic<UInt32> s_directProfileLastStatus{
+			static_cast<UInt32>(DirectProfileAcquireStatus::NotAttempted)
+		};
+
+		void MixDirectProfileFailureSignature(UInt64& hash, UInt64 value) noexcept
+		{
+			hash ^= value;
+			hash *= 1099511628211ull;
+		}
+
+		UInt64 MakeDirectProfileFailureSignature(
+			UInt32 fontId, const DirectProfileAcquireResult& result) noexcept
+		{
+			UInt64 hash = 1469598103934665603ull;
+			MixDirectProfileFailureSignature(hash, fontId);
+			MixDirectProfileFailureSignature(hash,
+				static_cast<UInt32>(result.status));
+			MixDirectProfileFailureSignature(hash, result.failureMask);
+			MixDirectProfileFailureSignature(hash, result.slotPresent ? 1u : 0u);
+			// Epoch and layout identities are printed with each retained event, but
+			// are deliberately excluded from the coalescing key. Their numeric values
+			// can change at every rebuild even when the failure class is unchanged.
+			MixDirectProfileFailureSignature(hash, result.codePageExpected);
+			MixDirectProfileFailureSignature(hash, result.codePageActual);
+			MixDirectProfileFailureSignature(hash,
+				result.rasterScaleMilliExpected);
+			MixDirectProfileFailureSignature(hash,
+				result.rasterScaleMilliActual);
+			return hash ? hash : 1u;
+		}
+
+	}
+
+	DirectProfileDiagnosticSnapshot
+		GetDirectProfileDiagnosticSnapshot() noexcept
+	{
+		DirectProfileDiagnosticSnapshot snapshot;
+		snapshot.totalFailures = s_directProfileFailureTotal.load(
+			std::memory_order_relaxed);
+		snapshot.totalSuppressed = s_directProfileFailureSuppressedTotal.load(
+			std::memory_order_relaxed);
+		snapshot.totalRecoveries = s_directProfileRecoveryTotal.load(
+			std::memory_order_relaxed);
+		snapshot.lastFailureAt = s_directProfileLastFailureAt.load(
+			std::memory_order_acquire);
+		snapshot.lastRecoveryAt = s_directProfileLastRecoveryAt.load(
+			std::memory_order_acquire);
+		snapshot.activeFailureSignature =
+			s_directProfileActiveFailureSignature.load(
+				std::memory_order_acquire);
+		snapshot.lastFontId = s_directProfileLastFontId.load(
+			std::memory_order_acquire);
+		snapshot.lastStatus = static_cast<DirectProfileAcquireStatus>(
+			s_directProfileLastStatus.load(std::memory_order_acquire));
+		return snapshot;
+	}
 
 	const char* DirectProfileInvalidationReasonName(
 		DirectProfileInvalidationReason reason) noexcept
@@ -160,10 +227,38 @@ namespace fonthook::vectorfont
 		{
 			return;
 		}
+		const UInt32 fontId = GetRuntimeConfig(runtime).fontId;
+		const UInt64 signature = MakeDirectProfileFailureSignature(fontId, result);
+		const ULONGLONG now = GetTickCount64();
+		const DirectProfileFailureLogDecision decision =
+			RecordRuntimeDirectProfileFailure(
+				runtime, signature, result.status, now);
+		s_directProfileFailureTotal.fetch_add(1u, std::memory_order_relaxed);
+		s_directProfileLastFailureAt.store(now, std::memory_order_release);
+		if (!decision.shouldLog)
+		{
+			s_directProfileFailureSuppressedTotal.fetch_add(
+				1u, std::memory_order_relaxed);
+			return;
+		}
+		s_directProfileActiveFailureSignature.store(
+			signature, std::memory_order_release);
+		s_directProfileLastFontId.store(fontId, std::memory_order_release);
+		s_directProfileLastStatus.store(
+			static_cast<UInt32>(result.status), std::memory_order_release);
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: sealed direct profile acquire failed font=%u traceId=%u status=%s mismatchMask=0x%02X slotPresent=%u epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u scaleMilliExpected=%u scaleMilliActual=%u thread=%u",
-			GetRuntimeConfig(runtime).fontId, trace ? trace->traceId : 0,
+			"tnvse_freetype_font: sealed direct profile acquire failure state font=%u transition=%llu traceId=%u status=%s signature=%016llX stateChanged=%u occurrences=%llu suppressedSinceLog=%llu previousOccurrences=%llu previousSuppressed=%llu mismatchMask=0x%02X slotPresent=%u epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u scaleMilliExpected=%u scaleMilliActual=%u thread=%u policy=state-change-and-milestones",
+			fontId,
+			static_cast<unsigned long long>(
+				GetNativeLoadingTransitionTraceId()),
+			trace ? trace->traceId : 0,
 			DirectProfileAcquireStatusName(result.status),
+			static_cast<unsigned long long>(signature),
+			decision.stateChanged ? 1u : 0u,
+			static_cast<unsigned long long>(decision.occurrences),
+			static_cast<unsigned long long>(decision.suppressedSinceLog),
+			static_cast<unsigned long long>(decision.previousOccurrences),
+			static_cast<unsigned long long>(decision.previousSuppressed),
 			static_cast<UInt32>(result.failureMask),
 			result.slotPresent ? 1u : 0u,
 			result.epochExpected, result.epochActual,
@@ -172,6 +267,48 @@ namespace fonthook::vectorfont
 			result.codePageExpected, result.codePageActual,
 			result.rasterScaleMilliExpected,
 			result.rasterScaleMilliActual, GetCurrentThreadId());
+	}
+
+	static void LogDirectProfileAcquireRecovery(RuntimeFont& runtime,
+		const std::shared_ptr<const SealedDirectFontProfile>& profile,
+		bool allowRasterScaleMismatch)
+	{
+		if (!g_bEnableFreeTypeFontRenderingLog)
+			return;
+		const DirectProfileFailureRecovery recovery =
+			ConsumeRuntimeDirectProfileFailureRecovery(
+				runtime, allowRasterScaleMismatch);
+		if (!recovery.recovered)
+			return;
+		const ULONGLONG now = GetTickCount64();
+		s_directProfileRecoveryTotal.fetch_add(1u, std::memory_order_relaxed);
+		s_directProfileLastRecoveryAt.store(now, std::memory_order_release);
+		UInt64 expected = recovery.signature;
+		const bool clearedActiveFailure =
+			s_directProfileActiveFailureSignature.compare_exchange_strong(
+			expected, 0u, std::memory_order_acq_rel,
+			std::memory_order_acquire);
+		if (clearedActiveFailure)
+		{
+			s_directProfileLastFontId.store(
+				GetRuntimeConfig(runtime).fontId, std::memory_order_release);
+			s_directProfileLastStatus.store(
+				static_cast<UInt32>(DirectProfileAcquireStatus::Acquired),
+				std::memory_order_release);
+		}
+		gLog.FormattedMessage(
+			"tnvse_freetype_font: sealed direct profile acquire recovered font=%u transition=%llu signature=%016llX occurrences=%llu suppressed=%llu failureAgeMs=%llu profileIdentity=%016llX epoch=%u thread=%u",
+			GetRuntimeConfig(runtime).fontId,
+			static_cast<unsigned long long>(
+				GetNativeLoadingTransitionTraceId()),
+			static_cast<unsigned long long>(recovery.signature),
+			static_cast<unsigned long long>(recovery.occurrences),
+			static_cast<unsigned long long>(recovery.suppressed),
+			static_cast<unsigned long long>(recovery.startedAt
+				&& now >= recovery.startedAt ? now - recovery.startedAt : 0),
+			static_cast<unsigned long long>(profile ? profile->identity : 0),
+			profile ? profile->validityEpoch : 0,
+			GetCurrentThreadId());
 	}
 
 	static void LogDirectProfileInvalidation(RuntimeFont& runtime,
@@ -199,8 +336,11 @@ namespace fonthook::vectorfont
 				== static_cast<UInt8>(VectorFontByteClass::DoubleByte)
 					? "doubleByte" : "singleByte";
 		gLog.FormattedMessage(
-			"tnvse_freetype_font: sealed direct profile invalidated font=%u traceId=%u api=%s reason=%s failureStage=%s failureStageCode=%u encodedPresent=%u encoded=0x%04X encodedBytes=%u encodedRole=%s mismatchMask=0x%02X slotPresent=%u candidateCurrent=%u cleared=%u slotIdentity=%016llX profileIdentity=%016llX epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u profilesAvailable=%u profileValid=%u thread=%u",
-			GetRuntimeConfig(runtime).fontId, trace ? trace->traceId : 0,
+			"tnvse_freetype_font: sealed direct profile invalidated font=%u transition=%llu traceId=%u api=%s reason=%s failureStage=%s failureStageCode=%u encodedPresent=%u encoded=0x%04X encodedBytes=%u encodedRole=%s mismatchMask=0x%02X slotPresent=%u candidateCurrent=%u cleared=%u slotIdentity=%016llX profileIdentity=%016llX epochExpected=%u epochActual=%u layoutExpected=%016llX layoutActual=%016llX codePageExpected=%u codePageActual=%u profilesAvailable=%u profileValid=%u thread=%u",
+			GetRuntimeConfig(runtime).fontId,
+			static_cast<unsigned long long>(
+				GetNativeLoadingTransitionTraceId()),
+			trace ? trace->traceId : 0,
 			conditional ? "if-current" : "force",
 			DirectProfileInvalidationReasonName(context.reason),
 			DirectShapeFailureStageName(context.shapeFailureStage),
@@ -314,6 +454,7 @@ namespace fonthook::vectorfont
 		}
 		result.status = DirectProfileAcquireStatus::Acquired;
 		result.profile = sealed;
+		LogDirectProfileAcquireRecovery(runtime, sealed, false);
 		return result;
 	}
 
@@ -337,6 +478,10 @@ namespace fonthook::vectorfont
 			result.failureMask |= kDirectProfileFailureRasterScale;
 			result.profile.reset();
 			LogDirectProfileAcquireFailure(runtime, result);
+		}
+		else
+		{
+			LogDirectProfileAcquireRecovery(runtime, result.profile, true);
 		}
 		return result;
 	}

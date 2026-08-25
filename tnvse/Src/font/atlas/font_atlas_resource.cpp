@@ -36,6 +36,29 @@ namespace fonthook::vectorfont
 		std::atomic<UInt32> s_atlasMemoryPressureLogCount = 0;
 		std::atomic<UInt32> s_defaultPoolResetPublicationTimeoutCount = 0;
 
+		struct DefaultPoolAtlasDiagnosticState
+		{
+			std::atomic<UInt64> resetSequence{ 0 };
+			std::atomic<DefaultPoolResetDiagnosticPhase> phase{
+				DefaultPoolResetDiagnosticPhase::Idle
+			};
+			std::atomic<ULONGLONG> phaseEnteredAt{ 0 };
+			std::atomic<UInt64> deviceEpoch{ 0 };
+			std::atomic<UInt32> activePublications{ 0 };
+			std::atomic_bool resetInProgress{ false };
+		};
+
+		DefaultPoolAtlasDiagnosticState s_defaultPoolDiagnostics;
+
+		void SetDefaultPoolDiagnosticPhase(
+			DefaultPoolResetDiagnosticPhase phase) noexcept
+		{
+			s_defaultPoolDiagnostics.phaseEnteredAt.store(
+				GetTickCount64(), std::memory_order_release);
+			s_defaultPoolDiagnostics.phase.store(
+				phase, std::memory_order_release);
+		}
+
 		struct DefaultPoolPublicationThreadState
 		{
 			UInt32 depth = 0;
@@ -45,6 +68,34 @@ namespace fonthook::vectorfont
 		};
 		thread_local DefaultPoolPublicationThreadState
 			s_defaultPoolPublicationThread;
+	}
+
+	DefaultPoolAtlasDiagnosticSnapshot
+		GetDefaultPoolAtlasDiagnosticSnapshot(bool includeMaintenance) noexcept
+	{
+		DefaultPoolAtlasDiagnosticSnapshot snapshot;
+		snapshot.resetSequence = s_defaultPoolDiagnostics.resetSequence.load(
+			std::memory_order_acquire);
+		snapshot.phase = s_defaultPoolDiagnostics.phase.load(
+			std::memory_order_acquire);
+		snapshot.phaseEnteredAt =
+			s_defaultPoolDiagnostics.phaseEnteredAt.load(
+				std::memory_order_acquire);
+		snapshot.deviceEpoch = s_defaultPoolDiagnostics.deviceEpoch.load(
+			std::memory_order_acquire);
+		snapshot.activePublications =
+			s_defaultPoolDiagnostics.activePublications.load(
+				std::memory_order_acquire);
+		snapshot.resetInProgress =
+			s_defaultPoolDiagnostics.resetInProgress.load(
+				std::memory_order_acquire);
+		if (includeMaintenance)
+		{
+			snapshot.maintenancePending =
+				State().defaultPoolMaintenancePending.load(
+					std::memory_order_acquire);
+		}
+		return snapshot;
 	}
 
 	void ResetAtlasAllocationMemoryPressure()
@@ -207,12 +258,26 @@ namespace fonthook::vectorfont
 		if (state.defaultPoolShutdown)
 		{
 			deviceEpoch = state.defaultPoolDeviceEpoch;
+			s_defaultPoolDiagnostics.deviceEpoch.store(
+				deviceEpoch, std::memory_order_release);
+			s_defaultPoolDiagnostics.resetInProgress.store(
+				true, std::memory_order_release);
+			SetDefaultPoolDiagnosticPhase(
+				DefaultPoolResetDiagnosticPhase::Shutdown);
 			return false;
 		}
 		if (beforeReset)
 		{
+			s_defaultPoolDiagnostics.resetSequence.fetch_add(
+				1u, std::memory_order_acq_rel);
 			state.defaultPoolResetInProgress = true;
 			waitedPublications = state.defaultPoolActivePublications;
+			s_defaultPoolDiagnostics.activePublications.store(
+				waitedPublications, std::memory_order_release);
+			s_defaultPoolDiagnostics.resetInProgress.store(
+				true, std::memory_order_release);
+			SetDefaultPoolDiagnosticPhase(
+				DefaultPoolResetDiagnosticPhase::WaitingForPublications);
 			const bool publicationsDrained =
 				state.defaultPoolPublicationCondition.wait_for(
 					lock, std::chrono::seconds(2), [&]
@@ -229,12 +294,36 @@ namespace fonthook::vectorfont
 				state.defaultPoolResetInProgress = false;
 				deviceEpoch = state.defaultPoolDeviceEpoch;
 				timedOut = true;
+				s_defaultPoolDiagnostics.deviceEpoch.store(
+					deviceEpoch, std::memory_order_release);
+				s_defaultPoolDiagnostics.activePublications.store(
+					state.defaultPoolActivePublications,
+					std::memory_order_release);
+				s_defaultPoolDiagnostics.resetInProgress.store(
+					false, std::memory_order_release);
+				SetDefaultPoolDiagnosticPhase(
+					DefaultPoolResetDiagnosticPhase::Cancelled);
 				lock.unlock();
 				state.defaultPoolPublicationCondition.notify_all();
 				return false;
 			}
-			if (!state.defaultPoolShutdown)
-				++state.defaultPoolDeviceEpoch;
+			s_defaultPoolDiagnostics.activePublications.store(
+				state.defaultPoolActivePublications,
+				std::memory_order_release);
+			if (state.defaultPoolShutdown)
+			{
+				deviceEpoch = state.defaultPoolDeviceEpoch;
+				s_defaultPoolDiagnostics.deviceEpoch.store(
+					deviceEpoch, std::memory_order_release);
+				s_defaultPoolDiagnostics.resetInProgress.store(
+					true, std::memory_order_release);
+				SetDefaultPoolDiagnosticPhase(
+					DefaultPoolResetDiagnosticPhase::Shutdown);
+				return false;
+			}
+			++state.defaultPoolDeviceEpoch;
+			SetDefaultPoolDiagnosticPhase(
+				DefaultPoolResetDiagnosticPhase::ReleasingResources);
 		}
 		else if (!state.defaultPoolResetInProgress)
 		{
@@ -243,21 +332,43 @@ namespace fonthook::vectorfont
 			state.defaultPoolResetInProgress = true;
 			++state.defaultPoolDeviceEpoch;
 		}
+		if (!beforeReset)
+		{
+			s_defaultPoolDiagnostics.activePublications.store(
+				state.defaultPoolActivePublications,
+				std::memory_order_release);
+			s_defaultPoolDiagnostics.resetInProgress.store(
+				true, std::memory_order_release);
+			SetDefaultPoolDiagnosticPhase(
+				DefaultPoolResetDiagnosticPhase::RebuildingResources);
+		}
 		deviceEpoch = state.defaultPoolDeviceEpoch;
+		s_defaultPoolDiagnostics.deviceEpoch.store(
+			deviceEpoch, std::memory_order_release);
 		return !state.defaultPoolShutdown;
 	}
 
 	void LeaveDefaultPoolResetBarrier(bool beforeReset)
 	{
 		if (beforeReset)
+		{
+			SetDefaultPoolDiagnosticPhase(
+				DefaultPoolResetDiagnosticPhase::AwaitingDeviceReset);
 			return;
+		}
 		AtlasState& state = State();
 		{
 			std::lock_guard<std::mutex> lock(
 				state.defaultPoolPublicationMutex);
 			++state.defaultPoolDeviceEpoch;
 			state.defaultPoolResetInProgress = false;
+			s_defaultPoolDiagnostics.deviceEpoch.store(
+				state.defaultPoolDeviceEpoch, std::memory_order_release);
+			s_defaultPoolDiagnostics.resetInProgress.store(
+				false, std::memory_order_release);
 		}
+		SetDefaultPoolDiagnosticPhase(
+			DefaultPoolResetDiagnosticPhase::Idle);
 		state.defaultPoolPublicationCondition.notify_all();
 	}
 
@@ -270,7 +381,17 @@ namespace fonthook::vectorfont
 			state.defaultPoolShutdown = shutdown;
 			state.defaultPoolResetInProgress = shutdown;
 			++state.defaultPoolDeviceEpoch;
+			s_defaultPoolDiagnostics.deviceEpoch.store(
+				state.defaultPoolDeviceEpoch, std::memory_order_release);
+			s_defaultPoolDiagnostics.resetInProgress.store(
+				shutdown, std::memory_order_release);
+			s_defaultPoolDiagnostics.activePublications.store(
+				state.defaultPoolActivePublications,
+				std::memory_order_release);
 		}
+		SetDefaultPoolDiagnosticPhase(shutdown
+			? DefaultPoolResetDiagnosticPhase::Shutdown
+			: DefaultPoolResetDiagnosticPhase::Idle);
 		state.defaultPoolPublicationCondition.notify_all();
 	}
 
