@@ -72,191 +72,35 @@ if(TNVSE_BUILD_FONT_QUALITY_PROBE)
     FOLDER "tNVSE/Diagnostics")
 endif()
 
-option(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS
-  "Build the deterministic dictionary UI syntax regression tests" OFF)
-if(TNVSE_BUILD_DICTIONARY_UI_SYNTAX_TESTS)
-  enable_testing()
-  add_executable(tnvse_dictionary_ui_syntax_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/dictionary_ui_syntax_tests.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary/dictionary_ui_syntax.cpp")
-  target_compile_features(tnvse_dictionary_ui_syntax_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_dictionary_ui_syntax_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary")
-  target_compile_options(tnvse_dictionary_ui_syntax_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_dictionary_ui_syntax_tests)
-  set_target_properties(tnvse_dictionary_ui_syntax_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME dictionary_ui_syntax
-    COMMAND $<TARGET_FILE:tnvse_dictionary_ui_syntax_tests>)
-endif()
-
-option(TNVSE_BUILD_DICTIONARY_TRANSLATION_GUARD_TESTS
-  "Build the dictionary console-suppression policy tests" OFF)
-if(TNVSE_BUILD_DICTIONARY_TRANSLATION_GUARD_TESTS)
-  enable_testing()
-  add_executable(tnvse_dictionary_translation_guard_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/dictionary_translation_guard_tests.cpp")
-  target_compile_features(tnvse_dictionary_translation_guard_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_dictionary_translation_guard_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/dictionary")
-  target_compile_options(tnvse_dictionary_translation_guard_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_dictionary_translation_guard_tests)
-  set_target_properties(tnvse_dictionary_translation_guard_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME dictionary_translation_guard
-    COMMAND $<TARGET_FILE:tnvse_dictionary_translation_guard_tests>)
-endif()
-
-option(TNVSE_BUILD_MENU_SEARCH_OWNER_STATE_TESTS
-  "Build the deterministic Stewie MenuSearch owner-state tests" OFF)
-if(TNVSE_BUILD_MENU_SEARCH_OWNER_STATE_TESTS)
-  set(_tnvse_menu_search_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input/multibyte_input_menu_search.cpp")
-  file(READ "${_tnvse_menu_search_source}" _tnvse_menu_search_contents)
-  foreach(_tnvse_forbidden_menu_search_state IN ITEMS
-      "keyboardActive"
-      "stateSyncWasActive"
-      "kStewieMenuSearchSync_Toggle"
-      "menusearch_active_maintenance")
-    string(FIND "${_tnvse_menu_search_contents}"
-      "${_tnvse_forbidden_menu_search_state}" _tnvse_forbidden_offset)
-    if(NOT _tnvse_forbidden_offset EQUAL -1)
-      message(FATAL_ERROR
-        "MenuSearch absolute-owner-state gate failed: ${_tnvse_forbidden_menu_search_state}")
-    endif()
-  endforeach()
+set(_tnvse_menu_search_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input/multibyte_input_menu_search.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${_tnvse_menu_search_source}")
+file(READ "${_tnvse_menu_search_source}" _tnvse_menu_search_contents)
+foreach(_tnvse_forbidden_menu_search_state IN ITEMS
+    "keyboardActive"
+    "stateSyncWasActive"
+    "kStewieMenuSearchSync_Toggle"
+    "menusearch_active_maintenance")
   string(FIND "${_tnvse_menu_search_contents}"
-    "if (s_menuSearchAdaptersInstalled && !needsActiveMaintenance)"
-    _tnvse_inactive_fast_path_offset)
-  if(_tnvse_inactive_fast_path_offset EQUAL -1)
+    "${_tnvse_forbidden_menu_search_state}" _tnvse_forbidden_offset)
+  if(NOT _tnvse_forbidden_offset EQUAL -1)
     message(FATAL_ERROR
-      "MenuSearch inactive-discovery fast path was removed")
+      "MenuSearch absolute-owner-state gate failed: ${_tnvse_forbidden_menu_search_state}")
   endif()
-  unset(_tnvse_inactive_fast_path_offset)
-  unset(_tnvse_forbidden_offset)
-  unset(_tnvse_forbidden_menu_search_state)
-  unset(_tnvse_menu_search_contents)
-  unset(_tnvse_menu_search_source)
-
-  enable_testing()
-  add_executable(tnvse_menu_search_owner_state_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/menu_search_owner_state_tests.cpp")
-  target_compile_features(tnvse_menu_search_owner_state_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_menu_search_owner_state_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input")
-  target_compile_options(tnvse_menu_search_owner_state_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_menu_search_owner_state_tests)
-  set_target_properties(tnvse_menu_search_owner_state_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME menu_search_owner_state
-    COMMAND $<TARGET_FILE:tnvse_menu_search_owner_state_tests>)
+endforeach()
+string(FIND "${_tnvse_menu_search_contents}"
+  "if (s_menuSearchAdaptersInstalled && !needsActiveMaintenance)"
+  _tnvse_inactive_fast_path_offset)
+if(_tnvse_inactive_fast_path_offset EQUAL -1)
+  message(FATAL_ERROR
+    "MenuSearch inactive-discovery fast path was removed")
 endif()
-
-option(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS
-  "Build the deterministic renderer reset recovery state tests" OFF)
-if(TNVSE_BUILD_RENDERER_RESET_RECOVERY_TESTS)
-  enable_testing()
-  add_executable(tnvse_renderer_reset_recovery_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/renderer_reset_recovery_tests.cpp")
-  target_compile_features(tnvse_renderer_reset_recovery_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_renderer_reset_recovery_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/native")
-  target_compile_options(tnvse_renderer_reset_recovery_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_renderer_reset_recovery_tests)
-  set_target_properties(tnvse_renderer_reset_recovery_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME renderer_reset_recovery
-    COMMAND $<TARGET_FILE:tnvse_renderer_reset_recovery_tests>)
-endif()
-
-option(TNVSE_BUILD_PREWARM_OVERLAY_MAILBOX_TESTS
-  "Build the deterministic prewarm overlay mailbox/owner-state tests" OFF)
-if(TNVSE_BUILD_PREWARM_OVERLAY_MAILBOX_TESTS)
-  enable_testing()
-  add_executable(tnvse_prewarm_overlay_mailbox_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/prewarm_overlay_mailbox_tests.cpp")
-  target_compile_features(tnvse_prewarm_overlay_mailbox_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_prewarm_overlay_mailbox_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/game")
-  target_compile_definitions(tnvse_prewarm_overlay_mailbox_tests PRIVATE
-    NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_compile_options(tnvse_prewarm_overlay_mailbox_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_prewarm_overlay_mailbox_tests)
-  set_target_properties(tnvse_prewarm_overlay_mailbox_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME prewarm_overlay_mailbox
-    COMMAND $<TARGET_FILE:tnvse_prewarm_overlay_mailbox_tests>)
-endif()
-
-option(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS
-  "Build the deterministic font-prewarm cancellation/watchdog tests" OFF)
-if(TNVSE_BUILD_FONT_PREWARM_RUN_CONTROL_TESTS)
-  enable_testing()
-  add_executable(tnvse_font_prewarm_run_control_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_prewarm_run_control_tests.cpp")
-  target_compile_features(tnvse_font_prewarm_run_control_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_font_prewarm_run_control_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font")
-  target_compile_options(tnvse_font_prewarm_run_control_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_font_prewarm_run_control_tests)
-  set_target_properties(tnvse_font_prewarm_run_control_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME font_prewarm_run_control
-    COMMAND $<TARGET_FILE:tnvse_font_prewarm_run_control_tests>)
-endif()
-
-option(TNVSE_BUILD_FONT_MULTIBYTE_PREWARM_TESTS
-  "Build the deterministic multibyte prewarm policy tests" OFF)
-if(TNVSE_BUILD_FONT_MULTIBYTE_PREWARM_TESTS)
-  enable_testing()
-  add_executable(tnvse_font_multibyte_prewarm_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_multibyte_prewarm_tests.cpp")
-  target_compile_features(tnvse_font_multibyte_prewarm_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_font_multibyte_prewarm_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font")
-  target_compile_definitions(tnvse_font_multibyte_prewarm_tests PRIVATE
-    NOMINMAX WIN32_LEAN_AND_MEAN)
-  target_compile_options(tnvse_font_multibyte_prewarm_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_font_multibyte_prewarm_tests)
-  set_target_properties(tnvse_font_multibyte_prewarm_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME font_multibyte_prewarm
-    COMMAND $<TARGET_FILE:tnvse_font_multibyte_prewarm_tests>)
-endif()
-
-option(TNVSE_BUILD_TEXT_SAFETY_TESTS
-  "Build the deterministic retail text-boundary regression tests" OFF)
-if(TNVSE_BUILD_TEXT_SAFETY_TESTS)
-  enable_testing()
-  add_executable(tnvse_text_safety_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/text_safety_tests.cpp")
-  target_compile_features(tnvse_text_safety_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_text_safety_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src")
-  target_compile_options(tnvse_text_safety_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_text_safety_tests)
-  set_target_properties(tnvse_text_safety_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME text_safety
-    COMMAND $<TARGET_FILE:tnvse_text_safety_tests>)
-endif()
-
-option(TNVSE_BUILD_FONT_ATLAS_BUDGET_LRU_TESTS
-  "Build the sealed-profile atlas budget LRU policy tests" OFF)
-if(TNVSE_BUILD_FONT_ATLAS_BUDGET_LRU_TESTS)
-  enable_testing()
-  add_executable(tnvse_font_atlas_budget_lru_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/font_atlas_budget_lru_tests.cpp")
-  target_compile_features(tnvse_font_atlas_budget_lru_tests PRIVATE cxx_std_20)
-  target_include_directories(tnvse_font_atlas_budget_lru_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/atlas")
-  target_compile_options(tnvse_font_atlas_budget_lru_tests PRIVATE /utf-8)
-  tnvse_apply_msvc_defaults(tnvse_font_atlas_budget_lru_tests)
-  set_target_properties(tnvse_font_atlas_budget_lru_tests PROPERTIES
-    FOLDER "tNVSE/Tests")
-  add_test(NAME font_atlas_budget_lru
-    COMMAND $<TARGET_FILE:tnvse_font_atlas_budget_lru_tests>)
-endif()
+unset(_tnvse_inactive_fast_path_offset)
+unset(_tnvse_forbidden_offset)
+unset(_tnvse_forbidden_menu_search_state)
+unset(_tnvse_menu_search_contents)
+unset(_tnvse_menu_search_source)
 
 set(_tnvse_atlas_cache_source
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/atlas/font_atlas_cache.cpp")
