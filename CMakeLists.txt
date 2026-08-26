@@ -102,6 +102,39 @@ unset(_tnvse_forbidden_menu_search_state)
 unset(_tnvse_menu_search_contents)
 unset(_tnvse_menu_search_source)
 
+set(_tnvse_ime_input_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/input/multibyte_input_ime.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${_tnvse_ime_input_source}")
+file(READ "${_tnvse_ime_input_source}" _tnvse_ime_input_contents)
+foreach(_tnvse_forbidden_ime_mode_write IN ITEMS
+    "ImmSetOpenStatus"
+    "ImmSetConversionStatus")
+  string(FIND "${_tnvse_ime_input_contents}"
+    "${_tnvse_forbidden_ime_mode_write}" _tnvse_ime_mode_write_offset)
+  if(NOT _tnvse_ime_mode_write_offset EQUAL -1)
+    message(FATAL_ERROR
+      "Multibyte input must preserve the current IME mode; forbidden write: ${_tnvse_forbidden_ime_mode_write}")
+  endif()
+endforeach()
+foreach(_tnvse_required_ime_takeover_pattern IN ITEMS
+    "ImmAssociateContextEx(hwnd, nullptr, IACE_DEFAULT)"
+    "ImmAssociateContext(hwnd, nullptr)"
+    "ObserveCurrentGameImeState")
+  string(FIND "${_tnvse_ime_input_contents}"
+    "${_tnvse_required_ime_takeover_pattern}" _tnvse_ime_takeover_offset)
+  if(_tnvse_ime_takeover_offset EQUAL -1)
+    message(FATAL_ERROR
+      "Multibyte IME takeover/preserve gate failed: ${_tnvse_required_ime_takeover_pattern}")
+  endif()
+endforeach()
+unset(_tnvse_ime_takeover_offset)
+unset(_tnvse_required_ime_takeover_pattern)
+unset(_tnvse_ime_mode_write_offset)
+unset(_tnvse_forbidden_ime_mode_write)
+unset(_tnvse_ime_input_contents)
+unset(_tnvse_ime_input_source)
+
 set(_tnvse_atlas_cache_source
   "${CMAKE_CURRENT_SOURCE_DIR}/tnvse/Src/font/atlas/font_atlas_cache.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

@@ -318,7 +318,8 @@ namespace fonthook
 				{
 					m_currentInputMethodName =
 						QueryCurrentInputMethodName();
-					RefreshImeStatus(s_window);
+					ObserveCurrentGameImeState(
+						s_window, "tsf_profile_activation");
 					State().overlayRefreshPending = true;
 					DebugLog(
 						"tnvse_multibyte_input: TSF input profile activation observed");

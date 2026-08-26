@@ -11,6 +11,28 @@ namespace fonthook
 		{
 			ImeState s_imeState;
 
+			constexpr bool ShouldArmNativeImeAsciiGuardForObservedMode(
+				bool configuredLayout,
+				bool imeOpen,
+				DWORD conversionMode)
+			{
+				return configuredLayout
+					&& imeOpen
+					&& (conversionMode & IME_CMODE_NATIVE) != 0;
+			}
+
+			// Opening a tNVSE-owned text target must never change the user's IME
+			// mode.  The guard is only a consequence of an already-active native
+			// mode, never a reason to request that mode.
+			static_assert(!ShouldArmNativeImeAsciiGuardForObservedMode(
+				false, true, IME_CMODE_NATIVE));
+			static_assert(!ShouldArmNativeImeAsciiGuardForObservedMode(
+				true, false, IME_CMODE_NATIVE));
+			static_assert(!ShouldArmNativeImeAsciiGuardForObservedMode(
+				true, true, IME_CMODE_ALPHANUMERIC));
+			static_assert(ShouldArmNativeImeAsciiGuardForObservedMode(
+				true, true, IME_CMODE_NATIVE));
+
 			enum ImeResultHandoffPreserve : UInt8
 			{
 				kPreserveNone = 0,
@@ -168,7 +190,7 @@ namespace fonthook
 					return true;
 			}
 
-			// Open/native is only the requested IMM compatibility state. Modern TSF
+			// Open/native is only the observed IMM compatibility state. Modern TSF
 			// IMEs can report it before they actually start a composition. Treating it
 			// as permanent consumption loses every ASCII key until the input profile is
 			// switched. The short activation guard above covers the first-key race;
@@ -520,80 +542,43 @@ namespace fonthook
 			ImmReleaseContext(hwnd, context);
 		}
 
-		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout)
+		void ObserveCurrentGameImeState(HWND hwnd, const char* reason, HKL expectedLayout)
 		{
 			if (!hwnd)
 				return;
 
-			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
+			ImeState& state = State();
+			const bool configuredLayout =
+				IsConfiguredImeLayout(hwnd, expectedLayout);
+			if (!configuredLayout)
 			{
-				State().nativeImeAsciiGuardUntilTick = 0;
-				return;
-			}
-
-			HIMC context = ImmGetContext(hwnd);
-			if (!context)
-				return;
-
-			DWORD conversionMode = 0;
-			DWORD sentenceMode = 0;
-			const bool wasOpen = ImmGetOpenStatus(context) != FALSE;
-			const bool hasConversionStatus = ImmGetConversionStatus(
-				context,
-				&conversionMode,
-				&sentenceMode) != FALSE;
-
-			bool changed = false;
-			if (!wasOpen)
-			{
-				ImmSetOpenStatus(context, TRUE);
-				changed = true;
-			}
-
-			if (hasConversionStatus && !(conversionMode & IME_CMODE_NATIVE))
-			{
-				ImmSetConversionStatus(context, conversionMode | IME_CMODE_NATIVE, sentenceMode);
-				conversionMode |= IME_CMODE_NATIVE;
-				changed = true;
-			}
-
-			ImmReleaseContext(hwnd, context);
-
-			const bool guardNativeAscii = hasConversionStatus && (conversionMode & IME_CMODE_NATIVE);
-			if (guardNativeAscii)
-				State().nativeImeAsciiGuardUntilTick = GetTickCount() + kNativeImeAsciiGuardMs;
-
-			if (changed || guardNativeAscii)
-			{
-				RefreshImeStatus(hwnd, expectedLayout);
-				DebugLog(
-					"tnvse_multibyte_input: prepared configured IME reason=%s changed=%u guard=%u open=%u native=%u",
-					reason ? reason : "unknown",
-					changed ? 1 : 0,
-					guardNativeAscii ? 1 : 0,
-					State().candidate.imeOpen ? 1 : 0,
-					(State().candidate.conversionMode & IME_CMODE_NATIVE) ? 1 : 0);
-			}
-		}
-
-		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout)
-		{
-			if (!hwnd)
-				return;
-
-			if (!IsConfiguredImeLayout(hwnd, expectedLayout))
-			{
-				State().nativeImeAsciiGuardUntilTick = 0;
+				state.nativeImeAsciiGuardUntilTick = 0;
 				s_imeComposing = false;
 				ClearImePreviewState();
 			}
-			EnsureConfiguredImeOpen(hwnd, reason, expectedLayout);
+
+			// Reassociation and ownership are handled by SetGameImeEnabled.  Read the
+			// context exactly as Windows/TSF supplied it; never turn the IME on and
+			// never add IME_CMODE_NATIVE here.  A Chinese/Japanese/Korean HKL can be
+			// intentionally left in its alphanumeric sub-mode by the user.
 			RefreshImeStatus(hwnd, expectedLayout);
+			const bool guardNativeAscii =
+				ShouldArmNativeImeAsciiGuardForObservedMode(
+					configuredLayout,
+					state.candidate.imeOpen,
+					state.candidate.conversionMode);
+			state.nativeImeAsciiGuardUntilTick = guardNativeAscii
+				? GetTickCount() + kNativeImeAsciiGuardMs
+				: 0;
 			DebugLog(
-				"tnvse_multibyte_input: game IME default context enabled reason=%s open=%u native=%u",
+				"tnvse_multibyte_input: observed current IME mode reason=%s policy=preserve configured=%u guard=%u open=%u native=%u conversion=0x%08X sentence=0x%08X",
 				reason ? reason : "unknown",
-				State().candidate.imeOpen ? 1 : 0,
-				(State().candidate.conversionMode & IME_CMODE_NATIVE) ? 1 : 0);
+				configuredLayout ? 1 : 0,
+				guardNativeAscii ? 1 : 0,
+				state.candidate.imeOpen ? 1 : 0,
+				(state.candidate.conversionMode & IME_CMODE_NATIVE) ? 1 : 0,
+				state.candidate.conversionMode,
+				state.candidate.sentenceMode);
 		}
 
 		void SetGameImeEnabled(HWND hwnd, bool enable)
@@ -643,8 +628,9 @@ namespace fonthook
 				state.associatedGameImeLayout = layout;
 				state.associatedGameImeGeneration =
 					state.textInputSessionGeneration;
-				RestoreDefaultGameImeContext(hwnd, "enable");
-				DebugLog("tnvse_multibyte_input: game IME context enabled");
+				ObserveCurrentGameImeState(hwnd, "enable");
+				DebugLog(
+					"tnvse_multibyte_input: game IME context enabled modePolicy=preserve-current");
 				return;
 			}
 

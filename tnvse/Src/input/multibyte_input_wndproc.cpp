@@ -113,8 +113,8 @@ namespace fonthook
 				ClearImePreviewState();
 
 				const bool inserted = InsertWideTextStewie(target, composition);
-				EnsureConfiguredImeOpen(s_window, "menusearch_enter_literal");
-				RefreshImeStatus(s_window);
+				ObserveCurrentGameImeState(
+					s_window, "menusearch_enter_literal");
 				UpdateCandidateOverlay();
 				DebugLog(
 					"tnvse_multibyte_input_event: source=MenuSearch.Enter action=commit_ime_literal chars=%u inserted=%u",
@@ -764,7 +764,8 @@ namespace fonthook
 					state.associatedGameImeLayout = nullptr;
 					state.associatedGameImeGeneration = 0;
 					state.hiddenSystemImeUiEpoch = 0;
-					RestoreDefaultGameImeContext(hwnd, "inputlangchange", newLayout);
+					ObserveCurrentGameImeState(
+						hwnd, "inputlangchange", newLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
 					DebugLog(
@@ -805,7 +806,8 @@ namespace fonthook
 					state.associatedGameImeLayout = nullptr;
 					state.associatedGameImeGeneration = 0;
 					state.hiddenSystemImeUiEpoch = 0;
-					RestoreDefaultGameImeContext(hwnd, "winspace_complete", currentLayout);
+					ObserveCurrentGameImeState(
+						hwnd, "winspace_complete", currentLayout);
 					ClearImeCandidates();
 					UpdateCandidateOverlay();
 					if (event.winDown)
@@ -853,7 +855,7 @@ namespace fonthook
 
 				if (state.textInputSessionActive && IsFocusRestoreMessage(msg, wParam))
 				{
-					RestoreDefaultGameImeContext(hwnd, "focus_restore");
+					ObserveCurrentGameImeState(hwnd, "focus_restore");
 					state.hiddenSystemImeUiEpoch = 0;
 					if (s_imeComposing)
 						HideSystemImeWindows(hwnd);
@@ -963,8 +965,9 @@ namespace fonthook
 					case IMN_SETOPENSTATUS:
 					case IMN_SETCONVERSIONMODE:
 					case IMN_SETSENTENCEMODE:
-						RefreshImeStatus(hwnd);
-						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=refresh_ime_status");
+						ObserveCurrentGameImeState(
+							hwnd, "ime_status_notify");
+						DebugLog("tnvse_multibyte_input_event: source=WndProc.WM_IME_NOTIFY action=observe_ime_status policy=preserve");
 						break;
 					default:
 						break;

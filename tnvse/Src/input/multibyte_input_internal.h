@@ -344,8 +344,7 @@ namespace fonthook
 		void RefreshTextInputSessionForActiveTarget(const char* reason);
 		void EndStewieTextInputSession(const char* reason);
 		void SetGameImeEnabled(HWND hwnd, bool enable);
-		void RestoreDefaultGameImeContext(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
-		void EnsureConfiguredImeOpen(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
+		void ObserveCurrentGameImeState(HWND hwnd, const char* reason, HKL expectedLayout = nullptr);
 		void UpdateGameImeAssociation();
 		void PumpImeStatusWatchdog();
 		void RefreshImeStatus(HWND hwnd, HKL expectedLayout = nullptr);
