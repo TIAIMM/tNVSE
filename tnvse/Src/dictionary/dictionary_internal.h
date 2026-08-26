@@ -171,7 +171,9 @@ namespace fonthook
 	bool TryTranslateMuxQuestPrompt(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateItemEffectList(const std::string& source, std::string& translated, int depth);
 	bool TryTranslateMultiplierText(const std::string& source, std::string& translated, int depth);
-	bool TryTranslatePerkDescription(const std::string& source, std::string& translated, int depth);
+	bool TryTranslatePerkDescription(
+		const std::string& source, std::string& translated, int depth,
+		bool mixedSource);
 	bool TryTranslateRegexText(const std::string& source, std::string& translated, bool mixedSource);
 	bool TryTranslateFuzzyText(const std::string& source, std::string& translated, int depth);
 	void ResetFuzzyTextConfig();

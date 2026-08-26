@@ -19,6 +19,7 @@ namespace fonthook
 			bool hasRanks = false;
 			bool hasSource = false;
 			bool hasBody = false;
+			bool hasCanonicalLabel = false;
 		};
 
 		struct PerkRequirementConfig
@@ -30,6 +31,14 @@ namespace fonthook
 			std::string andText;
 			std::string orText;
 			std::string notText;
+			std::string fullwidthColon;
+		};
+
+		struct PerkLabelLocation
+		{
+			size_t position = std::string::npos;
+			size_t valueBegin = std::string::npos;
+			bool canonical = false;
 		};
 
 		PerkRequirementConfig s_perkRequirementConfig;
@@ -169,19 +178,78 @@ namespace fonthook
 			return pos;
 		}
 
-		size_t FindKeyword(const std::string& text, const char* keyword, size_t pos)
+		bool TryMatchPerkLabelAt(
+			const std::string& text,
+			size_t pos,
+			const char* canonicalLabel,
+			const std::string& localizedLabel,
+			bool allowLocalizedLabel,
+			PerkLabelLocation& match)
 		{
-			const size_t length = std::char_traits<char>::length(keyword);
-			while (pos < text.size())
+			const auto tryLabel = [&](std::string_view label, bool canonical)
 			{
-				const size_t found = text.find(keyword, pos);
-				if (found == std::string::npos)
-					return std::string::npos;
-				if (found == 0 || IsAsciiWhitespace(text[found - 1]))
-					return found;
-				pos = found + length;
+				if (label.empty() || pos + label.size() > text.size() ||
+					!EqualsIgnoreCase(
+						std::string_view(text).substr(pos, label.size()), label))
+				{
+					return false;
+				}
+
+				size_t cursor = pos + label.size();
+				if (cursor < text.size() && text[cursor] == ':')
+				{
+					++cursor;
+				}
+				else if (!s_perkRequirementConfig.fullwidthColon.empty() &&
+					cursor + s_perkRequirementConfig.fullwidthColon.size() <= text.size() &&
+					text.compare(
+						cursor, s_perkRequirementConfig.fullwidthColon.size(),
+						s_perkRequirementConfig.fullwidthColon) == 0)
+				{
+					cursor += s_perkRequirementConfig.fullwidthColon.size();
+				}
+				else
+				{
+					return false;
+				}
+
+				match.position = pos;
+				match.valueBegin = cursor;
+				match.canonical = canonical;
+				return true;
+			};
+
+			if (tryLabel(canonicalLabel, true))
+				return true;
+			if (!allowLocalizedLabel || localizedLabel.empty() ||
+				EqualsIgnoreCase(localizedLabel, canonicalLabel))
+			{
+				return false;
 			}
-			return std::string::npos;
+			return tryLabel(localizedLabel, false);
+		}
+
+		PerkLabelLocation FindPerkLabel(
+			const std::string& text,
+			const char* canonicalLabel,
+			const std::string& localizedLabel,
+			size_t pos,
+			bool allowLocalizedLabel)
+		{
+			for (; pos < text.size(); ++pos)
+			{
+				if (pos != 0 && !IsAsciiWhitespace(text[pos - 1]))
+					continue;
+
+				PerkLabelLocation match;
+				if (TryMatchPerkLabelAt(
+					text, pos, canonicalLabel, localizedLabel,
+					allowLocalizedLabel, match))
+				{
+					return match;
+				}
+			}
+			return {};
 		}
 
 		size_t MinPosition(size_t left, size_t right)
@@ -227,20 +295,35 @@ namespace fonthook
 			return std::string::npos;
 		}
 
-		bool ParsePerkDescription(const std::string& source, PerkDescriptionParts& parts)
+		bool ParsePerkDescription(
+			const std::string& source,
+			PerkDescriptionParts& parts,
+			bool allowLocalizedLabels)
 		{
 			parts = PerkDescriptionParts{};
 			std::string text = source;
 			TrimAsciiWhitespace(text);
-			if (!StartsWithIgnoreCase(text, "Req:"))
-				return false;
 
-			size_t cursor = 4;
+			PerkLabelLocation reqLabel;
+			if (!TryMatchPerkLabelAt(
+				text, 0, "Req", s_perkRequirementConfig.reqText,
+				allowLocalizedLabels, reqLabel))
+			{
+				return false;
+			}
+			parts.hasCanonicalLabel = reqLabel.canonical;
+
+			size_t cursor = reqLabel.valueBegin;
 			SkipAsciiWhitespace(text, cursor);
 
-			const size_t ranksPos = FindKeyword(text, "Ranks:", cursor);
-			const size_t sourcePos = FindKeyword(text, "Source:", cursor);
-			const size_t firstKeyword = MinPosition(ranksPos, sourcePos);
+			const PerkLabelLocation ranksLabel = FindPerkLabel(
+				text, "Ranks", s_perkRequirementConfig.ranksText,
+				cursor, allowLocalizedLabels);
+			const PerkLabelLocation sourceLabel = FindPerkLabel(
+				text, "Source", s_perkRequirementConfig.sourceText,
+				cursor, allowLocalizedLabels);
+			const size_t firstKeyword = MinPosition(
+				ranksLabel.position, sourceLabel.position);
 			if (firstKeyword == std::string::npos)
 			{
 				const size_t lineBreak = FindLineBreak(text, cursor);
@@ -264,16 +347,22 @@ namespace fonthook
 				return false;
 
 			cursor = firstKeyword;
-			if (cursor == ranksPos)
+			PerkLabelLocation activeSourceLabel = sourceLabel;
+			if (cursor == ranksLabel.position)
 			{
-				cursor += 6;
+				parts.hasCanonicalLabel =
+					parts.hasCanonicalLabel || ranksLabel.canonical;
+				cursor = ranksLabel.valueBegin;
 				SkipAsciiWhitespace(text, cursor);
 
-				const size_t sourceAfterRanks = FindKeyword(text, "Source:", cursor);
-				if (sourceAfterRanks != std::string::npos)
+				activeSourceLabel = FindPerkLabel(
+					text, "Source", s_perkRequirementConfig.sourceText,
+					cursor, allowLocalizedLabels);
+				if (activeSourceLabel.position != std::string::npos)
 				{
-					parts.ranks = TrimAsciiWhitespaceCopy(text.substr(cursor, sourceAfterRanks - cursor));
-					cursor = sourceAfterRanks;
+					parts.ranks = TrimAsciiWhitespaceCopy(
+						text.substr(cursor, activeSourceLabel.position - cursor));
+					cursor = activeSourceLabel.position;
 				}
 				else
 				{
@@ -292,9 +381,11 @@ namespace fonthook
 					return false;
 			}
 
-			if (cursor == sourcePos || (cursor < text.size() && text.compare(cursor, 7, "Source:") == 0))
+			if (cursor == activeSourceLabel.position)
 			{
-				cursor += 7;
+				parts.hasCanonicalLabel =
+					parts.hasCanonicalLabel || activeSourceLabel.canonical;
+				cursor = activeSourceLabel.valueBegin;
 				SkipAsciiWhitespace(text, cursor);
 
 				const size_t sourceEnd = FindSourceExtensionEnd(text, cursor);
@@ -311,6 +402,21 @@ namespace fonthook
 			}
 
 			return true;
+		}
+
+		bool ContainsUntranslatedRequirementSyntax(const std::string& text)
+		{
+			for (size_t pos = 0; pos < text.size(); ++pos)
+			{
+				if (IsStandaloneWordAt(text, pos, "NOT") ||
+					IsStandaloneWordAt(text, pos, "AND") ||
+					IsStandaloneWordAt(text, pos, "OR") ||
+					IsStandaloneWordAt(text, pos, "Level"))
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 
 		const char* DefaultReqText()
@@ -346,6 +452,11 @@ namespace fonthook
 		const char* DefaultNotText()
 		{
 			return "\xE6\xB2\xA1\xE6\x9C\x89";
+		}
+
+		const char* DefaultFullwidthColon()
+		{
+			return "\xEF\xBC\x9A";
 		}
 
 		std::string FindChildText(pugi::xml_node parent, const char* nodeName)
@@ -605,6 +716,8 @@ namespace fonthook
 		s_perkRequirementConfig.andText = PrepareTarget(DefaultAndText());
 		s_perkRequirementConfig.orText = PrepareTarget(DefaultOrText());
 		s_perkRequirementConfig.notText = PrepareTarget(DefaultNotText());
+		s_perkRequirementConfig.fullwidthColon =
+			PrepareTarget(DefaultFullwidthColon());
 	}
 
 	void LoadPerkRequirementConfig(pugi::xml_node root)
@@ -617,6 +730,8 @@ namespace fonthook
 		s_perkRequirementConfig.andText = LoadPerkConfigText(perkNode, "and", DefaultAndText());
 		s_perkRequirementConfig.orText = LoadPerkConfigText(perkNode, "or", DefaultOrText());
 		s_perkRequirementConfig.notText = LoadPerkConfigText(perkNode, "not", DefaultNotText());
+		s_perkRequirementConfig.fullwidthColon =
+			PrepareTarget(DefaultFullwidthColon());
 
 		if (g_bEnableDictionaryTranslationLog)
 		{
@@ -633,14 +748,23 @@ namespace fonthook
 		}
 	}
 
-	bool TryTranslatePerkDescription(const std::string& source, std::string& translated, int depth)
+	bool TryTranslatePerkDescription(
+		const std::string& source,
+		std::string& translated,
+		int depth,
+		bool mixedSource)
 	{
 		if (depth >= 4 || source.empty())
 			return false;
 
 		PerkDescriptionParts parts;
-		if (!ParsePerkDescription(source, parts))
+		if (!ParsePerkDescription(source, parts, mixedSource))
 			return false;
+		if (mixedSource && !parts.hasCanonicalLabel &&
+			!ContainsUntranslatedRequirementSyntax(parts.requirement))
+		{
+			return false;
+		}
 
 		std::string requirement = TranslateRequirementText(parts.requirement, depth);
 		if (requirement.empty())
@@ -665,7 +789,9 @@ namespace fonthook
 		translated = std::move(result);
 		if (g_bEnableDictionaryTranslationLog)
 		{
-			gLog.FormattedMessage("tnvse_dictionary: perk description match:");
+			gLog.FormattedMessage(
+				"tnvse_dictionary: %sperk description match:",
+				mixedSource ? "mixed-source " : "");
 			gLog.FormattedMessage("tnvse_dictionary:   source=\"%s\"", source.c_str());
 			gLog.FormattedMessage("tnvse_dictionary:   result=\"%s\"", translated.c_str());
 		}

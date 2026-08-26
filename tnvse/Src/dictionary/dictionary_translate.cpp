@@ -1928,7 +1928,8 @@ namespace fonthook
 				tryWindows1252Backed("perk-description",
 					[&](std::string& candidate)
 					{
-						return TryTranslatePerkDescription(raw, candidate, depth);
+						return TryTranslatePerkDescription(
+							raw, candidate, depth, false);
 					}))
 			{
 				StorePositiveCache(cacheKey, translated);
@@ -2025,7 +2026,16 @@ namespace fonthook
 			return true;
 		}
 
-		if (!sourceContainsDbcs && g_bEnableDictionaryPerkDescriptionTranslation && TryTranslatePerkDescription(raw, translated, depth))
+		if (sourceIsMixed && g_bEnableDictionaryMixedSourceTranslation &&
+			g_bEnableDictionaryPerkDescriptionTranslation &&
+			TryTranslatePerkDescription(raw, translated, depth, true))
+		{
+			StorePositiveCache(cacheKey, translated);
+			return true;
+		}
+
+		if (!sourceContainsDbcs && g_bEnableDictionaryPerkDescriptionTranslation &&
+			TryTranslatePerkDescription(raw, translated, depth, false))
 		{
 			StorePositiveCache(cacheKey, translated);
 			return true;
