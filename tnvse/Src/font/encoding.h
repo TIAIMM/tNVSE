@@ -11,6 +11,7 @@ namespace fonthook
 	enum class CodePage : UInt32
 	{
 		Windows1252 = 1252,
+		Windows1251 = 1251,
 		GBK = 936,
 		Big5 = 950,
 		SJIS = 932,
@@ -19,6 +20,9 @@ namespace fonthook
 
 	constexpr UInt32 kWindows1252CodePage =
 		static_cast<UInt32>(CodePage::Windows1252);
+
+	constexpr UInt32 kWindows1251CodePage =
+		static_cast<UInt32>(CodePage::Windows1251);
 
 	bool IsDbcsCodePage(UInt32 codePage);
 	bool IsEastAsianUiMode();
