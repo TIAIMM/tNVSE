@@ -21,7 +21,13 @@ namespace fonthook
 
 	UInt32 GetFreeTypeTextCodePage()
 	{
-		return UsesDbcsTextLayout() ? g_usingWinEncoding : kWindows1252CodePage;
+		if (UsesDbcsTextLayout())
+			return g_usingWinEncoding;
+
+		if (g_usingWinEncoding == kWindows1251CodePage)
+			return kWindows1251CodePage;
+
+		return kWindows1252CodePage;
 	}
 
 	// ===================== GBK (Code Page 936) =====================

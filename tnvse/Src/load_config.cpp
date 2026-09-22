@@ -125,17 +125,18 @@ void LoadConfig()
 
 	const UINT32 configuredUiEncoding = ReadConfigInt(
 		kMultibyteSection, "uiEncoding", 1, filename);
-	g_uiEncoding = g_bEnableMultibyteFontHook ? configuredUiEncoding : 0;
+	g_uiEncoding = configuredUiEncoding;
 	switch (g_uiEncoding)
 	{
-	case 0: g_usingWinEncoding = 1252; break; // Windows-1252
+	case 0: g_usingWinEncoding = 1252; break; //Windows-1252
 	case 1: g_usingWinEncoding = 936; break; //GBK
 	case 2: g_usingWinEncoding = 950; break; //Big5
-	case 3:  g_usingWinEncoding = 932;  break; //Shift-JIS
+	case 3: g_usingWinEncoding = 932; break; //Shift-JIS
 	case 4: g_usingWinEncoding = 949; break; //UHC
+	case 5: g_usingWinEncoding = 1251; break; //Windows-1251
 	default:
-		g_uiEncoding = 1;
-		g_usingWinEncoding = 936;
+		g_uiEncoding = 0;
+		g_usingWinEncoding = 1252;
 		break;
 	}
 	gLog.FormattedMessage("Encoding: uiEncoding=%u codePage=%u",
