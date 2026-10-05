@@ -407,3 +407,9 @@ ipch
 # Jetbrains
 nvse/.idea/
 nvse/enc_temp_folder/
+
+# Local build output
+/build/
+
+# Local NuGet executable
+/nuget.exe
