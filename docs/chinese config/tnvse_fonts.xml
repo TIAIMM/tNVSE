@@ -62,8 +62,9 @@
       <singleByte> and <doubleByte>
 
       singleByte handles valid one-byte units; doubleByte handles valid DBCS
-      pairs. FreeType-only mode is always Windows-1252 and therefore routes
-      every byte through singleByte, regardless of configured uiEncoding.
+      pairs. With the Multibyte Font Hook disabled, FreeType uses Windows-1252
+      unless uiEncoding=5 selects Windows-1251; both use singleByte.
+      East Asian doubleByte layout requires the hook and uiEncoding=1-4.
       Each byte-class node may override:
         pixelSize, tracking, fixedWidth, scaleX, scaleY, embolden, slant,
         baselineOffset
