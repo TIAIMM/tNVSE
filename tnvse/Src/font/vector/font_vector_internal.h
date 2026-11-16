@@ -9,6 +9,7 @@
 #include <array>
 #include <list>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -522,6 +523,8 @@ namespace fonthook::vectorfont
 		VanillaLayoutStandardLiteFallbackPrelude,
 		VanillaLayoutStandardLiteCurrentDeclarationReplay,
 		VanillaLayoutStandardLiteCompatibleDeclarationReplay,
+		IndexedRequestedQuad,
+		IndexedSubmittedQuad,
 		Count,
 	};
 	static_assert(
@@ -558,6 +561,9 @@ namespace fonthook::vectorfont
 		FrameRoutePrep,
 		FrameRouteVanillaRender,
 		DispatchRoute,
+		Measurement,
+		ShortTextBuild,
+		RichTextDestruction,
 		Count,
 	};
 	inline constexpr UInt32 kNativeFontDispatchRouteCpuSampleRate = 256u;
@@ -911,6 +917,41 @@ namespace fonthook::vectorfont
 		UInt8 byteLength = 0;
 	};
 	static_assert(sizeof(DirectGlyphCommand) <= 36);
+
+	// Both sources are borrowed for a synchronous build. Prepared units already
+	// own positions; materialize an individual command only when it is consumed.
+	class DirectGlyphView
+	{
+	public:
+		DirectGlyphView() = default;
+		DirectGlyphView(std::span<const DirectGlyphCommand> commands) : m_commands(commands) {}
+		DirectGlyphView(std::span<const DirectTextUnit> units, const NiColorA& color)
+			: m_units(units), m_color(color) {}
+		size_t size() const { return m_units.empty() ? m_commands.size() : m_units.size(); }
+		bool empty() const { return !size(); }
+		DirectGlyphCommand operator[](size_t i) const
+		{
+			if (m_units.empty()) return m_commands[i];
+			const auto& unit = m_units[i];
+			return {unit.pen, m_color, unit.directSlot, unit.encodedCode,
+				unit.byteClass, unit.byteLength};
+		}
+		DirectGlyphCommand front() const { return (*this)[0]; }
+		struct Iterator
+		{
+			const DirectGlyphView* view;
+			size_t index;
+			DirectGlyphCommand operator*() const { return (*view)[index]; }
+			Iterator& operator++() { ++index; return *this; }
+			bool operator!=(const Iterator& other) const { return index != other.index; }
+		};
+		Iterator begin() const { return {this, 0}; }
+		Iterator end() const { return {this, size()}; }
+	private:
+		std::span<const DirectGlyphCommand> m_commands;
+		std::span<const DirectTextUnit> m_units;
+		NiColorA m_color = {1.0f, 1.0f, 1.0f, 1.0f};
+	};
 
 	enum class GlyphAtlasBuildOutcome : UInt8
 	{
@@ -1340,13 +1381,13 @@ namespace fonthook::vectorfont
 	void ShutdownFontPrewarmWorker();
 	void ShutdownFontPrewarm();
 	NiTriShape* TryCreateGlyphAtlasShape(Font& arFont, RuntimeFont& arRuntime,
-		const std::vector<AtlasGlyphInstance>& arGlyphs, float afRasterScale,
+		std::span<const AtlasGlyphInstance> arGlyphs, float afRasterScale,
 		bool abPrepareObject, const NiColorA& arTileColor, bool abSuppressEffects,
 		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);
 	NiTriShape* TryCreateSealedGlyphAtlasShape(Font& arFont,
 		RuntimeFont& arRuntime,
 		const std::shared_ptr<const SealedDirectFontProfile>& apProfile,
-		const std::vector<DirectGlyphCommand>& arGlyphs, float afRasterScale,
+		DirectGlyphView arGlyphs, float afRasterScale,
 		bool abPrepareObject, const NiColorA& arTileColor,
 		bool abSuppressEffects,
 		GlyphAtlasBuildDiagnostics* apDiagnostics = nullptr);

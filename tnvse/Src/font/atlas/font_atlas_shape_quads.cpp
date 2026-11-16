@@ -77,7 +77,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildPendingQuads(RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 			const std::array<bool, 4>& included, const NiColorA& tileColor,
 			bool preferDirectAtlas, std::vector<PendingQuad>& quads,
 			PendingQuadBuildFailure& failure)
@@ -425,7 +425,7 @@ namespace fonthook::vectorfont
 		}
 
 		bool BuildShaderEffectQuads(RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 			EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
 			std::vector<PendingQuad>& quads,
 			ShaderEffectBuild& build)

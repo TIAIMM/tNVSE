@@ -397,8 +397,32 @@ namespace fonthook
 		NiColorA tileColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 		std::shared_ptr<const vectorfont::SealedDirectFontProfile>
 			sealedProfile;
-		std::vector<vectorfont::DirectGlyphCommand> directGlyphs;
-		std::vector<vectorfont::AtlasGlyphInstance> glyphs;
+		// Ordinary text borrows its prepared units and never constructs either
+		// command buffer. Only the route actually used initializes inline slots.
+		std::optional<vectorfont::NativeFontInlineVector<
+			vectorfont::DirectGlyphCommand, 32>> directGlyphs;
+		auto& DirectCommands()
+		{
+			if (!directGlyphs) directGlyphs.emplace();
+			return *directGlyphs;
+		}
+		std::shared_ptr<PreparedDirectTextSidecar> preparedGlyphs;
+		vectorfont::DirectGlyphView DirectGlyphs() const
+		{
+			return preparedGlyphs
+				? vectorfont::DirectGlyphView(preparedGlyphs->units, tileColor)
+				: directGlyphs ? vectorfont::DirectGlyphView(
+					std::span<const vectorfont::DirectGlyphCommand>(
+						directGlyphs->data(), directGlyphs->size()))
+				: vectorfont::DirectGlyphView{};
+		}
+		std::optional<vectorfont::NativeFontInlineVector<
+			vectorfont::AtlasGlyphInstance, 32>> glyphs;
+		auto& GenericGlyphs()
+		{
+			if (!glyphs) glyphs.emplace();
+			return *glyphs;
+		}
 
 		void RecordBuildReason(vectorfont::VectorTextBuildReason reason,
 			const VectorEncodedGlyph* glyph = nullptr)
@@ -442,11 +466,11 @@ namespace fonthook
 				return;
 			longTextTrace->builderDirectGlyphCount = std::max(
 				longTextTrace->builderDirectGlyphCount,
-				static_cast<UInt32>(std::min<size_t>(directGlyphs.size(),
+				static_cast<UInt32>(std::min<size_t>(DirectGlyphs().size(),
 					std::numeric_limits<UInt32>::max())));
 			longTextTrace->builderGenericGlyphCount = std::max(
 				longTextTrace->builderGenericGlyphCount,
-				static_cast<UInt32>(std::min<size_t>(glyphs.size(),
+				static_cast<UInt32>(std::min<size_t>(glyphs ? glyphs->size() : 0,
 					std::numeric_limits<UInt32>::max())));
 			longTextTrace->builderAtlasOutcome = diagnostics
 				? static_cast<UInt8>(diagnostics->outcome) : 0;
@@ -465,12 +489,12 @@ namespace fonthook
 				longTextTrace->builderDirectGlyphCount = std::max(
 					longTextTrace->builderDirectGlyphCount,
 					static_cast<UInt32>(std::min<size_t>(
-						directGlyphs.size(),
+						DirectGlyphs().size(),
 						std::numeric_limits<UInt32>::max())));
 			}
-			glyphs.clear();
-			glyphs.reserve(directGlyphs.size() + 1u);
-			for (const vectorfont::DirectGlyphCommand& command : directGlyphs)
+			GenericGlyphs().clear();
+			GenericGlyphs().reserve(DirectGlyphs().size() + 1u);
+			for (const vectorfont::DirectGlyphCommand& command : DirectGlyphs())
 			{
 				char replay[3] = {};
 				if (command.byteLength == 2)
@@ -497,7 +521,7 @@ namespace fonthook
 							command.byteClass;
 					}
 					sealedBatchInvalid = true;
-					glyphs.clear();
+					GenericGlyphs().clear();
 					sealedProfile.reset();
 					if (longTextTrace)
 					{
@@ -506,17 +530,18 @@ namespace fonthook
 					}
 					return false;
 				}
-				glyphs.push_back({ replayGlyph, command.pen,
+				GenericGlyphs().push_back({ replayGlyph, command.pen,
 					command.sourceColor });
 			}
-			directGlyphs.clear();
+			directGlyphs.reset();
+			preparedGlyphs.reset();
 			sealedProfile.reset();
 			sealedBatchInvalid = false;
 			MarkGenericRoute();
 			if (longTextTrace)
 			{
 				longTextTrace->builderGenericGlyphCount =
-					static_cast<UInt32>(std::min<size_t>(glyphs.size(),
+					static_cast<UInt32>(std::min<size_t>(glyphs ? glyphs->size() : 0,
 						std::numeric_limits<UInt32>::max()));
 			}
 			return true;
@@ -648,10 +673,15 @@ namespace fonthook
 		if (m_impl && m_impl->available)
 		{
 			if (m_impl->sealedProfile)
-				m_impl->directGlyphs.reserve(auiCount);
+				m_impl->DirectCommands().reserve(auiCount);
 			else
-				m_impl->glyphs.reserve(auiCount);
+				m_impl->GenericGlyphs().reserve(auiCount);
 		}
+	}
+
+	void VectorTextBuilder::UsePreparedGlyphs(std::shared_ptr<PreparedDirectTextSidecar> sidecar)
+	{
+		m_impl->preparedGlyphs = std::move(sidecar);
 	}
 
 	bool VectorTextBuilder::AddGlyph(const VectorEncodedGlyph& glyph,
@@ -692,7 +722,7 @@ namespace fonthook
 				// for subsequent compatible long-text batches.
 				if (!m_impl->ConvertDirectGlyphsToGeneric())
 					return false;
-				m_impl->glyphs.push_back({ glyph, pen, sourceColor });
+				m_impl->GenericGlyphs().push_back({ glyph, pen, sourceColor });
 				return true;
 			}
 			vectorfont::DirectGlyphCommand command;
@@ -704,11 +734,11 @@ namespace fonthook
 			command.byteClass =
 				static_cast<UInt8>(glyph.byteClass);
 			command.byteLength = glyph.byteLength;
-			m_impl->directGlyphs.push_back(command);
+			m_impl->DirectCommands().push_back(command);
 		}
 		else
 		{
-			m_impl->glyphs.push_back({ glyph, pen, sourceColor });
+			m_impl->GenericGlyphs().push_back({ glyph, pen, sourceColor });
 		}
 		return true;
 	}
@@ -795,7 +825,7 @@ namespace fonthook
 					vectorfont::TryCreateSealedGlyphAtlasShape(
 						*m_impl->font, *m_impl->runtime,
 						m_impl->sealedProfile,
-						m_impl->directGlyphs,
+						m_impl->DirectGlyphs(),
 						m_impl->rasterScale,
 						m_impl->prepareObject,
 						m_impl->tileColor,
@@ -810,7 +840,7 @@ namespace fonthook
 				{
 					diagnostics->inputGlyphCount =
 						static_cast<UInt32>(
-							m_impl->directGlyphs.size());
+							m_impl->DirectGlyphs().size());
 					diagnostics->outcome =
 						vectorfont::GlyphAtlasBuildOutcome::
 							AtlasOrShapeFailure;
@@ -820,7 +850,8 @@ namespace fonthook
 		else
 		{
 			atlasShape = vectorfont::TryCreateGlyphAtlasShape(
-				*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+				*m_impl->font, *m_impl->runtime,
+				std::span<const vectorfont::AtlasGlyphInstance>(m_impl->GenericGlyphs().data(), m_impl->GenericGlyphs().size()),
 				m_impl->rasterScale, m_impl->prepareObject,
 				m_impl->tileColor, m_impl->suppressEffects,
 				diagnostics);
@@ -836,7 +867,8 @@ namespace fonthook
 			if (m_impl->ConvertDirectGlyphsToGeneric())
 			{
 				atlasShape = vectorfont::TryCreateGlyphAtlasShape(
-					*m_impl->font, *m_impl->runtime, m_impl->glyphs,
+					*m_impl->font, *m_impl->runtime,
+				std::span<const vectorfont::AtlasGlyphInstance>(m_impl->GenericGlyphs().data(), m_impl->GenericGlyphs().size()),
 					m_impl->rasterScale, m_impl->prepareObject,
 					m_impl->tileColor, m_impl->suppressEffects,
 					diagnostics);

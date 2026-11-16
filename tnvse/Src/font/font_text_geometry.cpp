@@ -143,22 +143,39 @@ namespace fonthook
 			LongTextTicksToMicroseconds(totalTicks));
 	}
 
-	static float GetFreeTypeLineOffset(FontEx* font, const char* text,
-		float requestedWrapWidth, UInt32 flags, UInt32 startCharIndex)
+	class FreeTypeLineOffsetCache
 	{
-		const UInt32 justification = flags & 0x0F;
-		if (justification != 2 && justification != 4)
-			return 0.0f;
-		const float wrapWidth = requestedWrapWidth > 0.0f
-			? requestedWrapWidth : std::numeric_limits<float>::max();
-		NiPoint3 dimensions = {};
-		if (!MeasureFreeTypeSingleByteText(font, text, wrapWidth,
-			startCharIndex, dimensions))
+		FontEx* font;
+		const char* text;
+		int cachedWidth = 0;
+		std::vector<FreeTypeSuffixWidth> suffixes;
+	public:
+		FreeTypeLineOffsetCache(FontEx* f, const char* t) : font(f), text(t) {}
+		float Get(float requestedWidth, UInt32 flags, UInt32 start)
 		{
-			return 0.0f;
+			const UInt32 justification = flags & 0x0F;
+			if (justification != 2 && justification != 4) return 0.0f;
+			const int wrap = std::isfinite(requestedWidth) && requestedWidth > 0
+				&& requestedWidth < static_cast<float>(INT_MAX)
+				? std::max(1, static_cast<int>(std::floor(requestedWidth))) : INT_MAX;
+			if (cachedWidth != wrap)
+			{
+				bool reusable = false;
+				if (!MeasureFreeTypeSuffixWidths(font, text, wrap, suffixes, reusable)) return 0.0f;
+				cachedWidth = reusable ? wrap : 0;
+			}
+			const auto found = std::lower_bound(suffixes.begin(), suffixes.end(), start,
+				[](const FreeTypeSuffixWidth& entry, UInt32 offset) { return entry.byteOffset < offset; });
+			float width = 0.0f;
+			if (found != suffixes.end() && found->byteOffset == start) width = static_cast<float>(found->width);
+			else
+			{
+				NiPoint3 dimensions = {};
+				if (MeasureFreeTypeSingleByteText(font, text, static_cast<float>(wrap), start, dimensions)) width = dimensions.x;
+			}
+			return justification == 2 ? width * -0.5f : -width;
 		}
-		return justification == 2 ? dimensions.x * -0.5f : -dimensions.x;
-	}
+	};
 
 	static int GetBaseFontGlyphIndex(const Font* apFont, const FontLetter* apLetter)
 	{
@@ -409,7 +426,7 @@ namespace fonthook
 	static void CreateFreeTypePreparedText(
 		FontEx* font,
 		Font::TextData& textData,
-		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar,
+		std::shared_ptr<PreparedDirectTextSidecar> preparedSidecar,
 		int* outputWidth,
 		int aiFlags,
 		char aiLineBreakChar,
@@ -419,6 +436,8 @@ namespace fonthook
 		float rasterScale,
 		LongTextGeometryTiming* longTextTiming)
 	{
+		vectorfont::FreeTypePerfScope shortTextPerf(
+			vectorfont::FreeTypePerfPhase::ShortTextBuild, textData.iCharCount <= 32);
 		const SInt64 geometryScanStart = longTextTiming
 			? ReadLongTextQpc() : 0;
 		*textShape = nullptr;
@@ -433,7 +452,7 @@ namespace fonthook
 			ThisStdCall<void>(0x7593E0, reinterpret_cast<char*>(&textData));
 			return;
 		}
-		builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
+
 		if (outputWidth)
 			*outputWidth = textData.iWidth;
 		const char* preparedText = textData.xNewText.c_str();
@@ -503,22 +522,6 @@ namespace fonthook
 			trailingWhitespaceCount = 0;
 			trailingWhitespaceWidth = 0.0f;
 		};
-		auto addGlyph = [&](const VectorEncodedGlyph& glyph,
-			float glyphAdvance)
-		{
-			builder.AddGlyph(glyph, position, fontColor);
-			position.x += glyphAdvance;
-			if (glyph.encodedCode == kSpaceChar || glyph.encodedCode == kNBSPChar)
-			{
-				++trailingWhitespaceCount;
-				trailingWhitespaceWidth += glyphAdvance;
-			}
-			else
-			{
-				trailingWhitespaceCount = 0;
-				trailingWhitespaceWidth = 0.0f;
-			}
-		};
 
 		if (preparedSidecar && preparedSidecar->rejectBatch)
 		{
@@ -534,10 +537,10 @@ namespace fonthook
 					PreparedSidecarRejectedFallback);
 			preparedSidecar.reset();
 		}
-		const std::shared_ptr<const PreparedDirectTextSidecar>
+		const std::shared_ptr<PreparedDirectTextSidecar>
 			directSidecar = builder.UsesSealedDirectProfile()
 				? preparedSidecar
-				: std::shared_ptr<const PreparedDirectTextSidecar>();
+				: std::shared_ptr<PreparedDirectTextSidecar>();
 		if (vectorfont::FreeTypeLongTextTrace* trace =
 			vectorfont::GetActiveFreeTypeLongTextTrace())
 		{
@@ -552,6 +555,7 @@ namespace fonthook
 		}
 		if (directSidecar)
 		{
+			size_t glyphCount = 0;
 			for (const DirectTextUnit& unit :
 				directSidecar->units)
 			{
@@ -568,24 +572,31 @@ namespace fonthook
 					break;
 				case DirectTextUnitKind::Glyph:
 				{
-					VectorEncodedGlyph glyph;
-					glyph.encodedCode = unit.encodedCode;
-					glyph.directSlot = unit.directSlot;
-					glyph.hasDirectMetrics = true;
-					glyph.byteLength = unit.byteLength;
-					glyph.byteClass =
-						static_cast<VectorFontByteClass>(
-							unit.byteClass);
-					addGlyph(glyph, unit.advance);
+					DirectTextUnit commandUnit = unit;
+					commandUnit.pen = position;
+					directSidecar->units[glyphCount++] = commandUnit;
+					position.x += unit.advance;
+					if (g_bEnableFreeTypeFontRenderingLog)
+					{
+						if (unit.encodedCode == kSpaceChar || unit.encodedCode == kNBSPChar)
+						{
+							++trailingWhitespaceCount;
+							trailingWhitespaceWidth += unit.advance;
+						}
+						else { trailingWhitespaceCount = 0; trailingWhitespaceWidth = 0.0f; }
+					}
 					break;
 				}
 				default:
 					break;
 				}
 			}
+			directSidecar->units.resize(glyphCount);
+			builder.UsePreparedGlyphs(directSidecar);
 		}
 		else
 		{
+			builder.ReserveGlyphs(static_cast<size_t>(std::max(0, textData.iCharCount)));
 			for (int byteIndex = 0;
 				preparedText[byteIndex]; ++byteIndex)
 			{
@@ -785,8 +796,10 @@ namespace fonthook
 			}
 		}
 
+		NiTriShape* measureProxy = freeTypeActive && IsFreeTypeVuiProxyMeasureOnlyActive()
+			? CreateEmptyFreeTypeTextShape(this, true) : nullptr;
 		SInt64 layoutStart = 0;
-		std::shared_ptr<const PreparedDirectTextSidecar> preparedSidecar;
+		std::shared_ptr<PreparedDirectTextSidecar> preparedSidecar;
 		{
 			if (traceLongText)
 			{
@@ -795,7 +808,7 @@ namespace fonthook
 					traceId, GetTickCount() - traceStartTick);
 			}
 			layoutStart = traceLongText ? ReadLongTextQpc() : 0;
-			PreparedTextSidecarCapture capture(&textData, this);
+			PreparedTextSidecarCapture capture(&textData, this, measureProxy != nullptr);
 			if (g_bEnableMultibyteFontHook)
 			{
 				ThisStdCall<void>(0xA12FB0, this,
@@ -831,44 +844,40 @@ namespace fonthook
 		*aiWidth = textData.iWidth;
 		*aiHeight = textData.iHeight;
 
-		if (freeTypeActive && IsFreeTypeVuiProxyMeasureOnlyActive())
+		if (measureProxy)
 		{
-			NiTriShape* emptyProxy = CreateEmptyFreeTypeTextShape(this, true);
-			if (emptyProxy)
+			*apTextShape = measureProxy;
+			*apIconShape = nullptr;
+			this->ButtonIcons.Clear(1);
+			if (g_bEnableFreeTypeFontRenderingLog)
 			{
-				*apTextShape = emptyProxy;
-				*apIconShape = nullptr;
-				this->ButtonIcons.Clear(1);
-				if (g_bEnableFreeTypeFontRenderingLog)
+				static bool loggedVuiProxyMeasureOnly = false;
+				if (!loggedVuiProxyMeasureOnly)
 				{
-					static bool loggedVuiProxyMeasureOnly = false;
-					if (!loggedVuiProxyMeasureOnly)
-					{
-						loggedVuiProxyMeasureOnly = true;
-						FreeTypeFontDebugLog(
-							"tnvse_freetype_font: VUI+ ordinary proxy retained layout and bypassed glyph geometry font=%d",
-							this->iFontNum);
-					}
+					loggedVuiProxyMeasureOnly = true;
+					FreeTypeFontDebugLog(
+						"tnvse_freetype_font: VUI+ ordinary proxy retained layout and bypassed glyph geometry font=%d",
+						this->iFontNum);
 				}
-				ThisStdCall<void>(0x7593E0,
-					reinterpret_cast<char*>(&textData));
-				if (traceLongText)
-				{
-					const SInt64 totalTicks =
-						StopLongTextQpc(traceStartQpc);
-					gLog.FormattedMessage(
-						"tnvse_freetype_long_text: id=%u stage=measure-only-end elapsedMs=%u",
-						traceId, GetTickCount() - traceStartTick);
-					longTextTrace->builderInitialRoute =
-						vectorfont::VectorTextBuildRoute::MeasureOnly;
-					longTextTrace->builderFinalRoute =
-						vectorfont::VectorTextBuildRoute::MeasureOnly;
-					LogLongTextPerformance(*longTextTrace, preprocessTicks,
-						layoutTicks, geometryTiming, 0,
-						totalTicks);
-				}
-				return;
 			}
+			ThisStdCall<void>(0x7593E0,
+				reinterpret_cast<char*>(&textData));
+			if (traceLongText)
+			{
+				const SInt64 totalTicks =
+					StopLongTextQpc(traceStartQpc);
+				gLog.FormattedMessage(
+					"tnvse_freetype_long_text: id=%u stage=measure-only-end elapsedMs=%u",
+					traceId, GetTickCount() - traceStartTick);
+				longTextTrace->builderInitialRoute =
+					vectorfont::VectorTextBuildRoute::MeasureOnly;
+				longTextTrace->builderFinalRoute =
+					vectorfont::VectorTextBuildRoute::MeasureOnly;
+				LogLongTextPerformance(*longTextTrace, preprocessTicks,
+					layoutTicks, geometryTiming, 0,
+					totalTicks);
+			}
+			return;
 		}
 
 		if (freeTypeActive)
@@ -1074,16 +1083,12 @@ namespace fonthook
 		if (!textLen)
 			return 0;
 
+		FreeTypeLineOffsetCache lineOffsets(this, apTextString->pString);
 		float textYOffset = 0.0f;
 		float textXOffset = (float)*aiWidth;
 		if (freeTypeActive)
 		{
-			textXOffset = GetFreeTypeLineOffset(
-				this,
-				apTextString->pString,
-				textXOffset,
-				aiFlags,
-				0);
+			textXOffset = lineOffsets.Get(textXOffset, aiFlags, 0);
 		}
 		else
 		{
@@ -1158,9 +1163,7 @@ namespace fonthook
 					float nextLineX = static_cast<float>(*aiWidth);
 					if (freeTypeActive)
 					{
-						nextLineX = GetFreeTypeLineOffset(this,
-							apTextString->pString, nextLineX,
-							aiFlags, byteIndex + 1);
+						nextLineX = lineOffsets.Get(nextLineX, aiFlags, byteIndex + 1);
 					}
 					else
 					{

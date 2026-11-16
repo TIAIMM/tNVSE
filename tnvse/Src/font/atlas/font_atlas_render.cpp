@@ -41,7 +41,7 @@ namespace fonthook::vectorfont
 			}
 		}
 
-		void InitializeBuildDiagnostics(const std::vector<AtlasGlyphInstance>& glyphs,
+		void InitializeBuildDiagnostics(std::span<const AtlasGlyphInstance> glyphs,
 			GlyphAtlasBuildDiagnostics* diagnostics)
 		{
 			if (!diagnostics)
@@ -57,6 +57,7 @@ namespace fonthook::vectorfont
 				diagnostics->firstByteClass = static_cast<UInt8>(
 					glyphs.front().glyph.byteClass);
 			}
+			if (g_bEnableFreeTypeFontRenderingLog || GetActiveFreeTypeLongTextTrace())
 			for (const AtlasGlyphInstance& instance : glyphs)
 			{
 				if (!HasVectorGlyphMetrics(instance.glyph))
@@ -74,7 +75,7 @@ namespace fonthook::vectorfont
 	NiTriShape* TryCreateSealedGlyphAtlasShape(Font& font,
 		RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& profile,
-		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		DirectGlyphView glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor,
 		bool suppressEffects, GlyphAtlasBuildDiagnostics* diagnostics)
 	{
@@ -92,6 +93,7 @@ namespace fonthook::vectorfont
 				diagnostics->firstByteClass =
 					glyphs.front().byteClass;
 			}
+			if (g_bEnableFreeTypeFontRenderingLog || GetActiveFreeTypeLongTextTrace())
 			for (const DirectGlyphCommand& glyph : glyphs)
 			{
 				if (glyph.encodedCode < 0x20
@@ -248,7 +250,7 @@ namespace fonthook::vectorfont
 	}
 
 	NiTriShape* TryCreateGlyphAtlasShape(Font& font, RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+		std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& requestedTileColor, bool suppressEffects,
 		GlyphAtlasBuildDiagnostics* diagnostics)
 	{

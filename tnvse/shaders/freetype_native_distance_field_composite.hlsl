@@ -133,13 +133,29 @@ float NativeCompositeShadowSample(float alphaDistance, float bodyCoverage,
 float ApplyNativeCompositeHardShadow(float alphaDistance, float bodyCoverage,
 	float antialiasWidth, float distanceScale)
 {
-	const float glow = NativeCompositeGlowMask(alphaDistance, bodyCoverage,
-		antialiasWidth, distanceScale)
-		* NativeCompositeGlowFeather(alphaDistance, antialiasWidth,
-			distanceScale)
-		* saturate(EffectSecondary.w);
-	const float outline = NativeCompositeOutline(alphaDistance, bodyCoverage,
-		antialiasWidth, distanceScale) * saturate(CompositeFlags.x);
+	float glow = 0.0;
+	// Other visible layers already need these masks. Keep their shared
+	// arithmetic available to FXC; branch only when hard shadow is its sole user.
+#if COMPOSITE_STATIC_LAYER_MASK > 0 && !(COMPOSITE_STATIC_LAYER_MASK & 2)
+	[branch]
+	if (EffectSecondary.w > 0.0)
+#endif
+	{
+		glow = NativeCompositeGlowMask(alphaDistance, bodyCoverage,
+			antialiasWidth, distanceScale)
+			* NativeCompositeGlowFeather(alphaDistance, antialiasWidth,
+				distanceScale)
+			* saturate(EffectSecondary.w);
+	}
+	float outline = 0.0;
+#if COMPOSITE_STATIC_LAYER_MASK > 0 && !(COMPOSITE_STATIC_LAYER_MASK & 4)
+	[branch]
+	if (CompositeFlags.x > 0.0)
+#endif
+	{
+		outline = NativeCompositeOutline(alphaDistance, bodyCoverage,
+			antialiasWidth, distanceScale) * saturate(CompositeFlags.x);
+	}
 	const float outside = outline + (1.0 - outline) * glow;
 	return saturate(bodyCoverage + (1.0 - bodyCoverage) * outside);
 }

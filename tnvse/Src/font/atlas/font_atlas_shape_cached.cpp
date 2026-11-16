@@ -22,10 +22,10 @@
 
 namespace fonthook::vectorfont
 {
-		template <class GlyphInstance>
+		template <class GlyphRange>
 		NiTriShape* CreateDirectArgbPageShape(Font& font,
 			RuntimeFont& runtime,
-			const std::vector<GlyphInstance>& glyphs,
+			const GlyphRange& glyphs,
 			const DirectAtlasGlyphBatch& batch, float rasterScale,
 			const NiColorA& tileColor, bool prepareObject,
 			UInt16 atlasPage, UInt32 drawableGlyphs)
@@ -86,7 +86,7 @@ namespace fonthook::vectorfont
 				if ((!source.placement && !source.vanillaLetter)
 					|| source.atlasPage != atlasPage)
 					return nullptr;
-				const GlyphInstance& instance = glyphs[glyphIndex];
+				const auto& instance = glyphs[glyphIndex];
 				const NiColorA baseColor =
 					ResolveBaseColor(
 						GetDirectGlyphSourceColor(instance),
@@ -162,10 +162,10 @@ namespace fonthook::vectorfont
 			return shapeOwner.release();
 		}
 
-		template <class GlyphInstance>
+		template <class GlyphRange>
 		DirectAtlasShapeBuildResult CreateDirectCachedLetterShapeFromBatch(
 			Font& font, RuntimeFont& runtime,
-			const std::vector<GlyphInstance>& glyphs,
+			const GlyphRange& glyphs,
 			const DirectAtlasGlyphBatch& batch, float rasterScale,
 			bool prepareObject, const NiColorA& tileColor,
 			bool suppressEffects, GlyphMaskType maskType,
@@ -366,7 +366,7 @@ namespace fonthook::vectorfont
 				if (drawShadow && !shadowHasOffset)
 					bodyLayerMask |=
 						1u << static_cast<UInt8>(AtlasLayer::Shadow);
-				for (const GlyphInstance& instance : glyphs)
+				for (const auto& instance : glyphs)
 				{
 					const size_t roleIndex =
 						static_cast<size_t>(
@@ -542,7 +542,7 @@ namespace fonthook::vectorfont
 					batch.glyphs[glyphIndex];
 				if (source.knownEmpty)
 					continue;
-				const GlyphInstance& instance = glyphs[glyphIndex];
+				const auto& instance = glyphs[glyphIndex];
 				const UInt16 page = source.atlasPage;
 				float sourceToLogicalScale = 1.0f;
 				if (distanceField)
@@ -835,7 +835,7 @@ namespace fonthook::vectorfont
 
 		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 			Font& font, RuntimeFont& runtime,
-			const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+			std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 			bool prepareObject, const NiColorA& tileColor,
 			bool suppressEffects, GlyphMaskType maskType,
 			EffectQuality quality)
@@ -908,7 +908,7 @@ namespace fonthook::vectorfont
 		DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 			Font& font, RuntimeFont& runtime,
 			const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-			const std::vector<DirectGlyphCommand>& glyphs,
+			DirectGlyphView glyphs,
 			float rasterScale, bool prepareObject,
 			const NiColorA& tileColor, bool suppressEffects,
 			GlyphMaskType maskType, EffectQuality quality)

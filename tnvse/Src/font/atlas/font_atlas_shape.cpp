@@ -123,7 +123,7 @@ namespace fonthook::vectorfont
 			return effect.colorMode == EffectColorMode::Fill;
 		}
 
-		NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>&,
+		NiColorA ResolveSafeTileColor(std::span<const AtlasGlyphInstance>,
 			const NiColorA& requested)
 		{
 			// c0 is the live Tile color/alpha selected by the game (and may also be

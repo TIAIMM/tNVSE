@@ -177,6 +177,11 @@ namespace fonthook::vectorfont::implementation::font_native_shape_hooks
 
 		struct NativeDirectDrawLiteSubmission
 		{
+			NiTriShape* rangeGeometry = nullptr;
+			NiDX9Renderer* rangeRenderer = nullptr;
+			const NativeFontPayloadTemplate* rangeArtifact = nullptr;
+			const NativeFontPacketTemplate* rangePacket = nullptr;
+			NiPoint3 rangeOrigin = {0, 0, 0};
 			NiTriShapeData* data = nullptr;
 			NiDX9RenderState* renderState = nullptr;
 			IDirect3DDevice9* device = nullptr;

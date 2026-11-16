@@ -123,7 +123,7 @@ namespace fonthook::vectorfont
 				m_inline[m_inlineSize++] = value;
 				return;
 			}
-			Promote(size() + 1u);
+			if (!m_heapMode) Promote(std::max(size() + 1u, InlineCapacity * 2u));
 			m_heap.push_back(value);
 		}
 
@@ -134,7 +134,7 @@ namespace fonthook::vectorfont
 				m_inline[m_inlineSize++] = std::move(value);
 				return;
 			}
-			Promote(size() + 1u);
+			if (!m_heapMode) Promote(std::max(size() + 1u, InlineCapacity * 2u));
 			m_heap.push_back(std::move(value));
 		}
 
@@ -146,7 +146,7 @@ namespace fonthook::vectorfont
 				m_inline[m_inlineSize] = T(std::forward<Args>(args)...);
 				return m_inline[m_inlineSize++];
 			}
-			Promote(size() + 1u);
+			if (!m_heapMode) Promote(std::max(size() + 1u, InlineCapacity * 2u));
 			m_heap.emplace_back(std::forward<Args>(args)...);
 			return m_heap.back();
 		}
@@ -493,6 +493,10 @@ namespace fonthook::vectorfont
 			NativeFontVanillaLayoutKind::None;
 	};
 
+	inline constexpr UInt32 kNativeFontClipBlockVertices = 32u * 4u;
+	struct NativeFontClipBlock { NiBound bound; };
+	struct NativeFontVertexRange { UInt32 first = 0, count = 0; };
+
 	struct NativeFontPayloadTemplate
 	{
 		CpuMemoryLease cpuMemory;
@@ -505,6 +509,7 @@ namespace fonthook::vectorfont
 		std::vector<NiTexturingPropertyPtr> atlasProperties;
 		std::vector<NiTexturePtr> atlasTextures;
 		std::vector<NativeFontGpuVertex> gpuVertices;
+		std::vector<NativeFontClipBlock> clipBlocks;
 		std::vector<NativeFontPacketTemplate> packets;
 		// Optional single-pass distance-field representation. The ordinary packet
 		// list remains available if that shader class is unavailable.
@@ -1075,6 +1080,11 @@ namespace fonthook::vectorfont
 		const NiPropertyState* properties,
 		const NiDX9Renderer* renderer,
 		const NiTransform& effectiveWorld);
+	NativeFontVertexRange ResolveNativeFontVisibleVertexRange(
+		const NativeFontPayloadTemplate& artifact,
+		const NativeFontPacketTemplate& packet, const NiTriShape& geometry,
+		const NiDX9Renderer* renderer, const NiPoint3& modelOrigin);
+
 	struct NativeFontDrawCommand
 	{
 		NiTriShape* sourceGeometry = nullptr;

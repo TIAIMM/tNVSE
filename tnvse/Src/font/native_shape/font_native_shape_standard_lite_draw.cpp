@@ -175,6 +175,10 @@ namespace fonthook::vectorfont
 			submission.baseVertex = expected.baseVertex;
 			submission.vertexCount = vertexCount;
 			submission.triangleCount = triangleCount;
+			submission.rangeGeometry = geometry;
+			submission.rangeRenderer = renderer;
+			submission.rangeArtifact = command.payload->payloadTemplate.get();
+			submission.rangePacket = command.packet;
 			return NativeDirectDrawLiteFallback::None;
 		}
 
@@ -424,6 +428,11 @@ namespace fonthook::vectorfont
 			submission.baseVertex = drawToken.baseVertexIndex;
 			submission.vertexCount = vertexCount;
 			submission.triangleCount = triangleCount;
+			submission.rangeGeometry = geometry;
+			submission.rangeRenderer = renderer;
+			submission.rangeArtifact = static_cast<const NativeFontPayloadTemplate*>(drawToken.artifactIdentity);
+			submission.rangePacket = &packet;
+			submission.rangeOrigin = static_cast<const NativeFontShapePayload*>(drawToken.payloadIdentity)->geometryOrigin;
 			return NativeDirectDrawLiteFallback::None;
 		}
 
@@ -474,10 +483,17 @@ namespace fonthook::vectorfont
 				}
 			}
 
-			const HRESULT drawResult = submission.device->DrawIndexedPrimitive(
+			NativeFontVertexRange range{0, submission.vertexCount};
+			if (submission.rangeArtifact)
+				range = ResolveNativeFontVisibleVertexRange(*submission.rangeArtifact,
+					*submission.rangePacket, *submission.rangeGeometry,
+					submission.rangeRenderer, submission.rangeOrigin);
+			RecordFreeTypePerf(FreeTypePerfCounter::IndexedRequestedQuad, submission.vertexCount / 4u);
+			RecordFreeTypePerf(FreeTypePerfCounter::IndexedSubmittedQuad, range.count / 4u);
+			const HRESULT drawResult = range.count ? submission.device->DrawIndexedPrimitive(
 				D3DPT_TRIANGLELIST,
-				static_cast<INT>(submission.baseVertex), 0,
-				submission.vertexCount, 0, submission.triangleCount);
+				static_cast<INT>(submission.baseVertex), range.first,
+				range.count, range.first / 4u * 6u, range.count / 2u) : D3D_OK;
 			// Formal E745A0 clears the low dirty/revision bits after the indexed
 			// loop even when the D3D call fails. Preserve that exact side effect.
 			submission.data->m_usDirtyFlags &= 0xF000u;

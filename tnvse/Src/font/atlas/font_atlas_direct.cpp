@@ -668,7 +668,7 @@ namespace fonthook::vectorfont
 
 	bool GetSealedDirectAtlasGlyphBatch(RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-		const std::vector<DirectGlyphCommand>& glyphs,
+		DirectGlyphView glyphs,
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, DirectAtlasGlyphBatch& result)
@@ -871,7 +871,7 @@ namespace fonthook::vectorfont
 	}
 
 	bool GetDirectAtlasGlyphBatch(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs,
+		std::span<const AtlasGlyphInstance> glyphs,
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, DirectAtlasGlyphBatch& result)
@@ -1419,7 +1419,7 @@ namespace fonthook::vectorfont
 	}
 
 	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs,
+		std::span<const AtlasGlyphInstance> glyphs,
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, std::vector<PendingQuad::GlyphSource>& results)

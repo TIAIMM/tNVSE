@@ -1616,6 +1616,56 @@ namespace fonthook::vectorfont
 			&& reason == NativeFontVisibilityCull::Scissor;
 	}
 
+	NativeFontVertexRange ResolveNativeFontVisibleVertexRange(
+		const NativeFontPayloadTemplate& artifact,
+		const NativeFontPacketTemplate& packet, const NiTriShape& geometry,
+		const NiDX9Renderer* renderer, const NiPoint3& modelOrigin)
+	{
+		const NativeFontVertexRange full{0, packet.vertexCount};
+		if (artifact.clipBlocks.empty() || !g_bEnableFreeTypeFontPreflightClipCull
+			|| !renderer || *reinterpret_cast<const UInt8*>(kBSShaderManager_bLetterbox))
+			return full;
+		const auto* tile = GetTileProperty(&geometry);
+		if (!tile || tile->rotates) return full;
+		ClipFrameContext local;
+		ClipFrameContext* context = &s_clipFrameContext;
+		if (!context->active || !context->valid || context->camera.renderer != renderer
+			|| !IsClipFrameCameraCurrent(*context))
+		{
+			if (!CaptureClipFrameContext(local, false, const_cast<NiDX9Renderer*>(renderer))) return full;
+			context = &local;
+		}
+		// Only the same orthographic, axis-aligned proof used by whole-text
+		// visibility is eligible. Perspective and rotated geometry retain full draws.
+		ClipColumn x, y;
+		if (!BuildVanillaUiOrthographicColumns(*context, geometry.m_kWorld, x, y)) return full;
+		const bool scissor = tile->useScissorTest && !context->camera.scaledScissor
+			&& IsValidScissorForViewport(tile->scissorRect, context->viewportRect);
+		if (!scissor && !context->camera.primitiveClipping) return full;
+		ClipNdcBounds ndc;
+		if (!ResolveClipNdcBounds(*context, scissor ? tile->scissorRect : context->viewportRect,
+			scissor, ndc)) return full;
+		const UInt32 packetEnd = packet.firstVertex + packet.vertexCount;
+		const UInt32 beginBlock = packet.firstVertex / kNativeFontClipBlockVertices;
+		const UInt32 endBlock = (packetEnd + kNativeFontClipBlockVertices - 1) / kNativeFontClipBlockVertices;
+		auto outside = [&](UInt32 index)
+		{
+			NiBound bound = artifact.clipBlocks[index].bound;
+			bound.m_kCenter.x += modelOrigin.x;
+			bound.m_kCenter.y += modelOrigin.y;
+			bound.m_kCenter.z += modelOrigin.z;
+			return CubeIsOutsideOrthographicAxisInterval(x, ndc.left, ndc.right, bound)
+				|| CubeIsOutsideOrthographicAxisInterval(y, ndc.bottom, ndc.top, bound);
+		};
+		UInt32 first = beginBlock, last = endBlock;
+		while (first < last && outside(first)) ++first;
+		while (last > first && outside(last - 1)) --last;
+		if (first == last) return {0, 0};
+		const UInt32 firstVertex = std::max(packet.firstVertex, first * kNativeFontClipBlockVertices);
+		const UInt32 endVertex = std::min(packetEnd, last * kNativeFontClipBlockVertices);
+		return {firstVertex - packet.firstVertex, endVertex - firstVertex};
+	}
+
 	void RecordNativeFontVisibilityCull(NativeFontVisibilityCull reason)
 	{
 		if (reason == NativeFontVisibilityCull::None)

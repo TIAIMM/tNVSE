@@ -104,7 +104,7 @@ namespace fonthook::vectorfont
 	DirectAtlasShapeBuildResult TryCreateSealedCpuEffectShape(
 		Font& font, RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		DirectGlyphView glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor,
 		bool suppressEffects)
 	{

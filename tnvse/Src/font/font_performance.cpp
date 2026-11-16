@@ -1299,6 +1299,17 @@ namespace fonthook::vectorfont
 			framePrep.meanMicroseconds, vanillaRender.meanMicroseconds,
 			dispatch.count, dispatch.meanMicroseconds,
 			dispatch.p95Microseconds);
+		const auto& measurement = phaseValue(FreeTypePerfPhase::Measurement);
+		const auto& shortText = phaseValue(FreeTypePerfPhase::ShortTextBuild);
+		const auto& destruction = phaseValue(FreeTypePerfPhase::RichTextDestruction);
+		FreeTypeFontDebugLog(
+			"tnvse_freetype_perf_text: measure_n=%llu mean_us=%.3f p95_us=%.3f short_n=%llu mean_us=%.3f destroy_n=%llu mean_us=%.3f requested_quads=%llu submitted_quads=%llu",
+			measurement.count, measurement.meanMicroseconds, measurement.p95Microseconds,
+			shortText.count, shortText.meanMicroseconds,
+			destruction.count, destruction.meanMicroseconds,
+			counterValue(FreeTypePerfCounter::IndexedRequestedQuad),
+			counterValue(FreeTypePerfCounter::IndexedSubmittedQuad));
+
 		FreeTypeFontDebugLog(
 			"tnvse_freetype_perf_gpu: envelope_n=%llu p95_us=%.3f max_us=%.3f vanilla_n=%llu p95_us=%.3f max_us=%.3f samples=%llu foreign_passes=%llu vanilla_passes=%llu standard_lite_draws=%llu stock_draws=%llu culls=%llu submitted=%llu completed=%llu in_flight=%llu",
 			gpuAlphaEnvelope.count, gpuAlphaEnvelope.p95Microseconds,

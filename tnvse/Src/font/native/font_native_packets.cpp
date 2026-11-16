@@ -931,6 +931,36 @@ namespace fonthook::vectorfont
 		if (!SealNativeFontPayloadValidation(*payload,
 			hasConstructionWitness ? &constructionWitness : nullptr))
 			return {};
+		if (payload->gpuVertices.size() >= 256u * 4u)
+		{
+			const auto& v = payload->gpuVertices;
+			payload->clipBlocks.reserve((v.size() + kNativeFontClipBlockVertices - 1)
+				/ kNativeFontClipBlockVertices);
+			for (size_t begin = 0; begin < v.size(); begin += kNativeFontClipBlockVertices)
+			{
+				float low[3] = {v[begin].x, v[begin].y, v[begin].z};
+				float high[3] = {low[0], low[1], low[2]};
+				const size_t end = std::min<size_t>(v.size(), begin + kNativeFontClipBlockVertices);
+				for (size_t j = begin + 1; j < end; ++j)
+				{
+					const float point[3] = {v[j].x, v[j].y, v[j].z};
+					for (size_t axis = 0; axis < 3; ++axis)
+					{
+						low[axis] = std::min(low[axis], point[axis]);
+						high[axis] = std::max(high[axis], point[axis]);
+					}
+				}
+				NativeFontClipBlock block;
+				block.bound.m_kCenter = NiPoint3((low[0] + high[0]) * 0.5f,
+					(low[1] + high[1]) * 0.5f, (low[2] + high[2]) * 0.5f);
+				const auto& c = block.bound.m_kCenter;
+				block.bound.m_fRadius = std::max({high[0] - c.x, c.x - low[0],
+					high[1] - c.y, c.y - low[1], high[2] - c.z, c.z - low[2]});
+				// Visibility expands this radius to a conservative cube, including
+				// every effect-expanded vertex, rather than treating it as a sphere.
+				payload->clipBlocks.push_back(block);
+			}
+		}
 		payload->cpuMemory.Reset(CpuMemoryCategory::TextArtifact,
 			GetNativeFontPayloadTemplateBytes(*payload));
 		return payload;
@@ -1034,7 +1064,8 @@ namespace fonthook::vectorfont
 			+ payloadTemplate.packets.capacity() * sizeof(NativeFontPacketTemplate)
 			+ payloadTemplate.compositePackets.capacity()
 				* sizeof(NativeFontPacketTemplate)
-			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeFontGpuVertex);
+			+ payloadTemplate.gpuVertices.capacity() * sizeof(NativeFontGpuVertex)
+			+ payloadTemplate.clipBlocks.capacity() * sizeof(NativeFontClipBlock);
 		return bytes;
 	}
 

@@ -5,6 +5,7 @@
 #include "load_config.h"
 #include "ui_decode.h"
 #include <unordered_map>
+#include <vector>
 
 namespace fonthook
 {
@@ -46,6 +47,15 @@ namespace fonthook
 	// Runs the same direct encoded-unit layout used by FreeType CreateText
 	// without calling the game's FontLetter measurement routine. It supports both
 	// Windows-1252 and complete DBCS units. startCharIndex remains a byte index.
+	struct FreeTypeSuffixWidth
+	{
+		UInt32 byteOffset = 0;
+		UInt32 preparedOffset = 0;
+		int width = 0;
+	};
+	bool MeasureFreeTypeSuffixWidths(FontEx* font, const char* text,
+		int wrapWidth, std::vector<FreeTypeSuffixWidth>& widths, bool& reusable);
+
 	bool MeasureFreeTypeSingleByteText(
 		FontEx* font,
 		const char* text,

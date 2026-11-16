@@ -3,6 +3,8 @@
 #include "font_engine.h"
 #include "font_glyphs.h"
 #include "font_vector.h"
+#include "font_vector_internal.h"
+#include "font_freetype_internal.h"
 #include "game_hooks.h"
 #include "load_config.h"
 #include "native_calls.h"
@@ -84,7 +86,13 @@ namespace fonthook
 		static constexpr UInt32 kRichTextCharTypeQuote = 0x08;
 		static constexpr UInt32 kRichTextCharTypeEquals = 0x10;
 		static constexpr UInt32 kRichTextCharTypeEnd = 0x20;
-		std::unordered_map<const FontManager::CharData*, RichTextCharExtra> sRichTextCharExtras;
+		struct IndexedRichTextCharExtra : RichTextCharExtra
+		{
+			size_t ownerIndex = 0;
+		};
+		std::unordered_map<const FontManager::CharData*, IndexedRichTextCharExtra> sRichTextCharExtras;
+		std::unordered_map<const FontManager::TextDoc*,
+			std::vector<const FontManager::CharData*>> sRichTextOwnedChars;
 		std::vector<FontManager::CharData*> sRichTextRenderAddChars;
 		FontManager::TextDoc* sRichTextRenderDoc = nullptr;
 		UInt32 sRichTextRenderAddCharIndex = 0;
@@ -318,6 +326,30 @@ namespace fonthook
 			apOutString->sMaxLen = 0;
 		}
 
+		struct RichTextFontLookupCache
+		{
+			struct FontSlot {Font* font = nullptr; const void* data = nullptr; ExtraGlyphStore* extras = nullptr;};
+			struct MetricsSlot
+			{
+				Font* font = nullptr;
+				const void* data = nullptr;
+				const vectorfont::RuntimeFont* runtime = nullptr;
+				UInt64 epoch = 0;
+				UInt32 code = 0, codePage = 0;
+				FontLetter* glyph = nullptr;
+			};
+			std::array<FontSlot, kVanillaRichTextFontCount> fonts;
+			std::array<MetricsSlot, 64> metrics;
+		};
+		thread_local RichTextFontLookupCache* sRichTextFontLookup = nullptr;
+		struct ScopedRichTextFontLookup
+		{
+			RichTextFontLookupCache cache;
+			RichTextFontLookupCache* previous = sRichTextFontLookup;
+			ScopedRichTextFontLookup() { sRichTextFontLookup = &cache; }
+			~ScopedRichTextFontLookup() { sRichTextFontLookup = previous; }
+		};
+
 		ExtraGlyphStore* GetExtraGlyphsForChar(const FontManager::CharData* apChar, Font** apOutFont = nullptr)
 		{
 			if (apOutFont)
@@ -342,7 +374,15 @@ namespace fonthook
 			if (apOutFont)
 				*apOutFont = font;
 
-			return GetExtraGlyphs(font->iFontNum);
+			if (!sRichTextFontLookup) return GetExtraGlyphs(font->iFontNum);
+			auto& slot = sRichTextFontLookup->fonts[apChar->iFontIndex];
+			if (slot.font != font || slot.data != font->pFontData)
+			{
+				slot.font = font;
+				slot.data = font->pFontData;
+				slot.extras = GetExtraGlyphs(font->iFontNum);
+			}
+			return slot.extras;
 		}
 
 		bool HasRichTextFilename(const FontManager::CharData* apChar)
@@ -358,6 +398,23 @@ namespace fonthook
 			return GetExtraGlyphsForChar(apChar) != nullptr;
 		}
 
+		FontLetter* LookupResolvedRichTextDbcsGlyph(Font* font, UInt32 code)
+		{
+			RichTextFontLookupCache::MetricsSlot* slot = sRichTextFontLookup
+				? &sRichTextFontLookup->metrics[(code ^ (code >> 8)
+					^ static_cast<UInt32>(font->iFontNum) * 13u) & 63u] : nullptr;
+			vectorfont::RuntimeFont* runtime = vectorfont::FindActiveRuntime(font);
+			const UInt64 epoch = runtime
+				? runtime->sealedDirectProfilePublicationEpoch.load(std::memory_order_relaxed) : 0;
+			if (slot && slot->font == font && slot->data == font->pFontData
+				&& slot->runtime == runtime && slot->epoch == epoch
+				&& slot->codePage == g_usingWinEncoding && slot->code == code) return slot->glyph;
+			FontLetter* glyph = runtime ? vectorfont::EnsureDoubleByteMetrics(*runtime, *font, code) : nullptr;
+			if (!glyph) glyph = LookupDBGlyph(GetExtraGlyphs(font->iFontNum), code);
+			if (slot && glyph) *slot = {font, font->pFontData, runtime, epoch, code, g_usingWinEncoding, glyph};
+			return glyph;
+		}
+
 		FontLetter* LookupRichTextDbcsGlyph(const FontManager::CharData* apChar, UInt32 auiDbcsCode, Font** apOutFont = nullptr)
 		{
 			ExtraGlyphStore* extraGlyphs = GetExtraGlyphsForChar(apChar, apOutFont);
@@ -365,13 +422,14 @@ namespace fonthook
 			if (font)
 			{
 				if (FontLetter* direct =
-					EnsureFreeTypeDoubleByteMetrics(font, auiDbcsCode))
+					LookupResolvedRichTextDbcsGlyph(font, auiDbcsCode))
 				{
 					return direct;
 				}
 			}
 			return LookupDBGlyph(extraGlyphs, auiDbcsCode);
 		}
+
 
 		void ApplyRichTextGlyphMetrics(FontManager::CharData* apChar, Font* apFont, const FontLetter* apGlyph)
 		{
@@ -451,6 +509,11 @@ namespace fonthook
 
 		void CallTextDocAddChar(FontManager::TextDoc* apDoc, FontManager::CharData* apChar, int aiNewLines, bool abNewPage)
 		{
+			// A copied character initially inherits the source document. Once it
+			// enters another document, teardown must follow the receiving owner.
+			auto extra = sRichTextCharExtras.find(apChar);
+			if (extra != sRichTextCharExtras.end() && extra->second.textDoc != apDoc)
+				SetRichTextCharDbcs(apChar, extra->second.dbcsCode, apDoc);
 			ThisStdCall<void>(0xA19A10, apDoc, apChar, aiNewLines, abNewPage);
 		}
 
@@ -576,7 +639,7 @@ namespace fonthook
 			FontLetter* glyph = nullptr;
 			UInt32 dbcsCode = 0;
 			if (TryGetRichTextCharDbcs(character, dbcsCode))
-				glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+				glyph = LookupResolvedRichTextDbcsGlyph(font, dbcsCode);
 			else if (character->cChar >= 0x20 && character->cChar != kDelChar)
 				glyph = &font->pFontData->pFontLetters[character->cChar];
 			if (!glyph)
@@ -623,7 +686,7 @@ namespace fonthook
 								FontLetter* glyph = nullptr;
 								UInt32 dbcsCode = 0;
 								if (TryGetRichTextCharDbcs(character, dbcsCode))
-									glyph = LookupRichTextDbcsGlyph(character, dbcsCode, &font);
+									glyph = LookupResolvedRichTextDbcsGlyph(font, dbcsCode);
 								else if (character->cChar >= 0x20
 									&& character->cChar != kDelChar && character->cChar != 1)
 									glyph = &font->pFontData->pFontLetters[character->cChar];
@@ -751,63 +814,22 @@ namespace fonthook
 				(int)expectedAddChars - (int)emittedAddChars);
 		}
 
-		UInt32 ClearRichTextCharExtrasForDoc(FontManager::TextDoc* apDoc)
+		UInt32 ClearRichTextCharExtrasForDoc(FontManager::TextDoc* doc)
 		{
-			UInt32 clearedCount = 0;
-			if (!apDoc)
-				return clearedCount;
-
-			for (auto* pageNode = apDoc->xPages.m_pkHead; pageNode; pageNode = pageNode->m_pkNext)
-			{
-				FontManager::TextPage* page = pageNode->m_element;
-				if (!page)
-					continue;
-
-				for (auto* lineNode = page->xLines.m_pkHead; lineNode; lineNode = lineNode->m_pkNext)
-				{
-					FontManager::TextLine* line = lineNode->m_element;
-					if (!line)
-						continue;
-
-					for (auto* charNode = line->xChars.m_pkHead; charNode; charNode = charNode->m_pkNext)
-					{
-						FontManager::CharData* ch = charNode->m_element;
-						if (!ch)
-							continue;
-
-						clearedCount += sRichTextCharExtras.erase(ch);
-					}
-				}
-			}
-
-			for (auto it = sRichTextCharExtras.begin(); it != sRichTextCharExtras.end();)
-			{
-				if (it->second.textDoc == apDoc)
-				{
-					it = sRichTextCharExtras.erase(it);
-					++clearedCount;
-				}
-				else
-				{
-					++it;
-				}
-			}
-
-			return clearedCount;
+			auto owner = sRichTextOwnedChars.find(doc);
+			if (owner == sRichTextOwnedChars.end()) return 0;
+			const UInt32 count = static_cast<UInt32>(owner->second.size());
+			for (const auto* character : owner->second)
+				sRichTextCharExtras.erase(character);
+			sRichTextOwnedChars.erase(owner);
+			return count;
 		}
 
-		UInt32 CountRichTextCharExtrasForDoc(FontManager::TextDoc* apDoc)
+		UInt32 CountRichTextCharExtrasForDoc(FontManager::TextDoc* doc)
 		{
-			if (!apDoc)
-				return 0;
-
-			UInt32 count = 0;
-			for (const auto& entry : sRichTextCharExtras)
-			{
-				if (entry.second.textDoc == apDoc)
-					++count;
-			}
-			return count;
+			auto owner = sRichTextOwnedChars.find(doc);
+			return owner == sRichTextOwnedChars.end() ? 0
+				: static_cast<UInt32>(owner->second.size());
 		}
 
 		void LogTextDocDestructor(FontManager::TextDoc* apDoc,
@@ -870,7 +892,21 @@ namespace fonthook
 		if (!apChar)
 			return;
 
-		sRichTextCharExtras[apChar] = { auiDbcsCode, apDoc };
+		auto previous = sRichTextCharExtras.find(apChar);
+		if (previous != sRichTextCharExtras.end()
+			&& previous->second.textDoc == apDoc)
+		{
+			previous->second.dbcsCode = auiDbcsCode;
+			return;
+		}
+		ClearRichTextCharExtra(apChar);
+		auto& owned = sRichTextOwnedChars[apDoc];
+		IndexedRichTextCharExtra extra;
+		extra.dbcsCode = auiDbcsCode;
+		extra.textDoc = apDoc;
+		extra.ownerIndex = owned.size();
+		owned.push_back(apChar);
+		sRichTextCharExtras.emplace(apChar, extra);
 	}
 
 	bool TryGetRichTextCharDbcs(const FontManager::CharData* apChar, UInt32& arDbcsCode)
@@ -888,7 +924,17 @@ namespace fonthook
 		if (!apChar)
 			return;
 
-		sRichTextCharExtras.erase(apChar);
+		auto entry = sRichTextCharExtras.find(apChar);
+		if (entry == sRichTextCharExtras.end()) return;
+		auto owner = sRichTextOwnedChars.find(entry->second.textDoc);
+		auto& owned = owner->second;
+		const size_t index = entry->second.ownerIndex;
+		const auto* moved = owned.back();
+		owned[index] = moved;
+		sRichTextCharExtras.find(moved)->second.ownerIndex = index;
+		owned.pop_back();
+		if (owned.empty()) sRichTextOwnedChars.erase(owner);
+		sRichTextCharExtras.erase(entry);
 	}
 
 	void BeginRichTextRenderContext(FontManager::TextDoc* apDoc, FontManager::TextData* apData)
@@ -1216,6 +1262,7 @@ namespace fonthook
 
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepHypertext(BSStringT<char>& arTextString, FontManager::TextData& arData)
 	{
+		ScopedRichTextFontLookup fontLookup;
 		FontManager::TextDoc* textDoc = nullptr;
 		const char* parserText = arTextString.pString ? arTextString.pString : "";
 		std::string convertedTextStorage;
@@ -1242,6 +1289,7 @@ namespace fonthook
 
 	FontManager::TextDoc* __thiscall FontManagerEx::PrepText(BSStringT<char>& arTextString, FontManager::TextData& arData)
 	{
+		ScopedRichTextFontLookup fontLookup;
 		if (!g_bEnableMultibyteFontHook)
 		{
 			// The shared TextLine::AddChar hook has already replaced injected
@@ -1295,6 +1343,7 @@ namespace fonthook
 			return;
 		}
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
+		ScopedRichTextFontLookup fontLookup;
 		ScopedRichTextRenderContext renderContext(doc, apData);
 		BeginFreeTypeRichTextRender(apNode);
 		CallTextDocRender(doc, apNode, apData);
@@ -1303,6 +1352,7 @@ namespace fonthook
 
 	void __thiscall FontManagerEx::TextDocDestructor()
 	{
+		vectorfont::FreeTypePerfScope perf(vectorfont::FreeTypePerfPhase::RichTextDestruction);
 		FontManager::TextDoc* doc = reinterpret_cast<FontManager::TextDoc*>(this);
 		DiscardPendingRichTextLead(doc);
 		UInt32 clearedExtraCount = ClearRichTextCharExtrasForDoc(doc);

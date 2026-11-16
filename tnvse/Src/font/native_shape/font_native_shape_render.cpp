@@ -352,7 +352,8 @@ namespace fonthook::vectorfont
 		bool ValidateNativeFontShape(NiTriShape* shape,
 			const NativeFontEffectShapeConfig* effectConfig,
 			const NativeFontShapeColorContract* colorContract,
-			const NativeFontPayloadTemplate* payloadTemplate)
+			const NativeFontPayloadTemplate* payloadTemplate,
+			bool constructedColors = false)
 		{
 			if (!shape || !colorContract || !payloadTemplate)
 				return RejectNativeFontShape("missing-shape-color-or-text-artifact");
@@ -375,10 +376,14 @@ namespace fonthook::vectorfont
 			}
 			if (!data->m_pkColor)
 				return RejectNativeFontShape("missing-base-vertex-color-stream");
-			for (UInt32 index = 0; index < data->m_usVertices; ++index)
+			// Factory colors are finite values unpacked from a 32-bit color.
+			if (!constructedColors)
 			{
-				if (!IsFiniteColor(data->m_pkColor[index]))
-					return RejectNativeFontShape("non-finite-base-vertex-color");
+				for (UInt32 index = 0; index < data->m_usVertices; ++index)
+				{
+					if (!IsFiniteColor(data->m_pkColor[index]))
+						return RejectNativeFontShape("non-finite-base-vertex-color");
+				}
 			}
 
 			const bool sealed =
@@ -1185,33 +1190,38 @@ namespace fonthook::vectorfont
 				&& (packet.uniformSdfSpread <= 0.0f
 					|| packet.uniformDistanceParameterScale < 1.0f))
 			|| !ValidateNativeFontShape(shape, effectConfig, colorContract,
-				payloadTemplate.get())
+				payloadTemplate.get(), true)
 			|| !InitializeNativeFontTriShapeVtable(shape))
 		{
 			return false;
 		}
 		const float layerMask = static_cast<float>(
 			packet.staticCompositeLayerMask);
-		for (UInt32 relative = 0; relative < packet.vertexCount; ++relative)
+		// The publisher already checked these immutable vertex invariants.
+		if (!HasNativeFontPayloadValidationSeal(*payloadTemplate)
+			|| payloadTemplate->validationSeal.vanillaLayoutKind != layoutKind)
 		{
-			const NativeFontGpuVertex& vertex = payloadTemplate->gpuVertices[
-				static_cast<size_t>(packet.firstVertex) + relative];
-			const NativeFontGpuVertex& quadFirst = payloadTemplate->gpuVertices[
-				static_cast<size_t>(packet.firstVertex)
-					+ (relative & ~UInt32(3u))];
-			if (!std::isfinite(vertex.sdfSpread) || vertex.sdfSpread <= 0.0f
-				|| !std::isfinite(vertex.distanceParameterScale)
-				|| vertex.distanceParameterScale < 1.0f
-				|| vertex.layerMask != layerMask
-				|| vertex.sdfSpread != quadFirst.sdfSpread
-				|| vertex.distanceParameterScale
-					!= quadFirst.distanceParameterScale
-				|| (uniformLayout
-					&& (vertex.sdfSpread != packet.uniformSdfSpread
-						|| vertex.distanceParameterScale
-							!= packet.uniformDistanceParameterScale)))
+			for (UInt32 relative = 0; relative < packet.vertexCount; ++relative)
 			{
-				return false;
+				const NativeFontGpuVertex& vertex = payloadTemplate->gpuVertices[
+					static_cast<size_t>(packet.firstVertex) + relative];
+				const NativeFontGpuVertex& quadFirst = payloadTemplate->gpuVertices[
+					static_cast<size_t>(packet.firstVertex)
+						+ (relative & ~UInt32(3u))];
+				if (!std::isfinite(vertex.sdfSpread) || vertex.sdfSpread <= 0.0f
+					|| !std::isfinite(vertex.distanceParameterScale)
+					|| vertex.distanceParameterScale < 1.0f
+					|| vertex.layerMask != layerMask
+					|| vertex.sdfSpread != quadFirst.sdfSpread
+					|| vertex.distanceParameterScale
+						!= quadFirst.distanceParameterScale
+					|| (uniformLayout
+						&& (vertex.sdfSpread != packet.uniformSdfSpread
+							|| vertex.distanceParameterScale
+								!= packet.uniformDistanceParameterScale)))
+				{
+					return false;
+				}
 			}
 		}
 

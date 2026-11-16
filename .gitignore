@@ -314,7 +314,9 @@ paket-files/
 
 # Python Tools for Visual Studio (PTVS)
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+.pytest_cache/
 
 # Cake - Uncomment if you are using it
 # tools/**
@@ -363,7 +365,10 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Local project documentation
-/docs/**/*.md
+/docs/
+
+# Local validation tools
+/tools/
 
 
 # gitignore for C++
@@ -410,6 +415,26 @@ nvse/enc_temp_folder/
 
 # Local build output
 /build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+/Testing/
+build.ninja
+rules.ninja
+.ninja_deps
+.ninja_log
+*.dll
+*.exe
+*.lib
+*.exp
+
+# Compiled shaders in tnvse/shaders/compiled are versioned runtime assets.
+# Keep PSO/VSO files tracked alongside their HLSL sources.
+
+# Machine-local tool settings and caches
+/.claude/settings.local.json
+/.cache/
 
 # Local NuGet executable
 /nuget.exe

@@ -315,6 +315,7 @@ namespace fonthook
 
 	struct DirectTextUnit
 	{
+		NiPoint3 pen = {0.0f, 0.0f, 0.0f};
 		UInt32 byteOffset = 0;
 		float advance = 0.0f;
 		UInt16 directSlot = std::numeric_limits<UInt16>::max();
@@ -340,25 +341,27 @@ namespace fonthook
 	{
 	public:
 		PreparedTextSidecarCapture(const Font::TextData* apData,
-			const Font* apFont);
+			const Font* apFont, bool abMeasureOnly = false);
 		~PreparedTextSidecarCapture();
 
 		PreparedTextSidecarCapture(const PreparedTextSidecarCapture&) = delete;
 		PreparedTextSidecarCapture& operator=(
 			const PreparedTextSidecarCapture&) = delete;
 
+		bool MeasuresOnly() const { return m_measureOnly; }
 		bool Matches(const Font::TextData* apData,
 			const Font* apFont) const;
 		void Publish(const Font::TextData* apData, const Font* apFont,
-			std::shared_ptr<const PreparedDirectTextSidecar> apSidecar);
-		std::shared_ptr<const PreparedDirectTextSidecar> Take();
+			std::shared_ptr<PreparedDirectTextSidecar> apSidecar);
+		std::shared_ptr<PreparedDirectTextSidecar> Take();
 
 	private:
 		const Font::TextData* m_data = nullptr;
 		const Font* m_font = nullptr;
 		const char* m_preparedText = nullptr;
 		char m_lineSeparator = 0;
-		std::shared_ptr<const PreparedDirectTextSidecar> m_sidecar;
+		bool m_measureOnly = false;
+		std::shared_ptr<PreparedDirectTextSidecar> m_sidecar;
 		vectorfont::FreeTypeLongTextTrace* m_trace = nullptr;
 		PreparedTextSidecarCapture* m_previous = nullptr;
 	};
@@ -447,6 +450,7 @@ namespace fonthook
 		bool IsAvailable() const;
 		bool UsesSealedDirectProfile() const;
 		void ReserveGlyphs(size_t auiCount);
+		void UsePreparedGlyphs(std::shared_ptr<PreparedDirectTextSidecar> sidecar);
 		bool AddGlyph(const VectorEncodedGlyph& arGlyph, const NiPoint3& arPen, const NiColorA* apColor);
 		bool AddEncodedGlyph(const char* apEncodedText,
 			const NiPoint3& arPen, const NiColorA* apColor,

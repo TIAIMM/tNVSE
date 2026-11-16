@@ -963,25 +963,25 @@ namespace fonthook::vectorfont
 	void ReleaseSealedAtlasCpuIndexesLocked(AtlasState& state,
 		const SealedDirectFontProfile& sealed);
 
-	NiColorA ResolveSafeTileColor(const std::vector<AtlasGlyphInstance>& glyphs,
+	NiColorA ResolveSafeTileColor(std::span<const AtlasGlyphInstance> glyphs,
 		const NiColorA& requested);
 	bool BuildPendingQuads(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+		std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 		const std::array<bool, 4>& included, const NiColorA& tileColor,
 		bool preferDirectAtlas, std::vector<PendingQuad>& quads,
 		PendingQuadBuildFailure& failure);
 	bool BuildShaderEffectQuads(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+		std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 		EffectQuality quality, const NiColorA& tileColor, bool suppressEffects,
 		std::vector<PendingQuad>& quads, ShaderEffectBuild& build);
 	bool GetDirectAtlasGlyphBatch(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs,
+		std::span<const AtlasGlyphInstance> glyphs,
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, DirectAtlasGlyphBatch& result);
 	bool GetSealedDirectAtlasGlyphBatch(RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-		const std::vector<DirectGlyphCommand>& glyphs,
+		DirectGlyphView glyphs,
 		GlyphMaskType maskType, float rasterScale,
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode,
 		UInt32 padding, DirectAtlasGlyphBatch& result);
@@ -997,19 +997,19 @@ namespace fonthook::vectorfont
 		const DirectProfileInvalidationContext& context);
 	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 		Font& font, RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs, float rasterScale,
+		std::span<const AtlasGlyphInstance> glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor, bool suppressEffects,
 		GlyphMaskType maskType, EffectQuality quality);
 	DirectAtlasShapeBuildResult TryCreateDirectCachedLetterShape(
 		Font& font, RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		DirectGlyphView glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor, bool suppressEffects,
 		GlyphMaskType maskType, EffectQuality quality);
 	DirectAtlasShapeBuildResult TryCreateSealedCpuEffectShape(
 		Font& font, RuntimeFont& runtime,
 		const std::shared_ptr<const SealedDirectFontProfile>& sealed,
-		const std::vector<DirectGlyphCommand>& glyphs, float rasterScale,
+		DirectGlyphView glyphs, float rasterScale,
 		bool prepareObject, const NiColorA& tileColor,
 		bool suppressEffects);
 	NiTriShape* TryCreateAtlasShapeForMode(Font& font,
@@ -1121,7 +1121,7 @@ namespace fonthook::vectorfont
 		AtlasPixelMode pixelMode, AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<PendingQuad::GlyphSource>& results);
 	bool GetDirectAtlasGlyphSources(RuntimeFont& runtime,
-		const std::vector<AtlasGlyphInstance>& glyphs, GlyphMaskType maskType,
+		std::span<const AtlasGlyphInstance> glyphs, GlyphMaskType maskType,
 		float rasterScale, AtlasPixelMode pixelMode,
 		AtlasRenderMode renderMode, UInt32 padding,
 		std::vector<PendingQuad::GlyphSource>& results);
