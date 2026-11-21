@@ -816,7 +816,7 @@ namespace fonthook
 			static constexpr std::array<UInt8, 7> original = {
 				0x55, 0x8B, 0xEC, 0x51, 0x8B, 0x45, 0x08,
 			};
-			const hook_site::EntryJumpSite site{
+			hook_site::EntryJumpSite site{
 				"DBCS quote normalization", entry, original, &PreserveDbcsQuoteByte,
 			};
 			if (site.IsInstalled())
