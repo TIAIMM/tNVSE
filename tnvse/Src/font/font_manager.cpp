@@ -269,7 +269,10 @@ namespace fonthook
 			}
 			else if (replacement[0])
 			{
-				arOut += replacement;
+				const char* replacementText = replacement;
+				std::string converted;
+				ConvertToMultiByte(replacementText, converted, HasRichTextExtraGlyphs());
+				arOut += replacementText;
 			}
 			else
 			{

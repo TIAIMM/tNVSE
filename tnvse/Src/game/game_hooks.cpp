@@ -800,6 +800,41 @@ namespace fonthook
 		constexpr SIZE_T kRetailLoadingMenuInstance = 0x011DA0C0;
 		using TileTextMakeNodeFn = NiNode* (__thiscall*)(TileText*);
 		TileTextMakeNodeFn s_tileTextMakeNode = nullptr;
+
+		void __cdecl PreserveDbcsQuoteByte(char*)
+		{
+			// Retail treats 0x91-0x94 as Windows-1252 punctuation before the
+			// DBCS parser can pair those bytes with their neighbors.
+		}
+
+		void InstallDbcsQuoteByteHook()
+		{
+			if (!UsesDbcsTextLayout())
+				return;
+
+			constexpr SIZE_T entry = 0xA122B0;
+			static constexpr std::array<UInt8, 7> original = {
+				0x55, 0x8B, 0xEC, 0x51, 0x8B, 0x45, 0x08,
+			};
+			const hook_site::EntryJumpSite site{
+				"DBCS quote normalization", entry, original, &PreserveDbcsQuoteByte,
+			};
+			if (site.IsInstalled())
+				return;
+			if (!site.MatchesOriginalBytes())
+			{
+				gLog.FormattedMessage("tnvse_font_hook: DBCS quote hook skipped because its retail entry did not match");
+				return;
+			}
+			WriteRelJump(entry, &PreserveDbcsQuoteByte);
+			PatchMemoryNop(entry + 5, original.size() - 5);
+			if (!site.IsInstalled())
+			{
+				const bool restored = site.RollbackOwned();
+				gLog.FormattedMessage("tnvse_font_hook: DBCS quote hook failed verification, restored=%u",
+					restored ? 1u : 0u);
+			}
+		}
 		thread_local UInt32 s_effectSuppressionDepth = 0;
 		thread_local UInt32 s_vuiProxyMeasureOnlyDepth = 0;
 		Font* ResolveVuiEffectProxyFont(TileText* tile)
@@ -1463,6 +1498,7 @@ namespace fonthook
 		FinalizeFontHookGraph(true, g_bEnableFreeTypeFontRendering);
 		if (!s_fontHookInstallState.multibyte)
 			return s_fontHookInstallState;
+		InstallDbcsQuoteByteHook();
 		gLog.FormattedMessage(
 			"tnvse_font_hook: quest text DBCS case guard installed copySites=77ACCC,77ACF8 caseSite=%08X configuredCodePage=%u",
 			static_cast<UInt32>(kQuestTextCaseCall), g_usingWinEncoding);
