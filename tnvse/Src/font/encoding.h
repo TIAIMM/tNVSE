@@ -69,7 +69,9 @@ namespace fonthook
 	}
 
 	// ---- Encoding Conversion ----
+	bool TryUTF8ToMultiByteStr(std::string_view utf8, UInt32 codePage, std::string& converted);
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage);
+	bool TryNormalizeKoreanInventoryNotification(const char* source, std::string& converted);
 	std::string WideToUTF8(std::wstring_view value);
 
 	// ---- Double-byte character counting ----
@@ -104,8 +106,12 @@ namespace fonthook
 	inline bool ConvertToMultiByte(const char*& pSrc, std::string& outConverted, bool hasExtraGlyphs)
 	{
 		if (!ShouldConvertUTF8(hasExtraGlyphs)) return false;
-		if (!IsValidUTF8With3ByteMin(pSrc)) return false;
-		outConverted = UTF8ToMultiByteStr(pSrc, g_usingWinEncoding);
+		if (IsValidUTF8With3ByteMin(pSrc))
+		{
+			if (!TryUTF8ToMultiByteStr(pSrc, g_usingWinEncoding, outConverted)) return false;
+		}
+		else if (!TryNormalizeKoreanInventoryNotification(pSrc, outConverted))
+			return false;
 		pSrc = outConverted.c_str();
 		return true;
 	}

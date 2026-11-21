@@ -2101,12 +2101,39 @@ namespace fonthook
 
 	// ---- public API ----
 
+	// Retail appends a localized key name to this hard-coded English sentence.
+	// Match only this known engine prefix, then preserve/normalize the suffix
+	// independently. Do not enable broad mixed-source fuzzy translation.
+	static bool TryTranslateEngineLockPrefix(const char* source, std::string& translated)
+	{
+		static constexpr std::string_view prefix =
+			"This lock cannot be picked. It requires a key to open.";
+		if (!source) return false;
+		const std::string_view input(source);
+		if (input.size() < prefix.size() ||
+			input.compare(0, prefix.size(), prefix) != 0) return false;
+		const std::string_view suffix = input.substr(prefix.size());
+		if (!suffix.empty() && suffix.front() != ' ' && suffix.front() != '\r'
+			&& suffix.front() != '\n' && suffix.front() != '\t') return false;
+		std::string head;
+		if (!TryTranslateExactText(std::string(prefix), head, 0)) return false;
+		const char* label = head.c_str();
+		std::string convertedLabel;
+		ConvertToMultiByte(label, convertedLabel, true);
+		const char* tail = source + prefix.size();
+		std::string converted;
+		ConvertToMultiByte(tail, converted, true);
+		translated = label;
+		translated += tail;
+		return true;
+	}
+
 	bool TranslateText(const char* source, std::string& translated)
 	{
 		if (ShouldBypassDictionaryTranslation())
 			return false;
-		const bool result = TranslateInternal(source, translated, 0);
-		return result;
+		return TranslateInternal(source, translated, 0)
+			|| TryTranslateEngineLockPrefix(source, translated);
 	}
 
 	bool TranslateRichText(const char* source, std::string& translated)

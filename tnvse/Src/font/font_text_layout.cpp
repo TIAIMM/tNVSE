@@ -87,6 +87,8 @@ namespace fonthook
 			if (Interface_FindTextReplacementString(varNameBuffer, parsedTextBuffer, 0x400u, isPositiveEscape)
 				|| Interface_TestConstantForGameSettings(varNameBuffer, parsedTextBuffer))
 			{
+				const char* replacementText = parsedTextBuffer;
+				std::string converted;
 				UInt32 postEscapeTextLen = strlen(parsedTextBuffer);
 				int escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
 
@@ -107,12 +109,18 @@ namespace fonthook
 						escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
 					}
 				}
+				else if (ConvertToMultiByte(replacementText, converted,
+					GetExtraGlyphs(font->iFontNum) != nullptr))
+				{
+					postEscapeTextLen = static_cast<UInt32>(converted.size());
+					escapeSeqSizeDiff = postEscapeTextLen - totalEscapeSeqLen;
+				}
 				if (escapeSeqSizeDiff > 0)
 				{
 					textBufferSize += escapeSeqSizeDiff;
 					EnsureTextScratchSize(dynamicTextBuffer, textBufferSize + 1);
 				}
-				memcpy(&dynamicTextBuffer[processedTextLen], parsedTextBuffer, postEscapeTextLen);
+				memcpy(&dynamicTextBuffer[processedTextLen], replacementText, postEscapeTextLen);
 				processedTextLen += postEscapeTextLen;
 				origConsumed += totalEscapeSeqLen;
 				srcTextIndex = srcTextIndex + totalEscapeSeqLen - 1;

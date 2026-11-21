@@ -2,6 +2,9 @@
 #include "font_multibyte_prewarm_policy.h"
 #include "load_config.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace fonthook
 {
 	bool IsDbcsCodePage(UInt32 codePage)
@@ -170,18 +173,19 @@ namespace fonthook
 			}
 			else if (*p < 0xF0)
 			{
-				UInt8 c2 = p[1], c3 = p[2];
-				if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
+				const UInt8 c2 = p[1];
+				if (!IsUTF8Trail(c2) || (*p == 0xE0 && c2 < 0xA0)
+					|| (*p == 0xED && c2 >= 0xA0) || !IsUTF8Trail(p[2]))
 					return false;
 				has3ByteOrMore = true;
 				p += 3;
 			}
 			else if (*p < 0xF5)
 			{
-				UInt8 c2 = p[1], c3 = p[2], c4 = p[3];
-				if ((c2 & 0xC0) != 0x80 ||
-					(c3 & 0xC0) != 0x80 ||
-					(c4 & 0xC0) != 0x80)
+				const UInt8 c2 = p[1];
+				if (!IsUTF8Trail(c2) || (*p == 0xF0 && c2 < 0x90)
+					|| (*p == 0xF4 && c2 > 0x8F)
+					|| !IsUTF8Trail(p[2]) || !IsUTF8Trail(p[3]))
 					return false;
 				has3ByteOrMore = true;
 				p += 4;
@@ -196,6 +200,99 @@ namespace fonthook
 	}
 
 	// ===================== Encoding Conversion =====================
+	bool TryUTF8ToMultiByteStr(std::string_view utf8, UInt32 codePage,
+		std::string& converted)
+	{
+		if (utf8.empty() || utf8.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+			return false;
+
+		const int byteCount = static_cast<int>(utf8.size());
+		const int wideCount = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+			utf8.data(), byteCount, nullptr, 0);
+		if (!wideCount)
+			return false;
+		std::wstring wide(wideCount, L'\0');
+		if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+			utf8.data(), byteCount, wide.data(), wideCount))
+			return false;
+
+		if (codePage == CP_UTF8)
+		{
+			converted.assign(utf8);
+			return true;
+		}
+
+		BOOL usedDefault = FALSE;
+		const int encodedCount = WideCharToMultiByte(codePage, WC_NO_BEST_FIT_CHARS,
+			wide.data(), wideCount, nullptr, 0, nullptr, &usedDefault);
+		if (!encodedCount || usedDefault)
+			return false;
+		std::string encoded(encodedCount, '\0');
+		if (!WideCharToMultiByte(codePage, WC_NO_BEST_FIT_CHARS,
+			wide.data(), wideCount, encoded.data(), encodedCount, nullptr, &usedDefault) || usedDefault)
+			return false;
+
+		std::wstring roundTrip(wideCount, L'\0');
+		if (MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS,
+			encoded.data(), encodedCount, roundTrip.data(), wideCount) != wideCount || roundTrip != wide)
+			return false;
+		converted.swap(encoded);
+		return true;
+	}
+
+	namespace
+	{
+		bool TryConvertInventoryItemToUhc(std::string_view item, std::string& converted)
+		{
+			// As with the normal UTF-8 path, ASCII and two-byte-only text do not
+			// provide enough evidence to reinterpret an item-name fragment.
+			return std::any_of(item.begin(), item.end(), [](unsigned char c) { return c >= 0xE0; })
+				&& TryUTF8ToMultiByteStr(item, static_cast<UInt32>(CodePage::UHC), converted);
+		}
+	}
+
+	bool TryNormalizeKoreanInventoryNotification(const char* source, std::string& converted)
+	{
+		if (!source || g_usingWinEncoding != static_cast<UInt32>(CodePage::UHC))
+			return false;
+
+		// These exact Korean GMST fragments identify the boundary after the game
+		// has concatenated a CP949 notification with a UTF-8 item name.
+		constexpr std::string_view suffixes[] = {
+			" \xC3\xDF\xB0\xA1\xB5\xCA", // sAddItemtoInventory
+			" \xC1\xA6\xB0\xC5\xB5\xCA"  // sRemoveItemfromInventory
+		};
+		constexpr std::string_view prefixes[] = {
+			"\xC0\xE5\xC2\xF8\xB5\xC7\xBE\xFA\xBD\xC0\xB4\xCF\xB4\xD9. : ", // sEquipItemOnPlayer
+			"\xC0\xE5\xC2\xF8\xC7\xD8\xC1\xA6 \xB5\xC7\xBE\xFA\xBD\xC0\xB4\xCF\xB4\xD9. : " // sUnequipItemOnPlayer
+		};
+		const std::string_view text(source);
+		std::string item;
+		for (const auto suffix : suffixes)
+		{
+			if (!text.ends_with(suffix))
+				continue;
+			if (TryConvertInventoryItemToUhc(text.substr(0, text.size() - suffix.size()), item))
+			{
+				item.append(suffix);
+				converted.swap(item);
+				return true;
+			}
+		}
+		for (const auto prefix : prefixes)
+		{
+			if (!text.starts_with(prefix))
+				continue;
+			if (TryConvertInventoryItemToUhc(text.substr(prefix.size()), item))
+			{
+				item.insert(0, prefix);
+				converted.swap(item);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage)
 	{
 		const int wideCharacterCount = MultiByteToWideChar(CP_UTF8, 0,
