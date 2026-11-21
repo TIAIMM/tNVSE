@@ -727,6 +727,7 @@ namespace fonthook::vectorfont
 				return true;
 			};
 			bool sourceTablesReady = ownerRuntime != nullptr;
+			bool hasPooledMember = false;
 			PhysicalAtlasGroupSourceSnapshot sourceSnapshot;
 			sourceSnapshot.members.reserve(group.members.size());
 			if (sourceTablesReady)
@@ -745,9 +746,33 @@ namespace fonthook::vectorfont
 						sourceTablesReady = false;
 						break;
 					}
+					for (const auto& table : pinnedProfile->tables)
+					{
+						hasPooledMember = std::any_of(table->pages.begin(),
+							table->pages.end(), [](const auto& weakPage)
+							{
+								const auto page = weakPage.lock();
+								return page && page->compactSnapshot
+									&& (page->compactSnapshot->sourceHeader.flags
+										& kAtlasSnapshotFlagPhysicalFontPool) != 0;
+							});
+						if (hasPooledMember)
+							break;
+					}
+					if (hasPooledMember)
+						break;
 					sourceSnapshot.members.push_back({
 						member.config->fontId, std::move(pinnedProfile) });
 				}
+			}
+			// Publishing a group over a restored pool member can replace the
+			// physical snapshot still referenced by other members of that pool.
+			if (hasPooledMember)
+			{
+				gLog.FormattedMessage(
+					"tnvse_freetype_font: physical atlas group skipped owner=%u members=%u reason=preserve-restored-pool",
+					group.ownerFontId, static_cast<UInt32>(group.members.size()));
+				continue;
 			}
 			bool groupPublished = false;
 			bool groupFallback = false;
