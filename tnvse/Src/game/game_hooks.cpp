@@ -9,6 +9,7 @@
 #include "load_config.h"
 #include "native_tile_overlay.h"
 #include "pipboy_search_icon_compat.h"
+#include "save_level_tile_fix.h"
 #include "SafeWrite.h"
 #include "text_hooks.h"
 #include "tnvse.h"
@@ -954,6 +955,16 @@ namespace fonthook
 
 		NiNode* __fastcall TileTextMakeNodeHook(TileText* tile, void*)
 		{
+			if (tile && ShouldConvertUTF8(s_fontHookInstallState.multibyte)
+				&& g_usingWinEncoding == static_cast<UInt32>(CodePage::UHC)
+				&& tile->strName.c_str()
+				&& _stricmp(tile->strName.c_str(), "saveload_playerlevel") == 0)
+			{
+				std::string corrected;
+				if (save_level_tile_fix::TryNormalize(
+					tile->GetValueString(Tile::kTileValue_string), corrected))
+					tile->SetValueString(Tile::kTileValue_string, corrected.c_str(), false);
+			}
 			const bool freeTypeInstalled = s_fontHookInstallState.freeType;
 			const bool dictionaryTranslationInstalled =
 				s_fontHookInstallState.multibyte
