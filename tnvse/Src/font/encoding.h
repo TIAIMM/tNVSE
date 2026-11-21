@@ -69,6 +69,7 @@ namespace fonthook
 	}
 
 	// ---- Encoding Conversion ----
+	bool TryUTF8ToMultiByteStr(std::string_view utf8, UInt32 codePage, std::string& converted);
 	std::string UTF8ToMultiByteStr(const std::string& utf8, UInt32 codePage);
 	std::string WideToUTF8(std::wstring_view value);
 
@@ -105,7 +106,7 @@ namespace fonthook
 	{
 		if (!ShouldConvertUTF8(hasExtraGlyphs)) return false;
 		if (!IsValidUTF8With3ByteMin(pSrc)) return false;
-		outConverted = UTF8ToMultiByteStr(pSrc, g_usingWinEncoding);
+		if (!TryUTF8ToMultiByteStr(pSrc, g_usingWinEncoding, outConverted)) return false;
 		pSrc = outConverted.c_str();
 		return true;
 	}
