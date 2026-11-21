@@ -60,6 +60,15 @@ namespace fonthook
 			return value ? value : "";
 		}
 
+		std::string NormalizeDoorUiPiece(const char* source)
+		{
+			const char* value = SafeCString(source);
+			std::string converted;
+			if (ConvertToMultiByte(value, converted, true))
+				return converted;
+			return value;
+		}
+
 		const char* TranslateDoorPiece(const char* source, std::string& translated)
 		{
 			const char* safeSource = SafeCString(source);
@@ -105,9 +114,9 @@ namespace fonthook
 			std::string translatedDst;
 			std::string translatedCellName;
 			bool usedStructuralParticleFallback = false;
-			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
-			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
-			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
+			const std::string dst = NormalizeDoorUiPiece( translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst));
+			const std::string to = NormalizeDoorUiPiece( translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo));
+			const std::string cellName = NormalizeDoorUiPiece( translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName));
 
 			std::string prompt;
 			if (usedStructuralParticleFallback)
@@ -134,9 +143,9 @@ namespace fonthook
 			std::string translatedDst;
 			std::string translatedCellName;
 			bool usedStructuralParticleFallback = false;
-			const char* dst = translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst);
-			const char* to = translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo);
-			const char* cellName = translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName);
+			const std::string dst = NormalizeDoorUiPiece( translatePieces ? TranslateDoorPiece(sDst, translatedDst) : SafeCString(sDst));
+			const std::string to = NormalizeDoorUiPiece( translatePieces ? TranslateDoorToPiece(sTo, sConvertedStructuralParticle, usedStructuralParticleFallback) : SafeCString(sTo));
+			const std::string cellName = NormalizeDoorUiPiece( translatePieces ? TranslateDoorPiece(sCellName, translatedCellName) : SafeCString(sCellName));
 
 			std::string prompt = cellName;
 			if (usedStructuralParticleFallback)
